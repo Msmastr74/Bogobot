@@ -106,7 +106,7 @@ class BotCore(discord.Client):
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
                     # AUTOMATIC DEFER: Stops "Bogobot is thinking"
-                    await interaction.response.defer(ephemeral=(perm_requirement != 0))
+                    await interaction.response.send_message(ephemeral=(perm_requirement != 0))
                     
                     uid = interaction.user.id
                     owner_id = self.outer.config.get("owner_uid")
