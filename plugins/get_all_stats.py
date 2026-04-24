@@ -1,5 +1,6 @@
 import discord
 from discord.ext import tasks
+import datetime
 
 async def setup(bot):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", perm_requirement=0)
