@@ -100,30 +100,37 @@ class BotCore(discord.Client):
         def __init__(self, outer): self.outer = outer
         def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
 
-        def command(self, name, description="No description", perm_requirement=1):
+        def command(self, name, description="No description", perm_requirement=1, defer=True):
             def decorator(func):
                 @self.outer.tree.command(name=name, description=description)
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-                    # AUTOMATIC DEFER: Stops "Bogobot is thinking"
-                    await interaction.response.send_message(ephemeral=(perm_requirement != 0))
-                    
                     uid = interaction.user.id
                     owner_id = self.outer.config.get("owner_uid")
                     auth_list = self.outer.config.get("authorized_users", [])
 
+                    # Permission Logic
                     allowed = False
                     if perm_requirement == 0: allowed = True
                     elif perm_requirement == 2 and uid == owner_id: allowed = True
                     elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): allowed = True
 
                     if not allowed:
-                        return await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
+                        return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
+                    
+                    # Defer Logic: Defaults to True
+                    if defer:
+                        # Level 0 is public, 1 and 2 are ephemeral
+                        await interaction.response.defer(ephemeral=(perm_requirement != 0))
                     
                     try:
                         await func(interaction, *args, **kwargs)
                     except Exception as e:
-                        await interaction.followup.send(f"⚠️ Error: {e}")
+                        # Use followup if we've already deferred/responded
+                        if interaction.response.is_done():
+                            await interaction.followup.send(f"⚠️ Error: {e}")
+                        else:
+                            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
                 return wrapper
             return decorator
 
