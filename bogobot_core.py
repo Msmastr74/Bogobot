@@ -30,10 +30,128 @@ class BotCore(discord.Client):
         self.current_val = "0"
         self.stats_cache = {}
         self.target_channel_id = self.config.get('default_channel_id')
+        
+        # Message Tracking
         self.monitor_message = None
+        self.last_text_message = None
         
         # Namespaces
         self.info = self._Info(self)
+        self.discord = self._Discord(self)
+        self.setup = self._Setup(self)  
+        
+        self._ocr_lock = asyncio.Lock()
+        self._last_ocr_mtime = 0
+
+    class _Info:
+        def __init__(self, outer): self.outer = outer
+        async def get_best_shuffle(self):
+            is_new = await self.outer.refresh_ocr_data()
+            return self.outer.current_val, is_new
+        async def get_stats_all(self):
+            await self.outer.refresh_ocr_data()
+            return self.outer.stats_cache
+
+    class _Discord:
+        def __init__(self, outer):
+            self.outer = outer
+            self.embeds = self._Embeds(outer)
+            self.messages = self._Messages(outer)
+
+        class _Messages:
+            def __init__(self, outer): self.outer = outer
+            async def send(self, contents, response=False, interaction=None):
+                if response and interaction:
+                    # Uses followup because the decorator defers by default
+                    self.outer.last_text_message = await interaction.followup.send(contents)
+                else:
+                    channel = self.outer.get_channel(self.outer.target_channel_id)
+                    if channel:
+                        self.outer.last_text_message = await channel.send(contents)
+
+            async def edit(self, contents):
+                if self.outer.last_text_message:
+                    try: await self.outer.last_text_message.edit(content=contents)
+                    except discord.NotFound: self.outer.last_text_message = None
+
+            async def delete(self):
+                if self.outer.last_text_message:
+                    try:
+                        await self.outer.last_text_message.delete()
+                        self.outer.last_text_message = None
+                    except: pass
+
+        class _Embeds:
+            def __init__(self, outer): self.outer = outer
+            async def send(self, contents, title="embed", footer="", color=discord.Color.blue(), response=False, interaction=None):
+                embed = discord.Embed(title=title, description=contents, color=color)
+                embed.set_footer(text=footer)
+                
+                if response and interaction:
+                    self.outer.monitor_message = await interaction.followup.send(embed=embed)
+                else:
+                    channel = self.outer.get_channel(self.outer.target_channel_id)
+                    if channel:
+                        self.outer.monitor_message = await channel.send(embed=embed)
+
+            async def edit(self, contents=None, title=None, color=None, add_field=False):
+                if not self.outer.monitor_message: return
+                old = self.outer.monitor_message.embeds[0]
+                
+                if add_field:
+                    new_embed = discord.Embed.from_dict(old.to_dict())
+                    new_embed.add_field(name=title or "Info", value=contents or "N/A", inline=False)
+                else:
+                    new_embed = discord.Embed(title=title or old.title, description=contents or old.description, color=color or old.color)
+                    for field in old.fields: new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+
+                new_embed.set_author(name=f"Last Scan: {datetime.now().strftime('%H:%M:%S')}")
+                try: await self.outer.monitor_message.edit(embed=new_embed)
+                except discord.NotFound: self.outer.monitor_message = None
+
+            async def delete(self):
+                if self.outer.monitor_message:
+                    try:
+                        await self.outer.monitor_message.delete()
+                        self.outer.monitor_message = None
+                    except: pass
+
+    class _Setup:
+        def __init__(self, outer): self.outer = outer
+        def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
+
+        # Default perms at 1, defer at True
+        def command(self, name, description="No description", perm_requirement=1, defer=True):
+            def decorator(func):
+                @self.outer.tree.command(name=name, description=description)
+                @functools.wraps(func)
+                async def wrapper(interaction: discord.Interaction, *args, **kwargs):
+                    uid = interaction.user.id
+                    owner_id = self.outer.config.get("owner_uid")
+                    auth_list = self.outer.config.get("authorized_users", [])
+
+                    allowed = False
+                    if perm_requirement == 0: allowed = True
+                    elif perm_requirement == 2 and uid == owner_id: allowed = True
+                    elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): allowed = True
+
+                    if not allowed:
+                        return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
+                    
+                    if defer:
+                        await interaction.response.defer(ephemeral=(perm_requirement != 0))
+                    
+                    try:
+                        await func(interaction, *args, **kwargs)
+                    except Exception as e:
+                        if interaction.response.is_done():
+                            await interaction.followup.send(f"⚠️ Error: {e}")
+                        else:
+                            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+                return wrapper
+            return decorator
+
+    # OCR and setup logic...
         self.discord = self._Discord(self) # Restored
         self.setup = self._Setup(self)  
         
