@@ -1,6 +1,6 @@
 import discord
 from discord.ext import tasks
-import datetime
+from datetime import datetime
 
 async def setup(bot):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", perm_requirement=0)
@@ -14,7 +14,7 @@ async def setup(bot):
         shuffles_min = stats_list["shuffles_min"]
         serial = await bot.info.get_best_shuffle()
 
-        bot.discord.embeds.send(title="Current Bogosort Statistics", color=discord.Color.green(), footer=f"Fetched at: {datetime.now().strftime('%H:%M:%S')}", response=True)
+        bot.discord.embeds.send(contents="", title="Current Bogosort Statistics", color=discord.Color.green(), footer=f"Fetched at: {datetime.now().strftime('%H:%M:%S')}", response=True)
         bot.discord.embeds.edit(name="Recent Serial", value=f"`{serial}`", add_field=True)
         bot.discord.embeds.edit(name="Total Shuffles", value=f"`{shuffles}`", add_field=True)
         bot.discord.embeds.edit(name="Comparisons", value=f"`{comparisons}`", add_field=True)
