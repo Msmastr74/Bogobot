@@ -5,11 +5,7 @@ import datetime
 async def setup(bot):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", perm_requirement=0)
     async def get_all(interaction: discord.Interaction):
-        # Defer since OCR takes ~0.25s
-        await interaction.response.defer()
-    
-        # Each call triggers the centralized 'refresh_ocr_data' refresher
-        # The first one triggers OCR; the others use the cache to save CPU/Battery
+        
         shuffles = await bot.info.get_shuffles()
         comparisons = await bot.info.get_comparisons()
         best_run = await bot.info.get_best_run()
