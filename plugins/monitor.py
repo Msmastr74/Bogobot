@@ -33,8 +33,6 @@ async def setup(bot):
             print(f"Edit Error: {e}")
     @bot.setup.command(name="monitor", description="Begins monitoring sorted number counts from the stream")
     async def monitor(interaction: discord.Interaction):
-        # 1. Tell Discord to wait
-        await interaction.response.defer(ephemeral=True)
         
         bot.setup.channel_id(interaction.channel_id)
         
@@ -42,7 +40,7 @@ async def setup(bot):
         await bot.discord.embeds.send(contents="Initializing...", title="Serial Number", footer="! = Flagged as incorrect")
         
         # 3. Follow up so the user knows it's done
-        await interaction.followup.send("Monitor system online.")
+        await bot.discord.messages.send("Monitor system online.", response=True)
         
         if not monitor_loop.is_running():
             monitor_loop.start()
@@ -58,4 +56,4 @@ async def setup(bot):
             # 3. Confirm to the user
             # (The delete function already sends an ephemeral confirmation)
         else:
-            await interaction.response.send_message("Monitor is not currently running.", ephemeral=True)
+            await bot.discord.messages.send("Monitor is not currently running.", response=True, ephemeral=True)
