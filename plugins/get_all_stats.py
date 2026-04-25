@@ -16,12 +16,9 @@ async def setup(bot):
         shuffles_min = await bot.info.get_shuffles_min()
         serial = await bot.info.get_best_shuffle()
 
-        embed = discord.Embed(title="Current Bogosort Statistics", color=discord.Color.green())
-        embed.add_field(name="Recent Serial", value=f"`{serial}`", inline=False)
-        embed.add_field(name="Total Shuffles", value=f"`{shuffles}`", inline=True)
-        embed.add_field(name="Comparisons", value=f"`{comparisons}`", inline=True)
-        embed.add_field(name="Best Run", value=f"`{best_run}`", inline=True)
-        embed.add_field(name="Shuffles/min", value=f"`{shuffles_min}`", inline=True)
-        embed.set_footer(text=f"Fetched at: {datetime.now().strftime('%H:%M:%S')}")
-        
-        await interaction.followup.send(embed=embed)
+        bot.discord.embeds.send(title="Current Bogosort Statistics", color=discord.Color.green(), footer=f"Fetched at: {datetime.now().strftime('%H:%M:%S')}", response=True)
+        bot.discord.embeds.edit(name="Recent Serial", value=f"`{serial}`", add_field=True)
+        bot.discord.embeds.edit(name="Total Shuffles", value=f"`{shuffles}`", add_field=True)
+        bot.discord.embeds.edit(name="Comparisons", value=f"`{comparisons}`", add_field=True)
+        bot.discord.embeds.edit(name="Best Run", value=f"`{best_run}`", add_field=True)
+        bot.discord.embeds.edit(name="Shuffles/min", value=f"`{shuffles_min}`", add_field=True)
