@@ -18,8 +18,9 @@ The only thing required is Python 3.10+. Everything else is installed in the dep
    ```bash
    bash dependencies-android.sh   # For Android/Termux
    # OR
-   bash dependencies_pc.sh  # For Windows/Linux
-   
+   bash dependencies_windows.sh  # For Windows
+   # OR
+   bash dependencies_linux.sh  # For Linux
    ```
 ## Configuration
 Go into config.json and provide the following credentials:
