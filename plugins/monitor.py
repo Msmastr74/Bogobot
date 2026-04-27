@@ -1,5 +1,6 @@
 import discord
 from discord.ext import tasks
+from datetime import datetime
 
 new_var = ""
 num_array = ["0"]
@@ -28,7 +29,7 @@ async def setup(bot):
 
         # Only edit the message when there is actually a change
         try:
-            await bot.discord.embeds.edit(contents=".".join(num_array))
+            await bot.discord.embeds.edit(contents=".".join(num_array), author=datetime.now().strftime('[%H:%M:%S]'))
         except Exception as e:
             print(f"Edit Error: {e}")
     @bot.setup.command(name="monitor", description="Begins monitoring sorted number counts from the stream")
@@ -51,9 +52,9 @@ async def setup(bot):
             monitor_loop.stop()
             
             # 2. Optional: Clean up the Discord message
-            await bot.discord.embeds.delete(interaction)
+            await bot.discord.embeds.delete()
             
             # 3. Confirm to the user
             # (The delete function already sends an ephemeral confirmation)
         else:
-            await bot.discord.messages.send("Monitor is not currently running.", response=True, ephemeral=True)
+            await bot.discord.messages.send("Monitor is not currently running.", response=True)
