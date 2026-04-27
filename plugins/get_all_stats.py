@@ -1,22 +1,27 @@
 import discord
 from discord.ext import tasks
-from datetime import datetime
+import time
 
 async def setup(bot):
-    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", perm_requirement=0)
+    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
     async def get_all(interaction: discord.Interaction):
         
         stats_list = await bot.info.get_stats_all()
         
-        shuffles = stats_list["shuffles"]
-        comparisons = stats_list["comparisons"]
-        best_run = stats_list["best_run"]
-        shuffles_min = stats_list["shuffles_min"]
-        serial = await bot.info.get_best_shuffle()
+        # Use .get() to prevent future KeyErrors if the cache is empty
+        shuffles = stats_list.get("shuffles", "Loading...")
+        comparisons = stats_list.get("comparisons", "Loading...")
+        best_run = bot.config.get("best_run", "0/25")
+        shuffles_min = stats_list.get("shuffles_min", "Loading...")
+        elapsed_time = await bot.info.get_uptime()
+        
 
-        bot.discord.embeds.send(contents="", title="Current Bogosort Statistics", color=discord.Color.green(), footer=f"Fetched at: {datetime.now().strftime('%H:%M:%S')}", response=True)
-        bot.discord.embeds.edit(name="Recent Serial", value=f"`{serial}`", add_field=True)
-        bot.discord.embeds.edit(name="Total Shuffles", value=f"`{shuffles}`", add_field=True)
-        bot.discord.embeds.edit(name="Comparisons", value=f"`{comparisons}`", add_field=True)
-        bot.discord.embeds.edit(name="Best Run", value=f"`{best_run}`", add_field=True)
-        bot.discord.embeds.edit(name="Shuffles/min", value=f"`{shuffles_min}`", add_field=True)
+        # Send the base embed
+        await bot.discord.embeds.send(contents=f"Fetched at: <t:{int(round(time.time()))}:T>", title="Current Bogosort Statistics", color=discord.Color.green(), response=True)
+        
+        # Rapid-fire the fields 
+        await bot.discord.embeds.edit(contents=f"{shuffles}", title="Shuffles", add_field=True)
+        await bot.discord.embeds.edit(contents=f"{comparisons}", title="Comparisons", add_field=True)
+        await bot.discord.embeds.edit(contents=f"{best_run}", title="Best Run", add_field=True)
+        await bot.discord.embeds.edit(contents=f"{shuffles_min}", title="Shuffles Per Minute", add_field=True)
+        await bot.discord.embeds.edit(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)
