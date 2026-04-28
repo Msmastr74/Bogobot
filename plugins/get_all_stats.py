@@ -23,5 +23,5 @@ async def setup(bot):
         await bot.discord.embeds.edit(contents=f"{shuffles}", title="Shuffles", add_field=True)
         await bot.discord.embeds.edit(contents=f"{comparisons}", title="Comparisons", add_field=True)
         await bot.discord.embeds.edit(contents=f"{best_run}", title="Best Run", add_field=True)
-        await bot.discord.embeds.edit(contents=f"{shuffles_min}", title="Shuffles Per Minute", add_field=True)
+        await bot.discord.embeds.edit(contents=f"{shuffles_min}", title="Shuffles Per Second", add_field=True)
         await bot.discord.embeds.edit(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)
