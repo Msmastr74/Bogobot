@@ -32,7 +32,7 @@ Go into config.json and provide the following credentials:
 The bot requires two concurrent processes: one to pipe the stream data to a local file and another to run the bot core.
 ### Terminal 1: Stream Pipe
 ```bash
-streamlink [https://www.youtube.com/live/vzgH2DGhrUA](https://www.youtube.com/live/vzgH2DGhrUA) 720p --stdout | ffmpeg -re -i pipe:0 -vf "fps=1" -update 1 -y live_720p.jpg
+streamlink "https://www.youtube.com/live/vzgH2DGhrUA" 720p --stdout | ffmpeg -re -i pipe:0 -vf "fps=1" -update 1 -y live_720p.jpg
 
 ```
 ### Terminal 2: Bot Core
