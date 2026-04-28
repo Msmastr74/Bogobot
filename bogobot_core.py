@@ -93,8 +93,26 @@ class BotCore(discord.Client):
             is_new = await self.outer.refresh_ocr_data()
             return self.outer.current_val, is_new
         async def get_stats_all(self):
-            await self.outer.refresh_ocr_data()
-            return self.outer.stats_cache
+            try:
+                with Image.open('live_720p.jpg') as img:
+                    img.load()
+                    
+                    # Low-frequency pass: Run the full dictionary only when called
+                    for name, coords in self.STATS_COORDS.items():
+                        stat_crop = img.crop(coords).convert('L')
+                        
+                        raw_text = self._tess_process(stat_crop, "0123456789") 
+                        digits = "".join([c for c in raw_text if c.isdigit()])
+                        
+                        if digits:
+                            self.stats_cache[name] = f"{int(digits):,}"
+                        else:
+                            self.stats_cache[name] = "0"
+                            
+                return self.stats_cache
+            except Exception as e:
+                print(f"Stats Extraction Error: {e}")
+                return self.stats_cache
 
     class _Discord:
         def __init__(self, outer):
@@ -205,7 +223,8 @@ class BotCore(discord.Client):
                         current_interaction.reset(token)
                 return wrapper
             return decorator
-
+            
+    # OCR STUFF
     async def refresh_ocr_data(self):
         async with self._ocr_lock:
             try:
@@ -217,16 +236,40 @@ class BotCore(discord.Client):
             except: return False
 
     def _run_ocr(self):
-        with Image.open('live_720p.jpg') as img:
-            img.load()
-            # ... (keep Serial Number logic) ...
-            
-            for name, coords in self.STATS_COORDS.items():
-                stat_crop = img.crop(coords).convert('L')
+        try:
+            with Image.open('live_720p.jpg') as img:
+                img.load()
                 
-                # Use ONLY digits in the whitelist to prevent phantom spaces/commas
-                raw_text = self._tess_process(stat_crop, "0123456789") 
-                digits = "".join([c for c in raw_text if c.isdigit()])
+                # High-frequency pass: Only the Serial Number (CELL)
+                cell_crop = img.crop(self.CELL_COORDS).convert('L')
+                self.current_val = self._tess_process(cell_crop, "0123456789")
+                
+        except Exception as e:
+            # Silence errors if ffmpeg is currently writing the file
+            pass
+
+    def _tess_process(self, cell, whitelist):
+        cell = ImageOps.autocontrast(cell, cutoff=0.5)
+        data = np.array(cell)
+        clean = np.where(data > self.THRESHOLD, 255, 0).astype(np.uint8)
+        cell = Image.fromarray(clean).resize((cell.width * 10, cell.height * 10), Image.Resampling.NEAREST)
+        cell = ImageOps.invert(cell.convert('RGB')).convert('L')
+        cell = ImageOps.expand(cell, border=60, fill='white')
+        cell.save("temp_ocr.png")
+        return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
+
+    async def setup_hook(self): await self.tree.sync()
+    async def load_plugins(self, folder_name="plugins"):
+        if not os.path.exists(folder_name): os.makedirs(folder_name)
+        for filename in os.listdir(folder_name):
+            if filename.endswith(".py"):
+                mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
+                if hasattr(mod, "setup"): await mod.setup(self)
+                print(f"✅ Loaded Plugin: {filename}")
+    def save_config(self):
+        with open('config.json', 'w') as f: json.dump(self.config, f, indent=4)
+    async def run_bot(self): await self.start(self.config['bot_token'])
+= "".join([c for c in raw_text if c.isdigit()])
                 
                 if digits:
                     # int() removes leading zeros, :, adds perfect commas
