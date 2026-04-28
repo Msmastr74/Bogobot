@@ -16,7 +16,7 @@ The only thing required is Python 3.10+. Everything else is installed in the dep
    ```
  2. Run the dependency script for your environment:
    ```bash
-   bash dependencies-android.sh   # For Android/Termux
+   bash dependencies_android.sh   # For Android/Termux
    # OR
    bash dependencies_windows.sh  # For Windows
    # OR
