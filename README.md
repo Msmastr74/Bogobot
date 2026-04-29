@@ -10,8 +10,7 @@ The only thing required is Python 3.10+. Everything else is installed in the dep
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/Msmastr74/Bogobot](https://github.com/Msmastr74/Bogobot)
-   cd Bogobot
+   git clone https://github.com/Msmastr74/Bogobot
    
    ```
  2. Run the dependency script for your environment:
