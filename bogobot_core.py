@@ -74,7 +74,7 @@ class BotCore(discord.Client):
                         "clientVersion": "2.20260424.01.00"
                     }
                 },
-            "videoId": "vzgH2DGhrUA"
+            "videoId": "DgfiqGPmGWY"
             }
             
             try:
@@ -268,14 +268,15 @@ class BotCore(discord.Client):
                 print(f"✅ Loaded Plugin: {filename}")
     def save_config(self):
         with open('config.json', 'w') as f: json.dump(self.config, f, indent=4)
-    async def run_bot(self): await self.start(self.config['bot_token'])
-= "".join([c for c in raw_text if c.isdigit()])
-                
-                if digits:
-                    # int() removes leading zeros, :, adds perfect commas
-                    self.stats_cache[name] = f"{int(digits):,}"
-                else:
-                    self.stats_cache[name] = "0"
+    async def run_bot(self): 
+        await self.start(self.config['bot_token'])
+        digits = "".join([c for c in self.raw_text if c.isdigit()])
+    
+        if digits:
+            # int() removes leading zeros, :, adds perfect commas
+            self.stats_cache[self.name] = f"{int(digits):,}"
+        else:
+            self.stats_cache[self.name] = "0"
 
     def _tess_process(self, cell, whitelist):
         cell = ImageOps.autocontrast(cell, cutoff=0.5)
