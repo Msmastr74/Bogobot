@@ -1,6 +1,6 @@
 {
     "bot_token": "BOT_TOKEN_HERE",
-    "owner_uid": 0123456789012345678"
+    "owner_uid": 0123456789012345678
     "authorized_users": [],
     "owner_username": "YOUR_USERNAME",
     "default_channel_id": 1234567890
