@@ -15,7 +15,7 @@ async def setup(bot: 'BotCore'):
         # Use .get() to prevent future KeyErrors if the cache is empty
         shuffles = stats_list.get("shuffles", "Loading...")
         comparisons = stats_list.get("comparisons", "Loading...")
-        best_run = bot.config.get("best_run", "0/25")
+        best_run = stats_list.get("best_run", "Loading...")
         shuffles_min = stats_list.get("shuffles_min", "Loading...")
         elapsed_time = await bot.info.get_uptime()
         

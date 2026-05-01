@@ -28,7 +28,7 @@ class BotCore(discord.Client):
         self.STATS_COORDS = {
             "shuffles": (81, 585, 312, 640),
             "comparisons": (331, 585, 551, 640),
-            "best_run": (750, 585, 885, 640),
+            "best_run": (570, 593, 885, 640),
             "shuffles_min": (819, 585, 1043, 640),
             "elapsed_time": (1166, 0, 1180, 75)
         }
@@ -48,7 +48,7 @@ class BotCore(discord.Client):
         self._last_ocr_mtime = 0
 
     class _Info:
-        def __init__(self, outer): self.outer = outer
+        def __init__(self, outer: 'BotCore'): self.outer = outer
         
         # FIX: Added 'self' as the first argument
         def format_to_ddhhmmss(self, total_seconds):
@@ -101,10 +101,12 @@ class BotCore(discord.Client):
                     for name, coords in self.outer.STATS_COORDS.items():
                         stat_crop = img.crop(coords).convert('L')
                         
-                        raw_text = self.outer._tess_process(stat_crop, "0123456789") 
-                        digits = "".join([c for c in raw_text if c.isdigit()])
+                        raw_text = self.outer._tess_process(stat_crop, "0123456789/") 
+                        digits = "".join([c for c in raw_text if c.isdigit() or c == '/'])
                         
-                        if digits:
+                        if '/' in digits:
+                            self.outer.stats_cache[name] = digits
+                        elif digits:
                             self.outer.stats_cache[name] = f"{int(digits):,}"
                         else:
                             self.outer.stats_cache[name] = "0"
