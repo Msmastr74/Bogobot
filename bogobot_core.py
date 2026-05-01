@@ -98,21 +98,21 @@ class BotCore(discord.Client):
                     img.load()
                     
                     # Low-frequency pass: Run the full dictionary only when called
-                    for name, coords in self.STATS_COORDS.items():
+                    for name, coords in self.outer.STATS_COORDS.items():
                         stat_crop = img.crop(coords).convert('L')
                         
-                        raw_text = self._tess_process(stat_crop, "0123456789") 
+                        raw_text = self.outer._tess_process(stat_crop, "0123456789") 
                         digits = "".join([c for c in raw_text if c.isdigit()])
                         
                         if digits:
-                            self.stats_cache[name] = f"{int(digits):,}"
+                            self.outer.stats_cache[name] = f"{int(digits):,}"
                         else:
-                            self.stats_cache[name] = "0"
+                            self.outer.stats_cache[name] = "0"
                             
-                return self.stats_cache
+                return self.outer.stats_cache
             except Exception as e:
                 print(f"Stats Extraction Error: {e}")
-                return self.stats_cache
+                return self.outer.stats_cache
 
     class _Discord:
         def __init__(self, outer):
@@ -267,7 +267,8 @@ class BotCore(discord.Client):
                 if hasattr(mod, "setup"): await mod.setup(self)
                 print(f"✅ Loaded Plugin: {filename}")
     def save_config(self):
-        with open('config.json', 'w') as f: json.dump(self.config, f, indent=4)
+        with open('config.json', 'w') as f:
+            json.dump(self.config, f, indent=4)
     async def run_bot(self): 
         await self.start(self.config['bot_token'])
         digits = "".join([c for c in self.raw_text if c.isdigit()])
@@ -289,71 +290,58 @@ class BotCore(discord.Client):
         return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
 
     async def setup_hook(self): await self.tree.sync()
-    async def load_plugins(self, folder_name="plugins"):
-        if not os.path.exists(folder_name): os.makedirs(folder_name)
-        for filename in os.listdir(folder_name):
-            if filename.endswith(".py"):
-                mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
-                if hasattr(mod, "setup"): await mod.setup(self)
-                print(f"✅ Loaded Plugin: {filename}")
-    def save_config(self):
-        with open('config.json', 'w') as f: json.dump(self.config, f, indent=4)
-    async def run_bot(self): await self.start(self.config['bot_token'])
-            hours = hours % 24
-            return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
-
-        async def get_uptime(self):
-            # Your successful video ID hack
-            video_id = self.outer.config.get('youtube_stream_id', 'vzgH2DGhrUA') 
-            url = f"https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
-            payload = {
-                "context": {
-                    "client": {
-                        "hl": "en",
-                        "gl": "US",
-                        "clientName": "WEB",
-                        "clientVersion": "2.20260424.01.00"
-                    }
-                },
-            "videoId": "DgfiqGPmGWY"
-            }
+    async def get_uptime(self):
+        # Your successful video ID hack
+        video_id = self.outer.config.get('youtube_stream_id', 'vzgH2DGhrUA') 
+        url = f"https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
+        payload = {
+            "context": {
+                "client": {
+                    "hl": "en",
+                    "gl": "US",
+                    "clientName": "WEB",
+                    "clientVersion": "2.20260424.01.00"
+                }
+            },
+        "videoId": "DgfiqGPmGWY"
+        }
+        
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: requests.post(url, json=payload, timeout=10)
+            )
+            # print(response.text) # Keep your successful debug line if you want!
+            data = response.json()
+            raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
             
-            try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: requests.post(url, json=payload, timeout=10)
-                )
-                # print(response.text) # Keep your successful debug line if you want!
-                data = response.json()
-                raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
+            # Calling the fixed method
+            return self.format_to_ddhhmmss(raw_seconds)
+        except (KeyError, requests.RequestException) as e:
+            return "00:00:00:00"
+    async def get_best_shuffle(self):
+        is_new = await self.outer.refresh_ocr_data()
+        return self.outer.current_val, is_new
+    async def get_stats_all(self):
+        try:
+            with Image.open('live_720p.jpg') as img:
+                img.load()
                 
-                # Calling the fixed method
-                return self.format_to_ddhhmmss(raw_seconds)
-            except (KeyError, requests.RequestException) as e:
-                return "00:00:00:00"
-        async def get_best_shuffle(self):
-            is_new = await self.outer.refresh_ocr_data()
-            return self.outer.current_val, is_new
-        async def get_stats_all(self):
-            try:
-                with Image.open('live_720p.jpg') as img:
-                    img.load()
+                # Low-frequency pass: Run the full dictionary only when called
+                for name, coords in self.outer.STATS_COORDS.items():
+                    stat_crop = img.crop(coords).convert('L')
                     
-                    # Low-frequency pass: Run the full dictionary only when called
-                    for name, coords in self.STATS_COORDS.items():
-                        stat_crop = img.crop(coords).convert('L')
+                    raw_text = self._tess_process(stat_crop, "0123456789") 
+                    digits = "".join([c for c in raw_text if c.isdigit()])
+                    
+                    if digits:
+                        self.stats_cache[name] = f"{int(digits):,}"
+                    else:
+                        self.stats_cache[name] = "0"
                         
-                        raw_text = self._tess_process(stat_crop, "0123456789") 
-                        digits = "".join([c for c in raw_text if c.isdigit()])
-                        
-                        if digits:
-                            self.stats_cache[name] = f"{int(digits):,}"
-                        else:
-                            self.stats_cache[name] = "0"
-                            
-                return self.stats_cache
-            except Exception as e:
-                print(f"Stats Extraction Error: {e}")
-                return self.stats_cache
+            return self.stats_cache
+        except Exception as e:
+            print(f"Stats Extraction Error: {e}")
+            return self.stats_cache
 
     class _Discord:
         def __init__(self, outer):
@@ -500,25 +488,6 @@ class BotCore(discord.Client):
         return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
 
     async def setup_hook(self): await self.tree.sync()
-    async def load_plugins(self, folder_name="plugins"):
-        if not os.path.exists(folder_name): os.makedirs(folder_name)
-        for filename in os.listdir(folder_name):
-            if filename.endswith(".py"):
-                mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
-                if hasattr(mod, "setup"): await mod.setup(self)
-                print(f"✅ Loaded Plugin: {filename}")
-    def save_config(self):
-        with open('config.json', 'w') as f: json.dump(self.config, f, indent=4)
-    async def run_bot(self): 
-        await self.start(self.config['bot_token'])
-        digits = "".join([c for c in self.raw_text if c.isdigit()])
-    
-        if digits:
-            # int() removes leading zeros, :, adds perfect commas
-            self.stats_cache[self.name] = f"{int(digits):,}"
-        else:
-            self.stats_cache[self.name] = "0"
-
     def _tess_process(self, cell, whitelist):
         cell = ImageOps.autocontrast(cell, cutoff=0.5)
         data = np.array(cell)
@@ -530,13 +499,3 @@ class BotCore(discord.Client):
         return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
 
     async def setup_hook(self): await self.tree.sync()
-    async def load_plugins(self, folder_name="plugins"):
-        if not os.path.exists(folder_name): os.makedirs(folder_name)
-        for filename in os.listdir(folder_name):
-            if filename.endswith(".py"):
-                mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
-                if hasattr(mod, "setup"): await mod.setup(self)
-                print(f"✅ Loaded Plugin: {filename}")
-    def save_config(self):
-        with open('config.json', 'w') as f: json.dump(self.config, f, indent=4)
-    async def run_bot(self): await self.start(self.config['bot_token'])
