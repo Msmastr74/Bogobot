@@ -2,10 +2,14 @@ import discord
 from discord.ext import tasks
 from datetime import datetime
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from main import BotCore
+
 new_var = ""
 num_array = ["0"]
 num_array *= 30
-async def setup(bot):
+async def setup(bot: 'BotCore'):
     @tasks.loop(seconds=0.5)
     async def monitor_loop():
         global num_array

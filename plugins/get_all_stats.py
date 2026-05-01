@@ -2,7 +2,11 @@ import discord
 from discord.ext import tasks
 import time
 
-async def setup(bot):
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from main import BotCore
+
+async def setup(bot: 'BotCore'):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
     async def get_all(interaction: discord.Interaction):
         

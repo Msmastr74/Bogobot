@@ -4,8 +4,12 @@ import sys
 import importlib
 import io
 import contextlib
+import os
 
-bot = BotCore()
+if os.path.exists('local_config.json'):
+    bot = BotCore('local_config.json')
+else:
+    bot = BotCore()
 
 async def start():
     async with bot:

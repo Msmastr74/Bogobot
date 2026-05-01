@@ -233,7 +233,8 @@ class BotCore(discord.Client):
                 await asyncio.wait_for(asyncio.to_thread(self._run_ocr), timeout=5.0)
                 self._last_ocr_mtime = mtime
                 return True
-            except: return False
+            except Exception:
+                return False
 
     def _run_ocr(self):
         try:
@@ -288,60 +289,6 @@ class BotCore(discord.Client):
         cell = ImageOps.expand(cell, border=60, fill='white')
         cell.save("temp_ocr.png")
         return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
-
-    async def setup_hook(self): await self.tree.sync()
-    async def get_uptime(self):
-        # Your successful video ID hack
-        video_id = self.outer.config.get('youtube_stream_id', 'vzgH2DGhrUA') 
-        url = f"https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
-        payload = {
-            "context": {
-                "client": {
-                    "hl": "en",
-                    "gl": "US",
-                    "clientName": "WEB",
-                    "clientVersion": "2.20260424.01.00"
-                }
-            },
-        "videoId": "DgfiqGPmGWY"
-        }
-        
-        try:
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: requests.post(url, json=payload, timeout=10)
-            )
-            # print(response.text) # Keep your successful debug line if you want!
-            data = response.json()
-            raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
-            
-            # Calling the fixed method
-            return self.format_to_ddhhmmss(raw_seconds)
-        except (KeyError, requests.RequestException) as e:
-            return "00:00:00:00"
-    async def get_best_shuffle(self):
-        is_new = await self.outer.refresh_ocr_data()
-        return self.outer.current_val, is_new
-    async def get_stats_all(self):
-        try:
-            with Image.open('live_720p.jpg') as img:
-                img.load()
-                
-                # Low-frequency pass: Run the full dictionary only when called
-                for name, coords in self.outer.STATS_COORDS.items():
-                    stat_crop = img.crop(coords).convert('L')
-                    
-                    raw_text = self._tess_process(stat_crop, "0123456789") 
-                    digits = "".join([c for c in raw_text if c.isdigit()])
-                    
-                    if digits:
-                        self.stats_cache[name] = f"{int(digits):,}"
-                    else:
-                        self.stats_cache[name] = "0"
-                        
-            return self.stats_cache
-        except Exception as e:
-            print(f"Stats Extraction Error: {e}")
-            return self.stats_cache
 
     class _Discord:
         def __init__(self, outer):
@@ -452,50 +399,3 @@ class BotCore(discord.Client):
                         current_interaction.reset(token)
                 return wrapper
             return decorator
-            
-    # OCR STUFF
-    async def refresh_ocr_data(self):
-        async with self._ocr_lock:
-            try:
-                mtime = os.path.getmtime('live_720p.jpg')
-                if mtime <= self._last_ocr_mtime: return False
-                await asyncio.wait_for(asyncio.to_thread(self._run_ocr), timeout=5.0)
-                self._last_ocr_mtime = mtime
-                return True
-            except: return False
-
-    def _run_ocr(self):
-        try:
-            with Image.open('live_720p.jpg') as img:
-                img.load()
-                
-                # High-frequency pass: Only the Serial Number (CELL)
-                cell_crop = img.crop(self.CELL_COORDS).convert('L')
-                self.current_val = self._tess_process(cell_crop, "0123456789")
-                
-        except Exception as e:
-            # Silence errors if ffmpeg is currently writing the file
-            pass
-
-    def _tess_process(self, cell, whitelist):
-        cell = ImageOps.autocontrast(cell, cutoff=0.5)
-        data = np.array(cell)
-        clean = np.where(data > self.THRESHOLD, 255, 0).astype(np.uint8)
-        cell = Image.fromarray(clean).resize((cell.width * 10, cell.height * 10), Image.Resampling.NEAREST)
-        cell = ImageOps.invert(cell.convert('RGB')).convert('L')
-        cell = ImageOps.expand(cell, border=60, fill='white')
-        cell.save("temp_ocr.png")
-        return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
-
-    async def setup_hook(self): await self.tree.sync()
-    def _tess_process(self, cell, whitelist):
-        cell = ImageOps.autocontrast(cell, cutoff=0.5)
-        data = np.array(cell)
-        clean = np.where(data > self.THRESHOLD, 255, 0).astype(np.uint8)
-        cell = Image.fromarray(clean).resize((cell.width * 10, cell.height * 10), Image.Resampling.NEAREST)
-        cell = ImageOps.invert(cell.convert('RGB')).convert('L')
-        cell = ImageOps.expand(cell, border=60, fill='white')
-        cell.save("temp_ocr.png")
-        return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
-
-    async def setup_hook(self): await self.tree.sync()
