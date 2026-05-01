@@ -1,7 +1,7 @@
 {
-    "bot_token": "MTQ5OTg3NDQyMzAxOTQwOTU5OQ.GfJgql.UbQZjntOuWQodFKjyK699rHOoCZtUOiBmthPnc",
-    "owner_uid": 1258908783300841654,
+    "bot_token": "BOT_TOKEN_HERE",
+    "owner_uid": 12345678901234567,
     "authorized_users": [],
-    "owner_username": "auser0001",
-    "default_channel_id": 1499876142486786150
+    "owner_username": "YOUR_USERNAME_HERE",
+    "default_channel_id": 123456789012345678
 }
