@@ -14,3 +14,9 @@ async def setup(bot):
             await bot.discord.messages.send(contents=f"Max must be bigger than min. Did you mean `/randint {min} {max}`?", response=True)
             return
         await bot.discord.messages.send(contents=f"{random.randint(min, max)}", response=True)
+    @bot.setup.command(name="choice", description="Chooses a random item from a list of items", eph=False, perm_requirement=0)
+    async def choice(interaction: discord.Interaction, *choices: list[str]):
+        if len(choices) == 0:
+            await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
+            return
+        await bot.discord.messages.send(contents=f"{random.choice(choices)}", response=True)
