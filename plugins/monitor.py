@@ -10,6 +10,7 @@ new_var = ""
 num_array = ["0"]
 num_array *= 30
 async def setup(bot: 'BotCore'):
+    monitor_embed: 'BotCore._Discord._Embeds.EmbedHandle' = None
     @tasks.loop(seconds=0.5)
     async def monitor_loop():
         global num_array
@@ -19,7 +20,7 @@ async def setup(bot: 'BotCore'):
         # If OCR didn't run because the file hasn't changed, do nothing
         if not is_new:
             return 
-        if new_var in ["0", "1"] or int(new_var) > 14:
+        if new_var in ["0", "1", ""] or int(new_var) > 14:
             new_var = "!"
 
         # We have fresh data; update the array
@@ -33,16 +34,18 @@ async def setup(bot: 'BotCore'):
 
         # Only edit the message when there is actually a change
         try:
-            await bot.discord.embeds.edit(contents=".".join(num_array), author=datetime.now().strftime('[%H:%M:%S]'))
+            await monitor_embed.edit(contents=".".join(num_array), author=datetime.now().strftime('[%H:%M:%S]'))
         except Exception as e:
             print(f"Edit Error: {e}")
     @bot.setup.command(name="monitor", description="Begins monitoring sorted number counts from the stream")
     async def monitor(interaction: discord.Interaction):
-        
+        nonlocal monitor_embed
         bot.setup.channel_id(interaction.channel_id)
         
         # 2. Create the message
-        await bot.discord.embeds.send(contents="Initializing...", title="Serial Number", footer="! = Flagged as incorrect")
+        monitor_embed = await bot.discord.embeds.send(contents="Initializing...", title="Serial Number", footer="! = Flagged as incorrect")
+        
+        assert monitor_embed is not None, 'monitor_embed is None, check default_channel_id'
         
         # 3. Follow up so the user knows it's done
         await bot.discord.messages.send("Monitor system online.", response=True)
@@ -51,12 +54,14 @@ async def setup(bot: 'BotCore'):
             monitor_loop.start()
     @bot.setup.command(name="stop", description="Stops the stream monitor")
     async def stop_monitor(interaction: discord.Interaction):
+        nonlocal monitor_embed
         # 1. Stop the loop
         if monitor_loop.is_running():
             monitor_loop.stop()
             
             # 2. Optional: Clean up the Discord message
-            await bot.discord.embeds.delete()
+            if monitor_embed:
+                await monitor_embed.delete()
             
             # 3. Confirm to the user
             # (The delete function already sends an ephemeral confirmation)

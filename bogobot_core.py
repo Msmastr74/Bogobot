@@ -3,7 +3,7 @@ from discord import app_commands
 import json
 import subprocess
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 from datetime import datetime
 import os
 import functools
@@ -14,10 +14,11 @@ import contextvars
 import requests
 
 # The "Invisible Baton"
-current_interaction = contextvars.ContextVar("current_interaction", default=None)
+current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar("current_interaction", default=None)
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
+        self.config_path = config_path
         with open(config_path, 'r') as f:
             self.config = json.load(f)
             
@@ -35,8 +36,7 @@ class BotCore(discord.Client):
         self.THRESHOLD = 165
         self.current_val = "0"
         self.stats_cache = {}
-        self.target_channel_id = self.config.get('default_channel_id')
-        
+        self.target_channel_id = int(self.config.get('default_channel_id'))
         self.monitor_message = None
         self.last_text_message = None
         
@@ -101,15 +101,17 @@ class BotCore(discord.Client):
                     for name, coords in self.outer.STATS_COORDS.items():
                         stat_crop = img.crop(coords).convert('L')
                         
-                        raw_text = self.outer._tess_process(stat_crop, "0123456789/") 
-                        digits = "".join([c for c in raw_text if c.isdigit() or c == '/'])
-                        
-                        if '/' in digits:
+                        if name == 'best_run': 
+                            raw_text = self.outer._tess_process(stat_crop, "0123456789/") 
+                            digits = "".join([c for c in raw_text if c.isdigit() or c == '/'])
                             self.outer.stats_cache[name] = digits
-                        elif digits:
-                            self.outer.stats_cache[name] = f"{int(digits):,}"
                         else:
-                            self.outer.stats_cache[name] = "0"
+                            raw_text = self.outer._tess_process(stat_crop, "0123456789") 
+                            digits = "".join([c for c in raw_text if c.isdigit()])
+                            if digits:
+                                self.outer.stats_cache[name] = f"{int(digits):,}"
+                            else:
+                                self.outer.stats_cache[name] = "0"
                             
                 return self.outer.stats_cache
             except Exception as e:
@@ -117,24 +119,26 @@ class BotCore(discord.Client):
                 return self.outer.stats_cache
 
     class _Discord:
-        def __init__(self, outer):
+        def __init__(self, outer: 'BotCore'):
             self.outer = outer
             self.embeds = self._Embeds(outer)
             self.messages = self._Messages(outer)
 
         class _Messages:
-            def __init__(self, outer): self.outer = outer
+            def __init__(self, outer: 'BotCore'): self.outer = outer
             async def send(self, contents, response=False):
                 interaction = current_interaction.get()
                 if response and interaction:
                     self.outer.last_text_message = await interaction.followup.send(contents)
                 else:
                     channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if channel: self.outer.last_text_message = await channel.send(contents)
+                    if channel:
+                        self.outer.last_text_message = await channel.send(contents)
 
             async def edit(self, contents):
                 if self.outer.last_text_message:
-                    try: await self.outer.last_text_message.edit(content=contents)
+                    try:
+                        await self.outer.last_text_message.edit(content=contents)
                     except discord.NotFound: self.outer.last_text_message = None
 
             async def delete(self):
@@ -142,55 +146,93 @@ class BotCore(discord.Client):
                     try:
                         await self.outer.last_text_message.delete()
                         self.outer.last_text_message = None
-                    except: pass
+                    except:
+                            pass
+
 
         class _Embeds:
-            def __init__(self, outer): self.outer = outer
-            
-            async def send(self, contents, title="embed", footer="", author="Bogobot", color=discord.Color.blue(), response=False):
+            def __init__(self, outer: "BotCore"):
+                self.outer = outer
+
+            class EmbedHandle:
+                def __init__(self, message, embed):
+                    self.message = message
+                    self.embed = embed
+
+                async def edit(self, contents=None, title=None, author=None, color=None, add_field=False):
+                    if not self.message:
+                        return
+
+                    old = self.embed
+
+                    if add_field:
+                        new_embed = discord.Embed.from_dict(old.to_dict())
+                        new_embed.add_field(
+                            name=title or "Info",
+                            value=contents or "N/A",
+                            inline=False,
+                        )
+                    else:
+                        new_embed = discord.Embed(
+                            title=title or old.title,
+                            description=contents or old.description,
+                            color=color or old.color,
+                        )
+
+                        for field in old.fields:
+                            new_embed.add_field(
+                                name=field.name,
+                                value=field.value,
+                                inline=field.inline,
+                            )
+
+                    current_author = old.author.name if old.author else ""
+                    new_embed.set_author(name=author or current_author)
+
+                    self.embed = new_embed
+
+                    try:
+                        await self.message.edit(embed=new_embed)
+                    except discord.NotFound:
+                        self.message = None
+
+                async def delete(self):
+                    if self.message:
+                        try:
+                            await self.message.delete()
+                        except discord.NotFound:
+                            pass
+                        finally:
+                            self.message = None
+            async def send(
+                self,
+                contents,
+                title="embed",
+                footer="",
+                author="Bogobot",
+                color=discord.Color.blue(),
+                response=False,
+            ):
                 interaction = current_interaction.get()
-                embed = discord.Embed(title=title, description=contents, color=color)
+
+                embed = discord.Embed(
+                    title=title,
+                    description=contents,
+                    color=color,
+                )
                 embed.set_footer(text=footer)
                 embed.set_author(name=author)
-                
-                # 1. Save to instant local cache
-                self.outer._latest_embed = embed 
-                
+
                 if response and interaction:
-                    self.outer.monitor_message = await interaction.followup.send(embed=embed)
+                    message = await interaction.followup.send(embed=embed, wait=True)
                 else:
                     channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if channel: self.outer.monitor_message = await channel.send(embed=embed)
+                    if not channel:
+                        return None
 
-            async def edit(self, contents=None, title=None, author=None, color=None, add_field=False):
-                if not self.outer.monitor_message: return
-                
-                # 2. Pull from local cache to avoid the Race Condition
-                old = getattr(self.outer, '_latest_embed', self.outer.monitor_message.embeds[0])
-                
-                if add_field:
-                    new_embed = discord.Embed.from_dict(old.to_dict())
-                    new_embed.add_field(name=title or "Info", value=contents or "N/A", inline=False)
-                else:
-                    new_embed = discord.Embed(title=title or old.title, description=contents or old.description, color=color or old.color)
-                    for field in old.fields: new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
-                
-                current_author = old.author.name if old.author else ""
-                new_embed.set_author(name=author or current_author)
-                
-                # 3. Update the instant cache before sending to Discord
-                self.outer._latest_embed = new_embed
-                
-                try: await self.outer.monitor_message.edit(embed=new_embed)
-                except discord.NotFound: self.outer.monitor_message = None
+                    message = await channel.send(embed=embed)
 
-            async def delete(self):
-                if self.outer.monitor_message:
-                    try:
-                        await self.outer.monitor_message.delete()
-                        self.outer.monitor_message = None
-                    except: pass
-
+                return self.EmbedHandle(message, embed)
     class _Setup:
         def __init__(self, outer): self.outer = outer
         def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
@@ -235,7 +277,8 @@ class BotCore(discord.Client):
                 await asyncio.wait_for(asyncio.to_thread(self._run_ocr), timeout=5.0)
                 self._last_ocr_mtime = mtime
                 return True
-            except Exception:
+            except Exception as e:
+                print(e)
                 return False
 
     def _run_ocr(self):
@@ -251,16 +294,6 @@ class BotCore(discord.Client):
             # Silence errors if ffmpeg is currently writing the file
             pass
 
-    def _tess_process(self, cell, whitelist):
-        cell = ImageOps.autocontrast(cell, cutoff=0.5)
-        data = np.array(cell)
-        clean = np.where(data > self.THRESHOLD, 255, 0).astype(np.uint8)
-        cell = Image.fromarray(clean).resize((cell.width * 10, cell.height * 10), Image.Resampling.NEAREST)
-        cell = ImageOps.invert(cell.convert('RGB')).convert('L')
-        cell = ImageOps.expand(cell, border=60, fill='white')
-        cell.save("temp_ocr.png")
-        return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
-
     async def setup_hook(self): await self.tree.sync()
     async def load_plugins(self, folder_name="plugins"):
         if not os.path.exists(folder_name): os.makedirs(folder_name)
@@ -270,7 +303,7 @@ class BotCore(discord.Client):
                 if hasattr(mod, "setup"): await mod.setup(self)
                 print(f"✅ Loaded Plugin: {filename}")
     def save_config(self):
-        with open('config.json', 'w') as f:
+        with open(self.config_path, 'w') as f:
             json.dump(self.config, f, indent=4)
     async def run_bot(self): 
         await self.start(self.config['bot_token'])
@@ -283,89 +316,27 @@ class BotCore(discord.Client):
             self.stats_cache[self.name] = "0"
 
     def _tess_process(self, cell, whitelist):
+        # 1. Convert to Grayscale immediately
+        cell = cell.convert('L')
+        
+        # 2. Maximize Contrast without killing details
+        # autocontrast spreads the histogram; contrast.enhance pushes it to the edges
         cell = ImageOps.autocontrast(cell, cutoff=0.5)
-        data = np.array(cell)
-        clean = np.where(data > self.THRESHOLD, 255, 0).astype(np.uint8)
-        cell = Image.fromarray(clean).resize((cell.width * 10, cell.height * 10), Image.Resampling.NEAREST)
-        cell = ImageOps.invert(cell.convert('RGB')).convert('L')
-        cell = ImageOps.expand(cell, border=60, fill='white')
+        cell = ImageEnhance.Contrast(cell).enhance(2.0) 
+        
+        # 3. Resize with BICUBIC instead of NEAREST
+        # 10x is huge; try 3x or 4x. High-res jagged edges are worse than low-res smooth ones.
+        cell = cell.resize((cell.width * 4, cell.height * 4), Image.Resampling.BICUBIC)
+        
+        # 4. Sharpen to help Tesseract see edges
+        cell = ImageEnhance.Sharpness(cell).enhance(2.0)
+        
+        # 5. Padding (Tesseract needs "breathing room" to identify the line)
+        cell = ImageOps.expand(cell, border=30, fill='white')
+        
         cell.save("temp_ocr.png")
+
         return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
-
-    class _Discord:
-        def __init__(self, outer):
-            self.outer = outer
-            self.embeds = self._Embeds(outer)
-            self.messages = self._Messages(outer)
-
-        class _Messages:
-            def __init__(self, outer): self.outer = outer
-            async def send(self, contents, response=False):
-                interaction = current_interaction.get()
-                if response and interaction:
-                    self.outer.last_text_message = await interaction.followup.send(contents)
-                else:
-                    channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if channel: self.outer.last_text_message = await channel.send(contents)
-
-            async def edit(self, contents):
-                if self.outer.last_text_message:
-                    try: await self.outer.last_text_message.edit(content=contents)
-                    except discord.NotFound: self.outer.last_text_message = None
-
-            async def delete(self):
-                if self.outer.last_text_message:
-                    try:
-                        await self.outer.last_text_message.delete()
-                        self.outer.last_text_message = None
-                    except: pass
-
-        class _Embeds:
-            def __init__(self, outer): self.outer = outer
-            
-            async def send(self, contents, title="embed", footer="", author="Bogobot", color=discord.Color.blue(), response=False):
-                interaction = current_interaction.get()
-                embed = discord.Embed(title=title, description=contents, color=color)
-                embed.set_footer(text=footer)
-                embed.set_author(name=author)
-                
-                # 1. Save to instant local cache
-                self.outer._latest_embed = embed 
-                
-                if response and interaction:
-                    self.outer.monitor_message = await interaction.followup.send(embed=embed)
-                else:
-                    channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if channel: self.outer.monitor_message = await channel.send(embed=embed)
-
-            async def edit(self, contents=None, title=None, author=None, color=None, add_field=False):
-                if not self.outer.monitor_message: return
-                
-                # 2. Pull from local cache to avoid the Race Condition
-                old = getattr(self.outer, '_latest_embed', self.outer.monitor_message.embeds[0])
-                
-                if add_field:
-                    new_embed = discord.Embed.from_dict(old.to_dict())
-                    new_embed.add_field(name=title or "Info", value=contents or "N/A", inline=False)
-                else:
-                    new_embed = discord.Embed(title=title or old.title, description=contents or old.description, color=color or old.color)
-                    for field in old.fields: new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
-                
-                current_author = old.author.name if old.author else ""
-                new_embed.set_author(name=author or current_author)
-                
-                # 3. Update the instant cache before sending to Discord
-                self.outer._latest_embed = new_embed
-                
-                try: await self.outer.monitor_message.edit(embed=new_embed)
-                except discord.NotFound: self.outer.monitor_message = None
-
-            async def delete(self):
-                if self.outer.monitor_message:
-                    try:
-                        await self.outer.monitor_message.delete()
-                        self.outer.monitor_message = None
-                    except: pass
 
     class _Setup:
         def __init__(self, outer): self.outer = outer

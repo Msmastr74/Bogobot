@@ -54,15 +54,18 @@ def format_leaderboard(rows: list, limit: int = 10) -> str:
 
 # i wrote this tho
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from main import BotCore
 
-async def setup(bot):
+async def setup(bot: 'BotCore'):
     @bot.setup.command(name="top", description="Gets the top 10 players in sortoffs!", eph=False, perm_requirement=0)
-    async def roll(interaction: discord.Interaction):
+    async def top(interaction: discord.Interaction):
         raw_lb = await fetch_leaderboard()
         rows = format_leaderboard(rows=raw_lb, limit=10)
         
-        await bot.discord.embeds.send(contents="Top players ranked by elo", title="Leaderboard", footer="Data from swapjs.dev", color=discord.Color.gold(), response=True)
+        embed = await bot.discord.embeds.send(contents="Top players ranked by elo", title="Leaderboard", footer="Data from swapjs.dev", color=discord.Color.gold(), response=True)
         if not rows:
-            await bot.discord.embeds.edit(contents="No data availiable")
+            await embed.edit(contents="No data availiable")
         else:
-            await bot.discord.embeds.edit(contents=f"{rows}")
+            await embed.edit(contents=f"{rows}")

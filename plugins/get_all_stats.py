@@ -21,11 +21,11 @@ async def setup(bot: 'BotCore'):
         
 
         # Send the base embed
-        await bot.discord.embeds.send(contents=f"Fetched at: <t:{int(round(time.time()))}:T>", title="Current Bogosort Statistics", color=discord.Color.green(), response=True)
+        embed = await bot.discord.embeds.send(contents=f"Fetched at: <t:{int(round(time.time()))}:T>", title="Current Bogosort Statistics", color=discord.Color.green(), response=True)
         
         # Rapid-fire the fields 
-        await bot.discord.embeds.edit(contents=f"{shuffles}", title="Shuffles", add_field=True)
-        await bot.discord.embeds.edit(contents=f"{comparisons}", title="Comparisons", add_field=True)
-        await bot.discord.embeds.edit(contents=f"{best_run}", title="Best Run", add_field=True)
-        await bot.discord.embeds.edit(contents=f"{shuffles_min}", title="Shuffles Per Second", add_field=True)
-        await bot.discord.embeds.edit(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)
+        await embed.edit(contents=f"{shuffles}", title="Shuffles", add_field=True)
+        await embed.edit(contents=f"{comparisons}", title="Comparisons", add_field=True)
+        await embed.edit(contents=f"{best_run}", title="Best Run", add_field=True)
+        await embed.edit(contents=f"{shuffles_min}", title="Shuffles Per Second", add_field=True)
+        await embed.edit(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)
