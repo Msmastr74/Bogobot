@@ -364,57 +364,6 @@ class BotCore(discord.Client):
         except subprocess.CalledProcessError:
             return ""
 
-    def _tess_process(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
-        # 1. Convert PIL to OpenCV grayscale
-        img_array = np.array(pil_cell.convert('L'))
-
-        # 2. Upscale (4x)
-        # Switching to INTER_CUBIC - it's slightly less prone to 'ringing' 
-        # artifacts than Lanczos which can create ghost bridges.
-        img = cv2.resize(img_array, None, fx=2, fy=2, interpolation=cv2.INTER_LANCZOS4)
-        
-        # 3. SHARPENING (The Non-Morphology Gap Preserver)
-        # This kernel makes edges 'steeper'. It forces the gap between 1 and 0 
-        # to stay white by punishing the 'gray' bleed from the upscale.
-        sharpen_kernel = np.array([[-1, -1, -1], 
-                                   [-1,  9, -1], 
-                                   [-1, -1, -1]])
-        img = cv2.filter2D(img, -1, sharpen_kernel)
-
-        # 4. Invert (White text -> Black text)
-        inverted = cv2.bitwise_not(img)
-
-        # 5. Otsu Binarization
-        # Now that we've sharpened the edges, Otsu will have a much 
-        # easier time finding the 'valley' between the 1 and the 0.
-        _, final_img = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-
-        # 6. Padding
-        padded = cv2.copyMakeBorder(final_img, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
-
-        # 7. Save for Debugging
-        # Look at the '1' and '0' in temp_ocr.png. 
-        # They should look crisp and separated without being 'blobby'.
-        cv2.imwrite("temp_ocr.png", padded)
-
-        # 8. Run Tesseract
-        cmd = [
-            "tesseract",
-            "temp_ocr.png",
-            "stdout",
-            "--psm", str(psm),
-            "--oem", "3",
-            "-c", "load_system_dawg=0",
-            "-c", "load_freq_dawg=0",
-            "-c", f"tessedit_char_whitelist={whitelist}"
-        ]
-
-        try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode(errors="ignore").strip()
-            return out.replace(" ", "").replace("\n", "")
-        except subprocess.CalledProcessError:
-            return ""
-
     class _Setup:
         def __init__(self, outer): self.outer = outer
         def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
