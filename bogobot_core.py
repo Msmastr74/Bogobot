@@ -20,7 +20,7 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
-        with open(config_path, 'r') as f:
+        with open(self.config_path, 'r') as f:
             self.config: dict[str] = json.load(f)
             
         super().__init__(intents=discord.Intents.default())
@@ -107,11 +107,15 @@ class BotCore(discord.Client):
                             stat_crop = img.crop(coords)
                             
                             if name == 'best_run': 
-                                text = self.outer._tess_process(stat_crop, "0123456789/")
+                                text = await self.outer._tess_process(
+                                    stat_crop, "0123456789/"
+                                )
                                 if text:
                                     self.outer.stats_cache[name] = text
                             else:
-                                digits = self.outer._tess_process(stat_crop, "0123456789") 
+                                digits = await self.outer._tess_process(
+                                    stat_crop, "0123456789"
+                                ) 
                                 if digits:
                                     self.outer.stats_cache[name] = f"{int(digits):,}"
                                 
@@ -244,14 +248,14 @@ class BotCore(discord.Client):
                 mtime = os.path.getmtime('live_720p.png')
                 if mtime <= self._last_ocr_mtime:
                     return False
-                await asyncio.wait_for(asyncio.to_thread(self._run_ocr), timeout=5.0)
+                await self._run_ocr()
                 self._last_ocr_mtime = mtime
                 return True
             except Exception as e:
                 print(e)
                 return False
 
-    def _run_ocr(self):
+    async def _run_ocr(self):
         try:
             with Image.open('live_720p.png') as img:
                 img.load()
@@ -261,7 +265,9 @@ class BotCore(discord.Client):
                 coords = self.CELL_COORDS
                 for _ in range(5): # last 5 cells
                     cell_crop = img.crop(coords)
-                    output = self._tess_process(cell_crop, "0123456789")
+                    output = await self._tess_process(
+                        cell_crop, "0123456789"
+                    )
                     self.current_vals.append(output)
                     coords = (
                         coords[0] - self.CELL_OFFSET, coords[1],
@@ -301,7 +307,7 @@ class BotCore(discord.Client):
         else:
             self.stats_cache[self.name] = "0"
 
-    def _tess_process(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
+    async def _tess_process(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
         # 1. Convert PIL to OpenCV grayscale
         img_array = np.array(pil_cell.convert('L'))
 
@@ -334,17 +340,26 @@ class BotCore(discord.Client):
             "-c", f"tessedit_char_whitelist={whitelist}"
         ]
 
-        try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode(errors="ignore").strip()
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            # Manually raise an error so the loop/bot knows it failed
+            raise RuntimeError(
+                f"Tesseract failed with code {process.returncode}: {stderr.decode(errors="ignore")}"
+            )
 
-            res = ""
-            for char in out:
-                if char in whitelist:
-                    res += char
-            return res
+        out = stdout.decode(errors="ignore").strip()
 
-        except subprocess.CalledProcessError:
-            return ""
+        res = ""
+        for char in out:
+            if char in whitelist:
+                res += char
+        return res
 
     class _Setup:
         def __init__(self, outer): self.outer = outer
