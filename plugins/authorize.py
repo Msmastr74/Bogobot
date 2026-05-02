@@ -1,7 +1,11 @@
 import discord
 from discord.ext import tasks
 
-async def setup(bot):
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from main import BotCore
+
+async def setup(bot: 'BotCore'):
     @bot.setup.command(name="authorize", description="Add a user to the authorization list", perm_requirement=2)
     async def authorize(interaction: discord.Interaction, user: discord.Member):
         if user.id not in bot.config["authorized_users"]:

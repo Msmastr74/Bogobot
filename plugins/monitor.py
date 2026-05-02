@@ -20,17 +20,12 @@ async def setup(bot: 'BotCore'):
         # If OCR didn't run because the file hasn't changed, do nothing
         if not is_new:
             return 
-        if new_var in ["0", "1", ""] or int(new_var) > 14:
+        if new_var in ["0", "1", ""] or int(new_var) > 25:
             new_var = "!"
 
         # We have fresh data; update the array
         num_array.pop(0)
         num_array.append(new_var)
-
-        # Dynamic interval adjustment based on the new value
-        target = 0.5 if new_var in ["5", "6"] else 0.75
-        if monitor_loop.seconds != target:
-            monitor_loop.change_interval(seconds=target)
 
         # Only edit the message when there is actually a change
         try:
@@ -64,6 +59,6 @@ async def setup(bot: 'BotCore'):
                 await monitor_embed.delete()
             
             # 3. Confirm to the user
-            # (The delete function already sends an ephemeral confirmation)
+            await bot.discord.messages.send("Monitor stopped.", response=True)
         else:
             await bot.discord.messages.send("Monitor is not currently running.", response=True)

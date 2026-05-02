@@ -3,8 +3,9 @@ from discord import app_commands
 import json
 import subprocess
 import numpy as np
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 from datetime import datetime
+import cv2
 import os
 import functools
 import asyncio
@@ -20,12 +21,12 @@ class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
         with open(config_path, 'r') as f:
-            self.config = json.load(f)
+            self.config: dict[str] = json.load(f)
             
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
         
-        self.CELL_COORDS = (1163, 660, 1200, 690)
+        self.CELL_COORDS = (1173, 669, 1190, 683)
         self.STATS_COORDS = {
             "shuffles": (81, 585, 312, 640),
             "comparisons": (331, 585, 551, 640),
@@ -102,12 +103,10 @@ class BotCore(discord.Client):
                         stat_crop = img.crop(coords).convert('L')
                         
                         if name == 'best_run': 
-                            raw_text = self.outer._tess_process(stat_crop, "0123456789/") 
-                            digits = "".join([c for c in raw_text if c.isdigit() or c == '/'])
-                            self.outer.stats_cache[name] = digits
+                            text = self.outer._tess_process(stat_crop, "0123456789/")
+                            self.outer.stats_cache[name] = text
                         else:
-                            raw_text = self.outer._tess_process(stat_crop, "0123456789") 
-                            digits = "".join([c for c in raw_text if c.isdigit()])
+                            digits = self.outer._tess_process(stat_crop, "0123456789") 
                             if digits:
                                 self.outer.stats_cache[name] = f"{int(digits):,}"
                             else:
@@ -294,7 +293,12 @@ class BotCore(discord.Client):
             # Silence errors if ffmpeg is currently writing the file
             pass
 
-    async def setup_hook(self): await self.tree.sync()
+    async def setup_hook(self):
+        if self.config.get('sync', True):
+            await self.tree.sync()
+            self.config['sync'] = False
+            self.save_config()
+
     async def load_plugins(self, folder_name="plugins"):
         if not os.path.exists(folder_name): os.makedirs(folder_name)
         for filename in os.listdir(folder_name):
@@ -315,28 +319,101 @@ class BotCore(discord.Client):
         else:
             self.stats_cache[self.name] = "0"
 
-    def _tess_process(self, cell, whitelist):
-        # 1. Convert to Grayscale immediately
-        cell = cell.convert('L')
-        
-        # 2. Maximize Contrast without killing details
-        # autocontrast spreads the histogram; contrast.enhance pushes it to the edges
-        cell = ImageOps.autocontrast(cell, cutoff=0.5)
-        cell = ImageEnhance.Contrast(cell).enhance(2.0) 
-        
-        # 3. Resize with BICUBIC instead of NEAREST
-        # 10x is huge; try 3x or 4x. High-res jagged edges are worse than low-res smooth ones.
-        cell = cell.resize((cell.width * 4, cell.height * 4), Image.Resampling.BICUBIC)
-        
-        # 4. Sharpen to help Tesseract see edges
-        cell = ImageEnhance.Sharpness(cell).enhance(2.0)
-        
-        # 5. Padding (Tesseract needs "breathing room" to identify the line)
-        cell = ImageOps.expand(cell, border=30, fill='white')
-        
-        cell.save("temp_ocr.png")
+    def _tess_process(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
+        # 1. Convert PIL to OpenCV grayscale
+        img_array = np.array(pil_cell.convert('L'))
 
-        return subprocess.check_output(['tesseract', "temp_ocr.png", 'stdout', '--psm', '7', '-c', f'tessedit_char_whitelist={whitelist}'], stderr=subprocess.DEVNULL).decode().strip()
+        # 2. Smooth Upscale (4x)
+        # Cubic interpolation provides the soft edges Tesseract's LSTM engine uses
+        # to distinguish character curves.
+        img = cv2.resize(img_array, None, fx=4, fy=4, interpolation=cv2.INTER_LANCZOS4)
+
+
+        # 3. Invert and Binarize
+        # We turn white-on-dark into black-on-white.
+        inverted = cv2.bitwise_not(img)
+        _, binarized = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+        final_img = cv2.erode(binarized, np.ones((3, 3), np.uint8), iterations=1)
+
+        # 5. Final Padding
+        padded = cv2.copyMakeBorder(final_img, 25, 25, 25, 25, cv2.BORDER_CONSTANT, value=255)
+
+        cv2.imwrite("temp_ocr.png", padded)
+
+        cmd = [
+            "tesseract",
+            "temp_ocr.png",
+            "stdout",
+            "--psm", str(psm),
+            "--oem", "3",
+            "-c", "load_system_dawg=0",
+            "-c", "load_freq_dawg=0",
+            "-c", f"tessedit_char_whitelist={whitelist}"
+        ]
+
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode(errors="ignore").strip()
+
+            res = ""
+            for char in out:
+                if char in whitelist:
+                    res += char
+            return res
+
+        except subprocess.CalledProcessError:
+            return ""
+
+    def _tess_process(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
+        # 1. Convert PIL to OpenCV grayscale
+        img_array = np.array(pil_cell.convert('L'))
+
+        # 2. Upscale (4x)
+        # Switching to INTER_CUBIC - it's slightly less prone to 'ringing' 
+        # artifacts than Lanczos which can create ghost bridges.
+        img = cv2.resize(img_array, None, fx=2, fy=2, interpolation=cv2.INTER_LANCZOS4)
+        
+        # 3. SHARPENING (The Non-Morphology Gap Preserver)
+        # This kernel makes edges 'steeper'. It forces the gap between 1 and 0 
+        # to stay white by punishing the 'gray' bleed from the upscale.
+        sharpen_kernel = np.array([[-1, -1, -1], 
+                                   [-1,  9, -1], 
+                                   [-1, -1, -1]])
+        img = cv2.filter2D(img, -1, sharpen_kernel)
+
+        # 4. Invert (White text -> Black text)
+        inverted = cv2.bitwise_not(img)
+
+        # 5. Otsu Binarization
+        # Now that we've sharpened the edges, Otsu will have a much 
+        # easier time finding the 'valley' between the 1 and the 0.
+        _, final_img = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+        # 6. Padding
+        padded = cv2.copyMakeBorder(final_img, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
+
+        # 7. Save for Debugging
+        # Look at the '1' and '0' in temp_ocr.png. 
+        # They should look crisp and separated without being 'blobby'.
+        cv2.imwrite("temp_ocr.png", padded)
+
+        # 8. Run Tesseract
+        cmd = [
+            "tesseract",
+            "temp_ocr.png",
+            "stdout",
+            "--psm", str(psm),
+            "--oem", "3",
+            "-c", "load_system_dawg=0",
+            "-c", "load_freq_dawg=0",
+            "-c", f"tessedit_char_whitelist={whitelist}"
+        ]
+
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode(errors="ignore").strip()
+            return out.replace(" ", "").replace("\n", "")
+        except subprocess.CalledProcessError:
+            return ""
 
     class _Setup:
         def __init__(self, outer): self.outer = outer
