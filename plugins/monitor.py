@@ -6,33 +6,57 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
 
-new_var = ""
-num_array = ["0"]
-num_array *= 30
+num_matrix: list[list[str]] = [[]]
+num_matrix *= 30
+
 async def setup(bot: 'BotCore'):
     monitor_embed: 'BotCore._Discord._Embeds.EmbedHandle' = None
-    @tasks.loop(seconds=0.5)
+    @tasks.loop(seconds=1)
     async def monitor_loop():
-        global num_array
+        global num_matrix
         # Get the value and the "is_new" flag from our updated core
-        new_var, is_new = await bot.info.get_best_shuffle()
+        new_vars, is_new = await bot.info.get_best_shuffles()
         
         # If OCR didn't run because the file hasn't changed, do nothing
         if not is_new:
-            return 
-        if new_var in ["0", "1", ""] or int(new_var) > 25:
-            new_var = "!"
+            return
 
-        # We have fresh data; update the array
-        num_array.pop(0)
-        num_array.append(new_var)
+        # We have fresh data; update the matrix
+        num_matrix.pop(0)
+        num_matrix.append([])
+        for i in range(len(new_vars)):
+            m_index = len(num_matrix) - i - 1
+            new_var = new_vars[i]
+            if new_var in ["0", "1", ""] or int(new_var) > 25:
+                new_var = "!"
+            num_matrix[m_index].append(new_var)
+        
+        num_array = []
+        for sublist in num_matrix:
+            counts = {}
+            max_val = "?"
+            max_count = 0
+            
+            for item in sublist:
+                # Increment count
+                counts[item] = counts.get(item, 0) + 1
+                
+                # Check if this item is now the most frequent
+                # Use >= to prefer the 'last' seen item in a tie
+                if counts[item] >= max_count:
+                    max_count = counts[item]
+                    max_val = item
 
-        # Only edit the message when there is actually a change
+            num_array.append(max_val)
+
+
+        # Edit the message
         try:
             await monitor_embed.edit(contents=".".join(num_array), author=datetime.now().strftime('[%H:%M:%S]'))
         except Exception as e:
             print(f"Edit Error: {e}")
     @bot.setup.command(name="monitor", description="Begins monitoring sorted number counts from the stream")
+
     async def monitor(interaction: discord.Interaction):
         nonlocal monitor_embed
         bot.setup.channel_id(interaction.channel_id)

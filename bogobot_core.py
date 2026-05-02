@@ -27,6 +27,7 @@ class BotCore(discord.Client):
         self.tree = app_commands.CommandTree(self)
         
         self.CELL_COORDS = (1173, 669, 1190, 683)
+        self.CELL_OFFSET = -38 # x offset per historical cell
         self.STATS_COORDS = {
             "shuffles": (81, 585, 312, 640),
             "comparisons": (331, 585, 551, 640),
@@ -35,7 +36,7 @@ class BotCore(discord.Client):
             "elapsed_time": (1166, 0, 1180, 75)
         }
         self.THRESHOLD = 165
-        self.current_val = "0"
+        self.current_vals: list[str] = []
         self.stats_cache = {}
         self.target_channel_id = int(self.config.get('default_channel_id'))
         self.monitor_message = None
@@ -45,7 +46,7 @@ class BotCore(discord.Client):
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)  
         
-        self._ocr_lock = asyncio.Lock()
+        self._ocr_lock: asyncio.Lock = asyncio.Lock()
         self._last_ocr_mtime = 0
 
     class _Info:
@@ -64,8 +65,8 @@ class BotCore(discord.Client):
 
         async def get_uptime(self):
             # Your successful video ID hack
-            video_id = self.outer.config.get('youtube_stream_id', 'vzgH2DGhrUA') 
-            url = f"https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
+            # video_id = self.outer.config.get('youtube_stream_id', 'vzgH2DGhrUA') 
+            url = "https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
             payload = {
                 "context": {
                     "client": {
@@ -88,34 +89,36 @@ class BotCore(discord.Client):
                 
                 # Calling the fixed method
                 return self.format_to_ddhhmmss(raw_seconds)
-            except (KeyError, requests.RequestException) as e:
+            except (KeyError, requests.RequestException):
                 return "00:00:00:00"
-        async def get_best_shuffle(self):
+
+        async def get_best_shuffles(self):
             is_new = await self.outer.refresh_ocr_data()
-            return self.outer.current_val, is_new
+            return self.outer.current_vals, is_new
+
         async def get_stats_all(self):
-            try:
-                with Image.open('live_720p.png') as img:
-                    img.load()
-                    
-                    # Low-frequency pass: Run the full dictionary only when called
-                    for name, coords in self.outer.STATS_COORDS.items():
-                        stat_crop = img.crop(coords).convert('L')
+            async with self._ocr_lock:
+                try:
+                    with Image.open('live_720p.png') as img:
+                        img.load()
                         
-                        if name == 'best_run': 
-                            text = self.outer._tess_process(stat_crop, "0123456789/")
-                            self.outer.stats_cache[name] = text
-                        else:
-                            digits = self.outer._tess_process(stat_crop, "0123456789") 
-                            if digits:
-                                self.outer.stats_cache[name] = f"{int(digits):,}"
-                            else:
-                                self.outer.stats_cache[name] = "0"
+                        # Low-frequency pass: Run the full dictionary only when called
+                        for name, coords in self.outer.STATS_COORDS.items():
+                            stat_crop = img.crop(coords)
                             
-                return self.outer.stats_cache
-            except Exception as e:
-                print(f"Stats Extraction Error: {e}")
-                return self.outer.stats_cache
+                            if name == 'best_run': 
+                                text = self.outer._tess_process(stat_crop, "0123456789/")
+                                if text:
+                                    self.outer.stats_cache[name] = text
+                            else:
+                                digits = self.outer._tess_process(stat_crop, "0123456789") 
+                                if digits:
+                                    self.outer.stats_cache[name] = f"{int(digits):,}"
+                                
+                    return self.outer.stats_cache
+                except Exception as e:
+                    print(f"Stats Extraction Error: {e}")
+                    return self.outer.stats_cache
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
@@ -138,15 +141,16 @@ class BotCore(discord.Client):
                 if self.outer.last_text_message:
                     try:
                         await self.outer.last_text_message.edit(content=contents)
-                    except discord.NotFound: self.outer.last_text_message = None
+                    except discord.NotFound: 
+                        self.outer.last_text_message = None
 
             async def delete(self):
                 if self.outer.last_text_message:
                     try:
                         await self.outer.last_text_message.delete()
                         self.outer.last_text_message = None
-                    except:
-                            pass
+                    except Exception:
+                        pass
 
 
         class _Embeds:
@@ -232,47 +236,14 @@ class BotCore(discord.Client):
                     message = await channel.send(embed=embed)
 
                 return self.EmbedHandle(message, embed)
-    class _Setup:
-        def __init__(self, outer): self.outer = outer
-        def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
 
-        def command(self, name, description="No description", perm_requirement=1, eph=True, defer=True):
-            def decorator(func):
-                @self.outer.tree.command(name=name, description=description)
-                @functools.wraps(func)
-                async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-                    token = current_interaction.set(interaction)
-                    uid = interaction.user.id
-                    owner_id = self.outer.config.get("owner_uid")
-                    auth_list = self.outer.config.get("authorized_users", [])
-                    
-                    allowed = False
-                    if perm_requirement == 0: allowed = True
-                    elif perm_requirement == 2 and uid == owner_id: allowed = True
-                    elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): allowed = True
-
-                    try:
-                        if not allowed:
-                            return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
-                        if defer:
-                            await interaction.response.defer(ephemeral=(eph))
-                        await func(interaction, *args, **kwargs)
-                    except Exception as e:
-                        if interaction.response.is_done():
-                            await interaction.followup.send(f"⚠️ Error: {e}")
-                        else:
-                            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
-                    finally:
-                        current_interaction.reset(token)
-                return wrapper
-            return decorator
-            
     # OCR STUFF
     async def refresh_ocr_data(self):
         async with self._ocr_lock:
             try:
                 mtime = os.path.getmtime('live_720p.png')
-                if mtime <= self._last_ocr_mtime: return False
+                if mtime <= self._last_ocr_mtime:
+                    return False
                 await asyncio.wait_for(asyncio.to_thread(self._run_ocr), timeout=5.0)
                 self._last_ocr_mtime = mtime
                 return True
@@ -284,13 +255,22 @@ class BotCore(discord.Client):
         try:
             with Image.open('live_720p.png') as img:
                 img.load()
+
+                self.current_vals = []
                 
-                # High-frequency pass: Only the Serial Number (CELL)
-                cell_crop = img.crop(self.CELL_COORDS).convert('L')
-                self.current_val = self._tess_process(cell_crop, "0123456789")
+                coords = self.CELL_COORDS
+                for _ in range(5): # last 5 cells
+                    cell_crop = img.crop(coords)
+                    output = self._tess_process(cell_crop, "0123456789")
+                    self.current_vals.append(output)
+                    coords = (
+                        coords[0] - self.CELL_OFFSET, coords[1],
+                        coords[2] - self.CELL_OFFSET, coords[3]
+                    )
+                self.current_vals.reverse()
                 
         except Exception as e:
-            # Silence errors if ffmpeg is currently writing the file
+            print(e)
             pass
 
     async def setup_hook(self):
@@ -300,11 +280,13 @@ class BotCore(discord.Client):
             self.save_config()
 
     async def load_plugins(self, folder_name="plugins"):
-        if not os.path.exists(folder_name): os.makedirs(folder_name)
+        if not os.path.exists(folder_name):
+            os.makedirs(folder_name)
         for filename in os.listdir(folder_name):
             if filename.endswith(".py"):
                 mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
-                if hasattr(mod, "setup"): await mod.setup(self)
+                if hasattr(mod, "setup"):
+                    await mod.setup(self)
                 print(f"✅ Loaded Plugin: {filename}")
     def save_config(self):
         with open(self.config_path, 'w') as f:
@@ -379,9 +361,12 @@ class BotCore(discord.Client):
                     auth_list = self.outer.config.get("authorized_users", [])
                     
                     allowed = False
-                    if perm_requirement == 0: allowed = True
-                    elif perm_requirement == 2 and uid == owner_id: allowed = True
-                    elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): allowed = True
+                    if perm_requirement == 0: 
+                        allowed = True
+                    elif perm_requirement == 2 and uid == owner_id: 
+                        allowed = True
+                    elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): 
+                        allowed = True
 
                     try:
                         if not allowed:
