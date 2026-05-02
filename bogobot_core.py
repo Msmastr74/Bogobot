@@ -97,7 +97,7 @@ class BotCore(discord.Client):
             return self.outer.current_vals, is_new
 
         async def get_stats_all(self):
-            async with self._ocr_lock:
+            async with self.outer._ocr_lock:
                 try:
                     with Image.open('live_720p.png') as img:
                         img.load()
