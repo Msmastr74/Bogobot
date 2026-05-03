@@ -46,8 +46,16 @@ def format_leaderboard(rows: list, limit: int = 10) -> str:
         name = player.get("name", "Unknown")
         elo = player.get("elo", 0)
         win_rate = player.get("win_rate", 0)
+        streak = int(player.get("current_streak", "0"))
+        streak_text = ""
+        if streak > 0:
+            streak_text = f"🔥 {streak}"
+        elif streak < 0:
+            streak_text = f"❄️ {abs(streak)}"
 
         line = f"{pos}. {rank_emoji} **{name}** - ELO: {elo} | Win Rate: {win_rate}%"
+        if streak_text:
+            line += f" | {streak_text}"
         formatted_lines.append(line)
 
     return "\n".join(formatted_lines)
