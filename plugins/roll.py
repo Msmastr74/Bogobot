@@ -15,13 +15,14 @@ async def setup(bot):
             return
         await bot.discord.messages.send(contents=f"{random.randint(min, max)}", response=True)
     @bot.setup.command(name="choice", description="Chooses a random item from a list of items", eph=False, perm_requirement=0)
-    async def choice(interaction: discord.Interaction, *choices: list[str]):
+    async def choice(interaction: discord.Interaction, choices: str):
+        choices = choices.split(",")
         if len(choices) == 0:
             await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
             return
         await bot.discord.messages.send(contents=f"{random.choice(choices)}", response=True)
     @bot.setup.command(name="bogo", description="shuffles", eph=False, perm_requirement=0)
-    async def bogo(interaction: discord.Interaction, *choices: str):
+    async def bogo(interaction: discord.Interaction, choices: str):
         if len(choices) == 0:
             await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
             return
@@ -36,3 +37,4 @@ async def setup(bot):
     @bot.setup.command(name="randbool", description="Rolls a random boolean", eph=False, perm_requirement=0)
     async def randbool(interaction: discord.Interaction):
         await bot.discord.messages.send(contents=f"{random.choice([True, False])}", response=True)
+    
