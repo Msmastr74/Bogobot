@@ -1,5 +1,6 @@
 __pycache__/
 .vscode/
 live_720p.png
-temp_ocr.png
+ocr_*.png
 local_config.json
+.DS_Store
