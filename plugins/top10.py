@@ -65,6 +65,8 @@ async def setup(bot: 'BotCore'):
         rows = format_leaderboard(rows=raw_lb, limit=10)
         
         embed = await bot.discord.embeds.send(contents="Top players ranked by elo", title="Leaderboard", footer="Data from swapjs.dev", color=discord.Color.gold(), response=True)
+        assert embed is not None
+
         if not rows:
             await embed.edit(contents="No data availiable")
         else:

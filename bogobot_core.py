@@ -1,9 +1,11 @@
 import discord
 from discord import app_commands
+from discord.ext import tasks
 import json
-import subprocess
+import csv
+import io
 import numpy as np
-from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+from PIL import Image
 from datetime import datetime
 import cv2
 import os
@@ -13,6 +15,7 @@ import importlib
 import time
 import contextvars
 import requests
+from typing import Any
 
 # The "Invisible Baton"
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar("current_interaction", default=None)
@@ -21,13 +24,13 @@ class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
-            self.config: dict[str] = json.load(f)
+            self.config: dict[str, Any] = json.load(f)
             
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
         
-        self.CELL_COORDS = (1173, 669, 1190, 683)
-        self.CELL_OFFSET = -38 # x offset per historical cell
+        self.CELL_COORDS = (1170, 665, 1195, 685)
+        self.CELL_OFFSET = 37 # x offset per historical cell
         self.STATS_COORDS = {
             "shuffles": (81, 585, 312, 640),
             "comparisons": (331, 585, 551, 640),
@@ -36,11 +39,12 @@ class BotCore(discord.Client):
             "elapsed_time": (1166, 0, 1180, 75)
         }
         self.THRESHOLD = 165
-        self.current_vals: list[str] = []
-        self.stats_cache = {}
-        self.target_channel_id = int(self.config.get('default_channel_id'))
+        self.current_vals: list[tuple[str, float]] = []
+        self.stats_cache: dict[str, str] = {}
+        default_channel_id = self.config.get('default_channel_id')
+        self.target_channel_id = int(default_channel_id) if default_channel_id is not None else None
         self.monitor_message = None
-        self.last_text_message = None
+        self.last_text_message: 'discord.Message | None' = None
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
@@ -97,8 +101,12 @@ class BotCore(discord.Client):
             return self.outer.current_vals, is_new
 
         async def get_stats_all(self):
-            async with self.outer._ocr_lock:
-                try:
+            return self.outer.stats_cache
+        
+        @tasks.loop(seconds=1)
+        async def update_stats(self):
+            try:
+                async with self.outer._ocr_lock:
                     with Image.open('live_720p.png') as img:
                         img.load()
                         
@@ -107,22 +115,24 @@ class BotCore(discord.Client):
                             stat_crop = img.crop(coords)
                             
                             if name == 'best_run': 
-                                text = await self.outer._tess_process(
+                                text, conf = await self.outer.tesseract_parse(
                                     stat_crop, "0123456789/"
                                 )
-                                if text:
+                                if text and conf >= 0:
                                     self.outer.stats_cache[name] = text
                             else:
-                                digits = await self.outer._tess_process(
+                                digits, conf = await self.outer.tesseract_parse(
                                     stat_crop, "0123456789"
                                 ) 
-                                if digits:
+                                if digits and conf >= 0:
                                     self.outer.stats_cache[name] = f"{int(digits):,}"
-                                
-                    return self.outer.stats_cache
-                except Exception as e:
-                    print(f"Stats Extraction Error: {e}")
-                    return self.outer.stats_cache
+            except Exception as e:
+                print(f"Stats Extraction Error: {e}")
+
+        @update_stats.error
+        async def update_stats_error(self, error):
+            print(f"update_stats failed with error: {error}")
+
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
@@ -137,9 +147,10 @@ class BotCore(discord.Client):
                 if response and interaction:
                     self.outer.last_text_message = await interaction.followup.send(contents)
                 else:
-                    channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if channel:
-                        self.outer.last_text_message = await channel.send(contents)
+                    if self.outer.target_channel_id is not None:
+                        channel = self.outer.get_channel(self.outer.target_channel_id)
+                        if channel:
+                            self.outer.last_text_message = await channel.send(contents) # pyright: ignore
 
             async def edit(self, contents):
                 if self.outer.last_text_message:
@@ -166,11 +177,11 @@ class BotCore(discord.Client):
                     self.message = message
                     self.embed = embed
 
-                async def edit(self, contents=None, title=None, author=None, color=None, add_field=False):
+                async def edit(self, contents=None, title=None, footer=None, author=None, color=None, add_field=False):
                     if not self.message:
                         return
 
-                    old = self.embed
+                    old: 'discord.Embed' = self.embed
 
                     if add_field:
                         new_embed = discord.Embed.from_dict(old.to_dict())
@@ -195,6 +206,8 @@ class BotCore(discord.Client):
 
                     current_author = old.author.name if old.author else ""
                     new_embed.set_author(name=author or current_author)
+                    current_footer = old.footer.text if old.footer else ""
+                    new_embed.set_footer(text=footer or current_footer)
 
                     self.embed = new_embed
 
@@ -233,11 +246,14 @@ class BotCore(discord.Client):
                 if response and interaction:
                     message = await interaction.followup.send(embed=embed, wait=True)
                 else:
+                    if self.outer.target_channel_id is None:
+                        return None
+
                     channel = self.outer.get_channel(self.outer.target_channel_id)
                     if not channel:
                         return None
 
-                    message = await channel.send(embed=embed)
+                    message = await channel.send(embed=embed) # pyright: ignore
 
                 return self.EmbedHandle(message, embed)
 
@@ -263,12 +279,12 @@ class BotCore(discord.Client):
                 self.current_vals = []
                 
                 coords = self.CELL_COORDS
-                for _ in range(5): # last 5 cells
+                for _ in range(10): # last 10 cells
                     cell_crop = img.crop(coords)
-                    output = await self._tess_process(
-                        cell_crop, "0123456789"
+                    output, conf = await self.tesseract_parse(
+                        cell_crop, "0123456789" # do not use psm 8, psm 8 is unreliable
                     )
-                    self.current_vals.append(output)
+                    self.current_vals.append((output, conf))
                     coords = (
                         coords[0] - self.CELL_OFFSET, coords[1],
                         coords[2] - self.CELL_OFFSET, coords[3]
@@ -297,55 +313,109 @@ class BotCore(discord.Client):
     def save_config(self):
         with open(self.config_path, 'w') as f:
             json.dump(self.config, f, indent=4)
+
     async def run_bot(self): 
+        self.info.update_stats.start()
         await self.start(self.config['bot_token'])
-        digits = "".join([c for c in self.raw_text if c.isdigit()])
-    
-        if digits:
-            # int() removes leading zeros, :, adds perfect commas
-            self.stats_cache[self.name] = f"{int(digits):,}"
-        else:
-            self.stats_cache[self.name] = "0"
 
-    async def _tess_process(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
-        # 1. Convert PIL to OpenCV grayscale
-        img_array = np.array(pil_cell.convert('L'))
+    def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=5):
+        # 1. Scaling + Early Erosion to separate touching pixels
+        img = np.array(pil_cell.convert("L"))
+        upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+        eroded = cv2.erode(upscaled, np.ones((3, 3), np.uint8), iterations=1)
+        _, mask = cv2.threshold(eroded, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # 2. Smooth Upscale (4x)
-        # Cubic interpolation provides the soft edges Tesseract's LSTM engine uses
-        # to distinguish character curves.
-        img = cv2.resize(img_array, None, fx=4, fy=4, interpolation=cv2.INTER_LANCZOS4)
+        # 2. Contour Extraction & Sorting
+        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        
+        bw = np.ones_like(mask) * 255
+        img_h, img_w = mask.shape
+        image_area = img_h * img_w
+        shells = [] 
 
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            x, y, w, h = cv2.boundingRect(cnt)
+            
+            # A: Ignore the image border
+            if area > (image_area * 0.9):
+                continue
 
-        # 3. Invert and Binarize
-        # We turn white-on-dark into black-on-white.
-        inverted = cv2.bitwise_not(img)
-        _, binarized = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+            # B: Spatial Containment (Check if inside a Zero or Normal digit)
+            parent_shell = None
+            for s in shells:
+                sx, sy, sw, sh = s['box']
+                if x >= sx-2 and y >= sy-2 and (x+w) <= (sx+sw+2) and (y+h) <= (sy+sh+2):
+                    parent_shell = s
+                    break
+            
+            # C: Suppression: Don't draw the 'slash' inside a Zero
+            if parent_shell and parent_shell['type'] == 'zero':
+                continue
 
-        final_img = cv2.erode(binarized, np.ones((3, 3), np.uint8), iterations=1)
+            # D: Normalization for scoring
+            norm_scale = 100.0 / h if h > 0 else 1
+            cnt_norm = ((cnt.astype(np.float32) - [x, y]) * norm_scale).astype(np.float32)
 
-        # 5. Final Padding
-        padded = cv2.copyMakeBorder(final_img, 25, 25, 25, 25, cv2.BORDER_CONSTANT, value=255)
+            ellipse_score = 0
+            if len(cnt_norm) >= 5:
+                _, (MA, ma), _ = cv2.fitEllipse(cnt_norm)
+                ellipse_area = (np.pi * MA * ma) / 4.0
+                ellipse_score = cv2.contourArea(cnt_norm) / ellipse_area if ellipse_area > 0 else 0
 
-        cv2.imwrite("temp_ocr.png", padded)
+            # E: Solidity Check (Zero = High, 8 = Low due to waist)
+            hull = cv2.convexHull(cnt)
+            hull_area = cv2.contourArea(hull)
+            solidity = area / hull_area if hull_area > 0 else 0
+
+            # G: Hybrid Rendering
+            if parent_shell:
+                # Hole in 9, 8, etc -> Fill White
+                cv2.drawContours(bw, [cnt], -1, 255, thickness=-1)
+            else:
+                # New Shell -> Determine if it's a 0 or a normal digit
+                if ellipse_score > 0.88 and solidity > 0.94:
+                    cv2.drawContours(bw, [cnt], -1, 0, stroke_thickness)
+                    shells.append({'box': (x, y, w, h), 'type': 'zero'})
+                else:
+                    cv2.drawContours(bw, [cnt], -1, 0, thickness=-1)
+                    shells.append({'box': (x, y, w, h), 'type': 'normal'})
+
+        # 3. Final Polish: Padding + Dilation (thins the black text)
+        bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
+        bw = cv2.dilate(bw, np.ones((3, 3), np.uint8), iterations=1) 
+        
+        return bw
+
+    async def tesseract_parse(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
+        processed = self._preprocess_cell(pil_cell)
+
+        success, buffer = cv2.imencode(".png", processed)
+        if not success:
+            raise ValueError("Could not encode image")
+
+        image_bytes = buffer.tobytes()
 
         cmd = [
             "tesseract",
-            "temp_ocr.png",
+            "stdin",
             "stdout",
             "--psm", str(psm),
             "--oem", "3",
             "-c", "load_system_dawg=0",
             "-c", "load_freq_dawg=0",
-            "-c", f"tessedit_char_whitelist={whitelist}"
+            "-c", f"tessedit_char_whitelist={whitelist}",
+            "tsv"
         ]
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await process.communicate(input=image_bytes)
         
         if process.returncode != 0:
             # Manually raise an error so the loop/bot knows it failed
@@ -353,16 +423,78 @@ class BotCore(discord.Client):
                 f"Tesseract failed with code {process.returncode}: {stderr.decode(errors="ignore")}"
             )
 
-        out = stdout.decode(errors="ignore").strip()
+        out, conf = self._parse_tesseract_tsv_stdout(stdout.decode(errors="ignore"))
 
         res = ""
         for char in out:
             if char in whitelist:
                 res += char
-        return res
+
+        self._save_ocr_debug('ocr_debug', image_bytes, f'{conf:.2f}c_{out}')
+
+        return res, conf
+    
+    def _parse_tesseract_tsv_stdout(self, stdout: str) -> tuple[str, float]:
+        """
+        Parse Tesseract TSV stdout and return:
+        (combined_text, confidence_0_to_1)
+
+        Confidence is averaged across non-empty text rows with valid conf values.
+        Tesseract conf is usually 0-100, with -1 for non-text structural rows.
+        """
+        rows = csv.DictReader(io.StringIO(stdout), delimiter="\t")
+
+        parts: list[str] = []
+        confs: list[float] = []
+
+        for row in rows:
+            text = (row.get("text") or "").strip()
+            if not text:
+                continue
+
+            parts.append(text)
+
+            try:
+                conf = float(row.get("conf", "-1"))
+            except ValueError:
+                conf = -1.0
+
+            if conf >= 0:
+                confs.append(conf / 100.0)
+
+        combined_text = "".join(parts)
+        avg_conf = sum(confs) / len(confs) if confs else 0.0
+
+        return combined_text, avg_conf
+    
+    def _save_ocr_debug(self, folder: str, image_data: bytes, text: str, max_files=30):
+        if not self.config.get("save_ocr_debug", False):
+            return
+
+        safe_text = "".join(c for c in text if c.isalnum() or c in (' ', '_', '-')).rstrip()
+        new_filename = f"ocr_{safe_text}.png"
+        new_path = os.path.join(folder, new_filename)
+
+        # 2. Fast Scan: Get entries and their timestamps in one go
+        with os.scandir(folder) as it:
+            # scandir entries cache the stat info on some OSs (like Windows)
+            files = [e for e in it if e.is_file() and e.name.startswith("ocr_")]
+
+        # 3. Rotate if needed
+        if len(files) >= max_files:
+            # Find oldest via modification time
+            oldest = min(files, key=lambda e: e.stat().st_mtime)
+            try:
+                os.remove(oldest.path)
+            except FileNotFoundError:
+                pass
+
+        # 4. Write new file
+        with open(new_path, "wb") as f:
+            f.write(image_data)
 
     class _Setup:
-        def __init__(self, outer): self.outer = outer
+        def __init__(self, outer: 'BotCore'): self.outer = outer
         def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
 
         def command(self, name, description="No description", perm_requirement=1, eph=True, defer=True):

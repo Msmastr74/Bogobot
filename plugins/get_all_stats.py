@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 async def setup(bot: 'BotCore'):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
     async def get_all(interaction: discord.Interaction):
-        
         stats_list = await bot.info.get_stats_all()
         
         # Use .get() to prevent future KeyErrors if the cache is empty
@@ -22,6 +21,7 @@ async def setup(bot: 'BotCore'):
 
         # Send the base embed
         embed = await bot.discord.embeds.send(contents=f"Fetched at: <t:{int(round(time.time()))}:T>", title="Current Bogosort Statistics", color=discord.Color.green(), response=True)
+        assert embed is not None
         
         # Rapid-fire the fields 
         await embed.edit(contents=f"{shuffles}", title="Shuffles", add_field=True)
