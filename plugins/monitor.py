@@ -26,6 +26,8 @@ async def setup(bot: 'BotCore'):
 
         for i in range(len(new_vars)):
             new_var, conf = new_vars[i]
+            if conf <= 0:
+                continue
             if new_var in ["0", "1", ""] or int(new_var) > 25:
                 continue
             num_matrix[-i - 1].append((new_var, conf))
@@ -35,38 +37,7 @@ async def setup(bot: 'BotCore'):
             if not sublist:
                 num_array.append("?")
                 continue
-
-            scores = {}
-            counts = {}
-
-            for value, conf in sublist:
-                scores[value] = scores.get(value, 0.0) + conf
-                counts[value] = counts.get(value, 0) + 1
-
-            # 1. Find the absolute highest score to set the competitive threshold
-            absolute_max_score = max(scores.values())
-            
-            # 2. Identify candidates whose scores are within 50% of the max score
-            # Formula: Score >= (MaxScore * 0.5)
-            candidates = [v for v, s in scores.items() if s >= (absolute_max_score * 0.5)]
-
-            # 3. From the candidate pool, choose the one with the highest frequency (mode)
-            max_val = "?"
-            max_count = -1
-            max_score = -1.0
-
-            for value in candidates:
-                curr_count = counts[value]
-                curr_score = scores[value]
-
-                # Priority 1: Highest Count (Mode)
-                # Priority 2: Total Confidence (Tie-break)
-                if (curr_count > max_count) or (curr_count == max_count and curr_score > max_score):
-                    max_count = curr_count
-                    max_score = curr_score
-                    max_val = value
-
-            num_array.append(max_val)
+            num_array.append(sublist[0][0])
 
         # Edit the message
         try:
