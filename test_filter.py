@@ -73,7 +73,7 @@ def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=
     
     return bw
 
-def test_on_file(file_path, coords):
+def test_on_file(file_path, coords, whitelist="0123456789"):
     """
     Crops the image and shows the original vs. Otsu-Contour-Stroke version.
     """
@@ -104,18 +104,18 @@ def test_on_file(file_path, coords):
         "--oem", "3",
         "-c", "load_system_dawg=0",
         "-c", "load_freq_dawg=0",
-        "-c", "tessedit_char_whitelist=0123456789",
+        "-c", f"tessedit_char_whitelist={whitelist}",
         "tsv"
     ]
 
+    
+    print(f"Testing file: {file_path}")
     out = subprocess.check_output(
         cmd,
         input=image_bytes
     )
     print(out.decode(errors='ignore'))
       
-    
-    print(f"Testing file: {file_path}")
     print("Press any key to close the windows...")
     cv2.waitKey(0)
     cv2.destroyAllWindows()
@@ -123,4 +123,5 @@ def test_on_file(file_path, coords):
 # --- RUN TEST ---
 # Note: Ensure coordinates match the digit location in your specific file
 test_on_file('live_720p.png', (1170, 665, 1195, 685))
-test_on_file('live_720p.png', (81, 585, 312, 640)) #long
+test_on_file('live_720p.png', (81, 610, 312, 640)) #long
+test_on_file('live_720p.png', (645, 610, 730, 640), "01234568789/") #best_run

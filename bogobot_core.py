@@ -31,12 +31,13 @@ class BotCore(discord.Client):
         
         self.CELL_COORDS = (1170, 665, 1195, 685)
         self.CELL_OFFSET = 37 # x offset per historical cell
-        self.STATS_COORDS = {
-            "shuffles": (81, 585, 312, 640),
-            "comparisons": (331, 585, 551, 640),
-            "best_run": (570, 593, 885, 640),
-            "shuffles_min": (819, 585, 1043, 640),
-            "elapsed_time": (1166, 0, 1180, 75)
+        self.STATS_COORDS: dict[str, tuple[int, int, int, int] | tuple[int, int, int, int, str]] = {
+            "shuffles": (81, 610, 312, 640),
+            "comparisons": (331, 610, 551, 640),
+            "best_run": (645, 610, 730, 640, "0123456789/"),
+            "shuffles_min": (819, 610, 1043, 640),
+            "elapsed_time": (1166, 0, 1180, 75),
+            "average_best_shuffle": (80, 670, 110, 685, "0123456789.")
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
@@ -112,11 +113,15 @@ class BotCore(discord.Client):
                         
                         # Low-frequency pass: Run the full dictionary only when called
                         for name, coords in self.outer.STATS_COORDS.items():
+                            filter: str = "0123456789"
+                            if len(coords) >= 5:
+                                filter = coords[4]
+                                coords = coords[:4]
                             stat_crop = img.crop(coords)
                             
-                            if name == 'best_run': 
+                            if filter != "0123456789":
                                 text, conf = await self.outer.tesseract_parse(
-                                    stat_crop, "0123456789/"
+                                    stat_crop, filter
                                 )
                                 if text and conf >= 0:
                                     self.outer.stats_cache[name] = text
