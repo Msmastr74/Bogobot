@@ -50,8 +50,7 @@ class BotCore(discord.Client):
         self.info = self._Info(self)
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)  
-        
-        self._ocr_lock: asyncio.Lock = asyncio.Lock()
+
         self._last_ocr_mtime = 0
 
     class _Info:
@@ -107,30 +106,29 @@ class BotCore(discord.Client):
         @tasks.loop(seconds=1)
         async def update_stats(self):
             try:
-                async with self.outer._ocr_lock:
-                    with Image.open('live_720p.png') as img:
-                        img.load()
+                with Image.open('live_720p.png') as img:
+                    img.load()
+                    
+                    # Low-frequency pass: Run the full dictionary only when called
+                    for name, coords in self.outer.STATS_COORDS.items():
+                        filter: str = "0123456789"
+                        if len(coords) >= 5:
+                            filter = coords[4]
+                            coords = coords[:4]
+                        stat_crop = img.crop(coords)
                         
-                        # Low-frequency pass: Run the full dictionary only when called
-                        for name, coords in self.outer.STATS_COORDS.items():
-                            filter: str = "0123456789"
-                            if len(coords) >= 5:
-                                filter = coords[4]
-                                coords = coords[:4]
-                            stat_crop = img.crop(coords)
-                            
-                            if filter != "0123456789":
-                                text, conf = await self.outer.tesseract_parse(
-                                    stat_crop, filter
-                                )
-                                if text and conf >= 0:
-                                    self.outer.stats_cache[name] = text
-                            else:
-                                digits, conf = await self.outer.tesseract_parse(
-                                    stat_crop, "0123456789"
-                                ) 
-                                if digits and conf >= 0:
-                                    self.outer.stats_cache[name] = f"{int(digits):,}"
+                        if filter != "0123456789":
+                            text, conf = await self.outer.tesseract_parse(
+                                stat_crop, filter
+                            )
+                            if text and conf >= 0:
+                                self.outer.stats_cache[name] = text
+                        else:
+                            digits, conf = await self.outer.tesseract_parse(
+                                stat_crop, "0123456789"
+                            ) 
+                            if digits and conf >= 0:
+                                self.outer.stats_cache[name] = f"{int(digits):,}"
             except Exception as e:
                 print(f"Stats Extraction Error: {e}")
 
@@ -264,17 +262,16 @@ class BotCore(discord.Client):
 
     # OCR STUFF
     async def refresh_ocr_data(self):
-        async with self._ocr_lock:
-            try:
-                mtime = os.path.getmtime('live_720p.png')
-                if mtime <= self._last_ocr_mtime:
-                    return False
-                await self._run_ocr()
-                self._last_ocr_mtime = mtime
-                return True
-            except Exception as e:
-                print(e)
+        try:
+            mtime = os.path.getmtime('live_720p.png')
+            if mtime <= self._last_ocr_mtime:
                 return False
+            await self._run_ocr()
+            self._last_ocr_mtime = mtime
+            return True
+        except Exception as e:
+            print(e)
+            return False
 
     async def _run_ocr(self):
         try:
@@ -284,7 +281,7 @@ class BotCore(discord.Client):
                 self.current_vals = []
                 
                 coords = self.CELL_COORDS
-                for _ in range(10): # last 10 cells
+                for _ in range(4): # last 4 cells
                     cell_crop = img.crop(coords)
                     output, conf = await self.tesseract_parse(
                         cell_crop, "0123456789" # do not use psm 8, psm 8 is unreliable
