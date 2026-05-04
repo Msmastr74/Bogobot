@@ -45,7 +45,6 @@ class BotCore(discord.Client):
         default_channel_id = self.config.get('default_channel_id')
         self.target_channel_id = int(default_channel_id) if default_channel_id is not None else None
         self.monitor_message = None
-        self.last_text_message: 'discord.Message | None' = None
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
@@ -144,39 +143,71 @@ class BotCore(discord.Client):
             self.messages = self._Messages(outer)
 
         class _Messages:
-            def __init__(self, outer: 'BotCore'): self.outer = outer
+            def __init__(self, outer: "BotCore"):
+                self.outer = outer
+
             async def send(self, contents, response=False):
                 interaction = current_interaction.get()
+                message = None
+
                 if response and interaction:
-                    self.outer.last_text_message = await interaction.followup.send(contents)
-                else:
-                    if self.outer.target_channel_id is not None:
-                        channel = self.outer.get_channel(self.outer.target_channel_id)
-                        if channel:
-                            self.outer.last_text_message = await channel.send(contents) # pyright: ignore
+                    message = await interaction.followup.send(contents)
+                elif self.outer.target_channel_id is not None:
+                    channel = self.outer.get_channel(self.outer.target_channel_id)
+                    if channel:
+                        message = await channel.send(contents)  # pyright: ignore
 
-            async def edit(self, contents):
-                if self.outer.last_text_message:
-                    try:
-                        await self.outer.last_text_message.edit(content=contents)
-                    except discord.NotFound: 
-                        self.outer.last_text_message = None
+                if message is None:
+                    return None
 
-            async def delete(self):
-                if self.outer.last_text_message:
+                return self.MessageHandle(self.outer, message)
+
+            class MessageHandle:
+                def __init__(self, outer: "BotCore", message: 'discord.Message'):
+                    self.outer = outer
+                    self.message: 'discord.Message | None' = message
+
+                @property
+                def exists(self) -> bool:
+                    return self.message is not None
+
+                async def edit(self, contents):
+                    if not self.message:
+                        return
+
                     try:
-                        await self.outer.last_text_message.delete()
-                        self.outer.last_text_message = None
+                        await self.message.edit(content=contents)
+                    except discord.NotFound:
+                        self.message = None
+
+                async def delete(self):
+                    if not self.message:
+                        return
+
+                    try:
+                        await self.message.delete()
                     except Exception:
                         pass
+                    finally:
+                        self.message = None
+                        
+                async def add_reaction(self, emoji):
+                    if not self.message:
+                        return
 
+                    try:
+                        await self.message.add_reaction(emoji)
+                    except discord.NotFound:
+                        self.message = None
+                    except Exception:
+                        pass
 
         class _Embeds:
             def __init__(self, outer: "BotCore"):
                 self.outer = outer
 
             class EmbedHandle:
-                def __init__(self, message, embed):
+                def __init__(self, message: 'discord.Message', embed: 'discord.Embed'):
                     self.message = message
                     self.embed = embed
 
@@ -184,7 +215,7 @@ class BotCore(discord.Client):
                     if not self.message:
                         return
 
-                    old: 'discord.Embed' = self.embed
+                    old = self.embed
 
                     if add_field:
                         new_embed = discord.Embed.from_dict(old.to_dict())
@@ -476,20 +507,34 @@ class BotCore(discord.Client):
         safe_text = "".join(c for c in text if c.isalnum() or c in (' ', '_', '-')).rstrip()
         new_filename = f"ocr_{safe_text}.png"
         new_path = os.path.join(folder, new_filename)
-
+        
         # 2. Fast Scan: Get entries and their timestamps in one go
-        with os.scandir(folder) as it:
-            # scandir entries cache the stat info on some OSs (like Windows)
-            files = [e for e in it if e.is_file() and e.name.startswith("ocr_")]
+        files: list[os.DirEntry[str]] = []
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_file() and entry.name.startswith("ocr_"):
+                        files.append(entry)
+                except FileNotFoundError:
+                    continue # Skip if file disappeared during scanning
 
         # 3. Rotate if needed
         if len(files) >= max_files:
             # Find oldest via modification time
-            oldest = min(files, key=lambda e: e.stat().st_mtime)
-            try:
-                os.remove(oldest.path)
-            except FileNotFoundError:
-                pass
+            oldest: os.DirEntry[str] | None = None
+            oldest_mtime = float('inf')
+            for entry in files:
+                try:
+                    mtime = entry.stat().st_mtime
+                    if mtime < oldest_mtime:
+                        oldest, oldest_mtime = entry, mtime
+                except FileNotFoundError:
+                    continue # Skip if file disappeared during stat
+            if oldest:
+                try:
+                    os.remove(oldest.path)
+                except FileNotFoundError:
+                    pass
 
         # 4. Write new file
         with open(new_path, "wb") as f:

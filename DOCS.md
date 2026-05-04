@@ -24,12 +24,14 @@ The `info` subclass handles data extraction from the livestream using a combinat
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.
 
 ### Messages
-* `messages.send(contents, response=True)`: Sends a plain text message. If `response` is true, it attempts to reply to the current interaction.
+* `messages.send(contents, response=True)`: Sends a plain text message. If `response` is true, it attempts to reply to the current interaction. Returns a MessageHandle object or None.
+* `message.edit(contents)`: Edits the message contents.
+* `message.delete()`: Deletes the message.
 
 ### Embeds
-* `embeds.send(contents, title, color, footer, response=True)`: Initializes and sends a new embed.
-* `embeds.edit(contents, title, author, add_field=False)`: Modifies the existing active embed. Setting `add_field` to true will append a new field instead of editing the main body.
-* `embeds.delete()`: Removes the active embed from the channel.
+* `embeds.send(contents, title, color, footer, response=True)`: Initializes and sends a new embed. Returns an EmbedHandle object or None.
+* `embed.edit(contents, title, author, add_field=False)`: Modifies the embed. Setting `add_field` to true will append a new field instead of editing the main body.
+* `embed.delete()`: Removes the embed from the channel.
 
 ## OCR Implementation
 Bogobot utilizes Tesseract OCR for visual data extraction.

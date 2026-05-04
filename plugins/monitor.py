@@ -42,7 +42,7 @@ async def setup(bot: 'BotCore'):
         # Edit the message
         try:
             assert monitor_embed is not None
-            await monitor_embed.edit(contents=".".join(num_array), author=datetime.now().strftime('[%H:%M:%S]'))
+            await monitor_embed.edit(contents="`" + ".".join(num_array) + "`", author=datetime.now().strftime('[%H:%M:%S]'))
         except Exception as e:
             print(f"Edit Error: {e}")
     
