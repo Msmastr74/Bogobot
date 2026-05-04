@@ -60,13 +60,16 @@ async def setup(bot: 'BotCore'):
     async def randbool(interaction: discord.Interaction):
         await bot.discord.messages.send(contents=f"{random.choice([True, False])}", response=True)
 
-    @bot.setup.command(name="bogosort", description="bogosort", eph=False, perm_requirement=0)
+    @bot.setup.command(name="bogosort", description="bogosorts a comma-separated list of numbers", eph=False, perm_requirement=0)
     async def bogosort(interaction: discord.Interaction, items: str):
         items_list = items.split(",")
-        arr: list[float] = []
+        arr: list[float | int] = []
         for item in items_list:
             try:
-                arr.append(float(item))
+                try:
+                    arr.append(int(item))
+                except ValueError:
+                    arr.append(float(item))
             except ValueError:
                 await bot.discord.messages.send(contents=f"Invalid item: {item}. All items must be numbers.", response=True)
                 return
@@ -97,7 +100,7 @@ async def setup(bot: 'BotCore'):
         await message.add_reaction("<:sorted:1495381291162402939>")
         return
     
-    @bot.setup.command(name="bogosortr", description="rigged bogosort", eph=False, perm_requirement=0)
+    @bot.setup.command(name="bogosortr", description="bogosorts a comma-separated list of numbers?", eph=False, perm_requirement=0)
     async def bogosortr(interaction: discord.Interaction, items: str, percent: float):
         if percent < 0 or percent > 100:
             await bot.discord.messages.send(
@@ -107,11 +110,14 @@ async def setup(bot: 'BotCore'):
             return
 
         items_list = items.split(",")
-        arr: list[float] = []
+        arr: list[float | int] = []
 
         for item in items_list:
             try:
-                arr.append(float(item.strip()))
+                try:
+                    arr.append(int(item))
+                except ValueError:
+                    arr.append(float(item))
             except ValueError:
                 await bot.discord.messages.send(
                     contents=f"Invalid item: {item}. All items must be numbers.",
@@ -143,7 +149,7 @@ async def setup(bot: 'BotCore'):
             await message.add_reaction("<:unsorted:1495482469128999053>")
             return
 
-        def shuffle_unsorted(arr: list[float]) -> None:
+        def shuffle_unsorted(arr: list[float | int]) -> None:
             while True:
                 random.shuffle(arr)
                 if arr != sorted_arr:
