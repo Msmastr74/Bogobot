@@ -1,9 +1,5 @@
 from bogobot_core import BotCore
 import asyncio
-import sys
-import importlib
-import io
-import contextlib
 import os
 
 if os.path.exists('local_config.json'):

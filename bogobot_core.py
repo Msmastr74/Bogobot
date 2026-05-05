@@ -8,18 +8,15 @@ import csv
 import io
 import numpy as np
 from PIL import Image
-from datetime import datetime
 import cv2
 import os
 import functools
 import asyncio
 import importlib
-import time
 import contextvars
 import requests
 from typing import Any
 
-# The "Invisible Baton"
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
     "current_interaction", default=None
 )
@@ -70,8 +67,6 @@ class BotCore(discord.Client):
             return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
 
         async def get_uptime(self):
-            # Your successful video ID hack
-            # video_id = self.outer.config.get('youtube_stream_id', 'vzgH2DGhrUA') 
             url = "https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
             payload = {
                 "context": {
@@ -89,11 +84,9 @@ class BotCore(discord.Client):
                 response = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: requests.post(url, json=payload, timeout=10)
                 )
-                # print(response.text) # Keep your successful debug line if you want!
                 data = response.json()
                 raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
                 
-                # Calling the fixed method
                 return self.format_to_ddhhmmss(raw_seconds)
             except (KeyError, requests.RequestException):
                 return "00:00:00:00"

@@ -1,9 +1,7 @@
 # hey its the thing made by tomcat!
 
 import discord
-from discord.ext import tasks
 import aiohttp
-import json
 
 # i used claude lmao i aint doin allat
 
