@@ -28,27 +28,11 @@ async def setup(bot: 'BotCore'):
             await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
             return
         await bot.discord.messages.send(contents=f"{random.choice(choices_list)}", response=True)
-    
-    @bot.setup.command(name="bogo", description="shuffles", eph=False, perm_requirement=0)
-    async def bogo(interaction: discord.Interaction, choices: str):
-        choices_list = choices.split(",")
-        if len(choices_list) == 0:
-            await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
-            return
+    @bot.setup.command(name="bogo", description="bogoes your string", eph=False, perm_requirement=0) #the old bogo was not bogo, just choice.
+    async def shuffle(interaction: discord.Interaction, choices: str):
+        choices_list = list(choices)
         random.shuffle(choices_list)
-        await bot.discord.messages.send(contents=f"{', '.join(choices_list)}", response=True)
-    
-    @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", eph=False, perm_requirement=0)
-    async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1):
-        if length < 1:
-            await bot.discord.messages.send(contents=f"Length {length} is invalid.", response=True)
-            return
-        if max < min:
-            await bot.discord.messages.send(contents=f"Max must be bigger than min. Did you mean `/randlist {length} {min} {max}`?", response=True)
-            return
-        rand_list = [random.randint(min, max) for _ in range(length)]
-        await bot.discord.messages.send(contents=f"{', '.join(map(str, rand_list))}", response=True)
-    
+        await bot.discord.messages.send(contents=f"{''.join(choices_list)}", response=True)
     @bot.setup.command(name="randfloat", description="Rolls a random float from user specified range", eph=False, perm_requirement=0)
     async def randfloat(interaction: discord.Interaction, max: float, min: float = 0.0):
         if max < min:
