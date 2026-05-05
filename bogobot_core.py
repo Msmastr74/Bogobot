@@ -1,3 +1,5 @@
+from tkinter import NO
+
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -18,7 +20,9 @@ import requests
 from typing import Any
 
 # The "Invisible Baton"
-current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar("current_interaction", default=None)
+current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
+    "current_interaction", default=None
+)
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
@@ -41,19 +45,18 @@ class BotCore(discord.Client):
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
+        self._current_vals_updated: bool = False
         self.stats_cache: dict[str, str] = {}
-        default_channel_id = self.config.get('default_channel_id')
-        self.target_channel_id = int(default_channel_id) if default_channel_id is not None else None
         self.monitor_message = None
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
-        self.setup = self._Setup(self)  
-
+        self.setup = self._Setup(self)
         self._last_ocr_mtime = 0
 
     class _Info:
-        def __init__(self, outer: 'BotCore'): self.outer = outer
+        def __init__(self, outer: 'BotCore'):
+            self.outer = outer
         
         # FIX: Added 'self' as the first argument
         def format_to_ddhhmmss(self, total_seconds):
@@ -79,7 +82,7 @@ class BotCore(discord.Client):
                         "clientVersion": "2.20260424.01.00"
                     }
                 },
-            "videoId": "DgfiqGPmGWY"
+                "videoId": "DgfiqGPmGWY"
             }
             
             try:
@@ -96,45 +99,60 @@ class BotCore(discord.Client):
                 return "00:00:00:00"
 
         async def get_best_shuffles(self):
-            is_new = await self.outer.refresh_ocr_data()
+            is_new = self.outer._current_vals_updated
+            self.outer._current_vals_updated = False
             return self.outer.current_vals, is_new
 
         async def get_stats_all(self):
             return self.outer.stats_cache
-        
-        @tasks.loop(seconds=1)
-        async def update_stats(self):
-            try:
-                with Image.open('live_720p.png') as img:
-                    img.load()
-                    
-                    # Low-frequency pass: Run the full dictionary only when called
-                    for name, coords in self.outer.STATS_COORDS.items():
-                        filter: str = "0123456789"
-                        if len(coords) >= 5:
-                            filter = coords[4]
-                            coords = coords[:4]
-                        stat_crop = img.crop(coords)
-                        
-                        if filter != "0123456789":
-                            text, conf = await self.outer.tesseract_parse(
-                                stat_crop, filter
-                            )
-                            if text and conf >= 0:
-                                self.outer.stats_cache[name] = text
-                        else:
-                            digits, conf = await self.outer.tesseract_parse(
-                                stat_crop, "0123456789"
-                            ) 
-                            if digits and conf >= 0:
-                                self.outer.stats_cache[name] = f"{int(digits):,}"
-            except Exception as e:
-                print(f"Stats Extraction Error: {e}")
+    
+    @tasks.loop(seconds=1)
+    async def refresh_ocr_data(self):
+        mtime = os.path.getmtime('live_720p.png')
+        if mtime <= self._last_ocr_mtime:
+            return
+        self._last_ocr_mtime = mtime
+        with Image.open('live_720p.png') as img:
+            img.load()
 
-        @update_stats.error
-        async def update_stats_error(self, error):
-            print(f"update_stats failed with error: {error}")
+            for name, coords in self.STATS_COORDS.items():
+                filter: str = "0123456789"
+                if len(coords) >= 5:
+                    filter = coords[4]
+                    coords = coords[:4]
+                stat_crop = img.crop(coords)
+                
+                if filter != "0123456789":
+                    text, conf = await self.tesseract_parse(
+                        stat_crop, filter
+                    )
+                    if text and conf >= 0:
+                        self.stats_cache[name] = text
+                else:
+                    digits, conf = await self.tesseract_parse(
+                        stat_crop, "0123456789"
+                    ) 
+                    if digits and conf >= 0:
+                        self.stats_cache[name] = f"{int(digits):,}"
+            
+            self.current_vals = []
+            self._current_vals_updated = True
+            coords = self.CELL_COORDS
+            for _ in range(4): # last 4 cells
+                cell_crop = img.crop(coords)
+                output, conf = await self.tesseract_parse(
+                    cell_crop, "0123456789" # do not use psm 8, psm 8 is unreliable
+                )
+                self.current_vals.append((output, conf))
+                coords = (
+                    coords[0] - self.CELL_OFFSET, coords[1],
+                    coords[2] - self.CELL_OFFSET, coords[3]
+                )
+            self.current_vals.reverse()
 
+    @refresh_ocr_data.error
+    async def refresh_ocr_data_error(self, error):
+        print(f"refresh_ocr_data failed with error: {error}")
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
@@ -148,24 +166,21 @@ class BotCore(discord.Client):
 
             async def send(self, contents, response=False):
                 interaction = current_interaction.get()
-                message = None
 
+                message: discord.Message | None = None
                 if response and interaction:
-                    message = await interaction.followup.send(contents)
-                elif self.outer.target_channel_id is not None:
-                    channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if channel:
-                        message = await channel.send(contents)  # pyright: ignore
-
+                    message = await interaction.followup.send(contents, wait=True)
+                elif interaction and hasattr(interaction.channel, 'send'):
+                    message = await interaction.channel.send(contents) # pyright: ignore
                 if message is None:
                     return None
 
                 return self.MessageHandle(self.outer, message)
 
             class MessageHandle:
-                def __init__(self, outer: "BotCore", message: 'discord.Message'):
+                def __init__(self, outer: "BotCore", message: discord.Message):
                     self.outer = outer
-                    self.message: 'discord.Message | None' = message
+                    self.message: discord.Message | None = message
 
                 @property
                 def exists(self) -> bool:
@@ -207,9 +222,13 @@ class BotCore(discord.Client):
                 self.outer = outer
 
             class EmbedHandle:
-                def __init__(self, message: 'discord.Message', embed: 'discord.Embed'):
-                    self.message = message
-                    self.embed = embed
+                def __init__(self, message: discord.Message, embed: discord.Embed):
+                    self.message: discord.Message | None = message
+                    self.embed: discord.Embed = embed
+                
+                @property
+                def message_id(self):
+                    return self.message.id if self.message else None
 
                 async def edit(self, contents=None, title=None, footer=None, author=None, color=None, add_field=False):
                     if not self.message:
@@ -277,56 +296,15 @@ class BotCore(discord.Client):
                 embed.set_footer(text=footer)
                 embed.set_author(name=author)
 
+                message: discord.Message | None = None
                 if response and interaction:
                     message = await interaction.followup.send(embed=embed, wait=True)
-                else:
-                    if self.outer.target_channel_id is None:
-                        return None
-
-                    channel = self.outer.get_channel(self.outer.target_channel_id)
-                    if not channel:
-                        return None
-
-                    message = await channel.send(embed=embed) # pyright: ignore
-
+                elif interaction and hasattr(interaction.channel, 'send'):
+                    message = await interaction.channel.send(embed=embed) # pyright: ignore
+                if message is None:
+                    return None
+                
                 return self.EmbedHandle(message, embed)
-
-    # OCR STUFF
-    async def refresh_ocr_data(self):
-        try:
-            mtime = os.path.getmtime('live_720p.png')
-            if mtime <= self._last_ocr_mtime:
-                return False
-            await self._run_ocr()
-            self._last_ocr_mtime = mtime
-            return True
-        except Exception as e:
-            print(e)
-            return False
-
-    async def _run_ocr(self):
-        try:
-            with Image.open('live_720p.png') as img:
-                img.load()
-
-                self.current_vals = []
-                
-                coords = self.CELL_COORDS
-                for _ in range(4): # last 4 cells
-                    cell_crop = img.crop(coords)
-                    output, conf = await self.tesseract_parse(
-                        cell_crop, "0123456789" # do not use psm 8, psm 8 is unreliable
-                    )
-                    self.current_vals.append((output, conf))
-                    coords = (
-                        coords[0] - self.CELL_OFFSET, coords[1],
-                        coords[2] - self.CELL_OFFSET, coords[3]
-                    )
-                self.current_vals.reverse()
-                
-        except Exception as e:
-            print(e)
-            pass
 
     async def setup_hook(self):
         if self.config.get('sync', True):
@@ -348,7 +326,7 @@ class BotCore(discord.Client):
             json.dump(self.config, f, indent=4)
 
     async def run_bot(self): 
-        self.info.update_stats.start()
+        self.refresh_ocr_data.start()
         await self.start(self.config['bot_token'])
 
     def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=5):
@@ -542,7 +520,6 @@ class BotCore(discord.Client):
 
     class _Setup:
         def __init__(self, outer: 'BotCore'): self.outer = outer
-        def channel_id(self, new_id): self.outer.target_channel_id = int(new_id)
 
         def command(self, name, description="No description", perm_requirement=1, eph=True, defer=True):
             def decorator(func):

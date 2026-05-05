@@ -3,7 +3,6 @@
     "owner_uid": 12345678901234567,
     "authorized_users": [],
     "owner_username": "YOUR_USERNAME_HERE",
-    "default_channel_id": 123456789012345678,
     "sync": true,
     "save_ocr_debug": false
 }
