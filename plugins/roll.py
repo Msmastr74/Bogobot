@@ -17,7 +17,7 @@ async def setup(bot: 'BotCore'):
     @bot.setup.command(name="randint", description="Rolls a random number from user specified range", eph=False, perm_requirement=0)
     async def randint(interaction: discord.Interaction, max: int, min: int = 1):
         if max < min:
-            await bot.discord.messages.send(contents=f"Max must be bigger than min. Did you mean `/randint {min} {max}`?", response=True)
+            await bot.discord.messages.send(contents=f"Max cannot be smaller than min. Did you mean `/randint {min} {max}`?", response=True)
             return
         await bot.discord.messages.send(contents=f"{random.randint(min, max)}", response=True)
     
@@ -28,15 +28,34 @@ async def setup(bot: 'BotCore'):
             await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
             return
         await bot.discord.messages.send(contents=f"{random.choice(choices_list)}", response=True)
-    @bot.setup.command(name="bogo", description="bogoes your string", eph=False, perm_requirement=0) #the old bogo was not bogo, just choice.
-    async def shuffle(interaction: discord.Interaction, choices: str):
-        choices_list = list(choices)
-        random.shuffle(choices_list)
-        await bot.discord.messages.send(contents=f"{''.join(choices_list)}", response=True)
+
+    @bot.setup.command(name="bogo", description="bogos your string", eph=False, perm_requirement=0)
+    async def bogo(interaction: discord.Interaction, text: str):
+        char_list = list(text)
+        random.shuffle(char_list)
+        await bot.discord.messages.send(contents=f"{''.join(char_list)}", response=True)
+    
+    @bot.setup.command(name="shuffle", description="shuffles", eph=False, perm_requirement=0)
+    async def shuffle(interaction: discord.Interaction, items: str):
+        items_list = items.split(",")
+        random.shuffle(items_list)
+        await bot.discord.messages.send(contents=f"{', '.join(items_list)}", response=True)
+    
+    @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", eph=False, perm_requirement=0)
+    async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1):
+        if length < 1:
+            await bot.discord.messages.send(contents=f"Length {length} is invalid.", response=True)
+            return
+        if max < min:
+            await bot.discord.messages.send(contents=f"Max cannot be smaller than min. Did you mean `/randlist {length} {min} {max}`?", response=True)
+            return
+        rand_list = [random.randint(min, max) for _ in range(length)]
+        await bot.discord.messages.send(contents=f"{', '.join(map(str, rand_list))}", response=True)
+
     @bot.setup.command(name="randfloat", description="Rolls a random float from user specified range", eph=False, perm_requirement=0)
     async def randfloat(interaction: discord.Interaction, max: float, min: float = 0.0):
         if max < min:
-            await bot.discord.messages.send(contents=f"Max must be bigger than min. Did you mean `/randfloat {min} {max}`?", response=True)
+            await bot.discord.messages.send(contents=f"Max cannot be smaller than min. Did you mean `/randfloat {min} {max}`?", response=True)
             return
         await bot.discord.messages.send(contents=f"{random.uniform(min, max)}", response=True)
     
@@ -57,9 +76,6 @@ async def setup(bot: 'BotCore'):
             except ValueError:
                 await bot.discord.messages.send(contents=f"Invalid item: {item}. All items must be numbers.", response=True)
                 return
-        if len(arr) == 0:
-            await bot.discord.messages.send(contents="You must provide at least one item.", response=True)
-            return
         random.shuffle(arr)
 
         message = await bot.discord.messages.send(
@@ -109,13 +125,6 @@ async def setup(bot: 'BotCore'):
                 )
                 return
 
-        if len(arr) == 0:
-            await bot.discord.messages.send(
-                contents="You must provide at least one item.",
-                response=True
-            )
-            return
-
         should_succeed = random.random() < (percent / 100)
         sorted_arr = sorted(arr)
 
@@ -128,7 +137,7 @@ async def setup(bot: 'BotCore'):
             if not message:
                 return
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.5)
             await message.edit(contents=f"Sort failed: `{', '.join(map(str, arr))}`")
             await message.add_reaction("<:unsorted:1495482469128999053>")
             return
