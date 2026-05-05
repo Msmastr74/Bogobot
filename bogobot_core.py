@@ -37,7 +37,7 @@ class BotCore(discord.Client):
             "best_run": (645, 610, 730, 640, "0123456789/"),
             "shuffles_min": (819, 610, 1043, 640),
             "elapsed_time": (1166, 0, 1180, 75),
-            "average_best_shuffle": (80, 670, 110, 685, "0123456789.")
+            "average_best_shuffle": (80, 670, 115, 685, "0123456789.")
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
