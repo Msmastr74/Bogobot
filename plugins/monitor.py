@@ -30,14 +30,17 @@ async def setup(bot: "BotCore"):
 
         return channels
 
-    async def fetch_monitor_message(channel_id: int, message_id: int) -> discord.Message | None:
+    async def get_monitor_partial_message(
+        channel_id: int,
+        message_id: int,
+    ) -> discord.PartialMessage | None:
         """
-        Fetch the Discord message for a monitor entry.
+        Return a partial message handle without fetching the full message.
 
         Returns None when:
         - the channel no longer exists
-        - the message no longer exists
-        - the bot cannot access it
+        - the bot cannot access the channel
+        - the channel does not support partial messages
         """
         try:
             channel = bot.get_channel(channel_id)
@@ -48,18 +51,22 @@ async def setup(bot: "BotCore"):
             if channel is None:
                 return None
 
-            if not hasattr(channel, "fetch_message"):
+            if not hasattr(channel, "get_partial_message"):
                 return None
 
-            return await channel.fetch_message(message_id)  # pyright: ignore
+            return channel.get_partial_message(message_id)  # pyright: ignore
 
         except discord.NotFound:
             return None
         except discord.Forbidden:
             return None
         except Exception as e:
-            print(f"Fetch monitor message error for {channel_id=} {message_id=}: {e}")
+            print(f"Partial message error for {channel_id=} {message_id=}: {e}")
             return None
+
+    def save_monitor_channels(monitor_channels: dict[str, int]) -> None:
+        bot.config["monitor_channels"] = monitor_channels
+        bot.save_config()
 
     @tasks.loop(seconds=0.5)
     async def monitor_loop():
@@ -108,7 +115,8 @@ async def setup(bot: "BotCore"):
 
             num_array.append(sublist[0][0])
 
-        contents = f"```\n{".".join(num_array)}\n```"
+        joined_nums = ".".join(num_array)
+        contents = f"```\n{joined_nums}\n```"
         author = datetime.now().strftime("[%H:%M:%S]")
 
         stale_channel_ids: list[str] = []
@@ -121,18 +129,17 @@ async def setup(bot: "BotCore"):
                 stale_channel_ids.append(channel_id_str)
                 continue
 
-            message = await fetch_monitor_message(channel_id, message_id)
+            message = await get_monitor_partial_message(channel_id, message_id)
 
             if message is None:
                 stale_channel_ids.append(channel_id_str)
                 continue
 
             try:
-                embed = message.embeds[0] if message.embeds else discord.Embed(
-                    title="Monitor"
+                embed = discord.Embed(
+                    title="Monitor",
+                    description=contents,
                 )
-
-                embed.description = contents
                 embed.set_author(name=author)
                 embed.set_footer(text="Oldest → Newest [?? = Unknown]")
 
@@ -151,8 +158,7 @@ async def setup(bot: "BotCore"):
             for channel_id_str in stale_channel_ids:
                 monitor_channels.pop(channel_id_str, None)
 
-            bot.config["monitor_channels"] = monitor_channels
-            bot.save_config()
+            save_monitor_channels(monitor_channels)
 
     @monitor_loop.before_loop
     async def before_monitor_loop():
@@ -181,7 +187,7 @@ async def setup(bot: "BotCore"):
         # Replace any existing monitor message in this channel.
         if existing_message_id is not None:
             try:
-                old_message = await fetch_monitor_message(
+                old_message = await get_monitor_partial_message(
                     channel_id,
                     int(existing_message_id),
                 )
@@ -189,17 +195,20 @@ async def setup(bot: "BotCore"):
                 if old_message is not None:
                     await old_message.delete()
 
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                pass
             except Exception as e:
                 print(f"Failed deleting old monitor message for {channel_id_str}: {e}")
 
             monitor_channels.pop(channel_id_str, None)
-            bot.config["monitor_channels"] = monitor_channels
-            bot.save_config()
+            save_monitor_channels(monitor_channels)
 
         embed = await bot.discord.embeds.send(
             contents="Initializing...",
-            title="Serial Number",
-            footer="? = Unknown",
+            title="Monitor",
+            footer="Oldest → Newest [?? = Unknown]",
             response=False,
         )
 
@@ -218,8 +227,7 @@ async def setup(bot: "BotCore"):
             return
 
         monitor_channels[channel_id_str] = embed.message_id
-        bot.config["monitor_channels"] = monitor_channels
-        bot.save_config()
+        save_monitor_channels(monitor_channels)
 
         await bot.discord.messages.send(
             "Monitor system online in this channel.",
@@ -252,16 +260,19 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        message = await fetch_monitor_message(channel_id, int(message_id))
+        save_monitor_channels(monitor_channels)
+
+        message = await get_monitor_partial_message(channel_id, int(message_id))
 
         if message is not None:
             try:
                 await message.delete()
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                pass
             except Exception as e:
                 print(f"Failed deleting monitor message for {channel_id_str}: {e}")
-
-        bot.config["monitor_channels"] = monitor_channels
-        bot.save_config()
 
         await bot.discord.messages.send(
             "Monitor stopped in this channel.",
