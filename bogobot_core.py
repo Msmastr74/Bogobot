@@ -17,7 +17,11 @@ from typing import Any
 from stream import StreamHandler
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-14s ] %(message)s',
+    datefmt='%d %H:%M:%S'
+)
 logging.captureWarnings(True)
 
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
@@ -59,7 +63,9 @@ class BotCore(discord.Client):
         )
         
         self.logger = logging.getLogger("Bogobot")
-        self.logger.setLevel(logging.DEBUG if self.debug else logging.INFO)
+        loglevel = logging.DEBUG if self.debug else logging.INFO
+        self.logger.setLevel(loglevel)
+        logging.getLogger().setLevel(loglevel)
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
