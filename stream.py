@@ -133,8 +133,7 @@ class StreamHandler:
     def _run_once(self) -> None:
         streamlink = subprocess.Popen(
             ["streamlink", self.url, self.quality, "--stdout"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE
         )
 
         if streamlink.stdout is None:
