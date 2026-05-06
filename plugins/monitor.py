@@ -1,6 +1,6 @@
 import discord
 from discord.ext import tasks
-from datetime import datetime
+import time
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -117,7 +117,6 @@ async def setup(bot: "BotCore"):
 
         joined_nums = ".".join(num_array)
         contents = f"```\n{joined_nums}\n```"
-        author = datetime.now().strftime("[%H:%M:%S]")
 
         stale_channel_ids: list[str] = []
 
@@ -138,9 +137,8 @@ async def setup(bot: "BotCore"):
             try:
                 embed = discord.Embed(
                     title="Monitor",
-                    description=contents,
+                    description=f"<t:{int(round(time.time()))}:T>\n{contents}",
                 )
-                embed.set_author(name=author)
                 embed.set_footer(text="Oldest → Newest [?? = Unknown]")
 
                 await message.edit(embed=embed)
