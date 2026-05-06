@@ -15,6 +15,7 @@ import asyncio
 import importlib
 import contextvars
 import requests
+import time
 from typing import Any
 
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
@@ -49,7 +50,8 @@ class BotCore(discord.Client):
         self.info = self._Info(self)
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)
-        self._last_ocr_mtime = 0
+        self._last_ocr_mtime: float = 0.0
+        self._last_ocr_refresh: float = 0.0
 
     class _Info:
         def __init__(self, outer: 'BotCore'):
@@ -105,6 +107,7 @@ class BotCore(discord.Client):
         if mtime <= self._last_ocr_mtime:
             return
         self._last_ocr_mtime = mtime
+        self._last_ocr_refresh = time.time()
         with Image.open('live_720p.png') as img:
             img.load()
 
