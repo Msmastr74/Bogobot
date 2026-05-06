@@ -61,7 +61,7 @@ async def setup(bot: "BotCore"):
         except discord.Forbidden:
             return None
         except Exception as e:
-            print(f"Partial message error for {channel_id=} {message_id=}: {e}")
+            bot.logger.warning(f"Partial message error for {channel_id=} {message_id=}: {e}")
             return None
 
     def save_monitor_channels(monitor_channels: dict[str, int]) -> None:
@@ -148,7 +148,7 @@ async def setup(bot: "BotCore"):
             except discord.Forbidden:
                 stale_channel_ids.append(channel_id_str)
             except Exception as e:
-                print(f"Edit Error for monitor channel {channel_id_str}: {e}")
+                bot.logger.warning(f"Edit Error for monitor channel {channel_id_str}: {e}")
 
         if stale_channel_ids:
             monitor_channels = get_monitor_channels()
@@ -198,7 +198,7 @@ async def setup(bot: "BotCore"):
             except discord.Forbidden:
                 pass
             except Exception as e:
-                print(f"Failed deleting old monitor message for {channel_id_str}: {e}")
+                bot.logger.warning(f"Failed deleting old monitor message for {channel_id_str}: {e}")
 
             monitor_channels.pop(channel_id_str, None)
             save_monitor_channels(monitor_channels)
@@ -270,7 +270,7 @@ async def setup(bot: "BotCore"):
             except discord.Forbidden:
                 pass
             except Exception as e:
-                print(f"Failed deleting monitor message for {channel_id_str}: {e}")
+                bot.logger.warning(f"Failed deleting monitor message for {channel_id_str}: {e}")
 
         await bot.discord.messages.send(
             "Monitor stopped in this channel.",

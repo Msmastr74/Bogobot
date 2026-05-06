@@ -1,8 +1,5 @@
-from tkinter import NO
-
 import discord
 from discord import app_commands
-from discord.ext import tasks
 import json
 import csv
 import io
@@ -18,7 +15,9 @@ import requests
 import time
 from typing import Any
 from stream import StreamHandler
+import logging
 
+logging.captureWarnings(True)
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
     "current_interaction", default=None
 )
@@ -48,13 +47,17 @@ class BotCore(discord.Client):
         self.stats_cache: dict[str, str] = {}
         self.monitor_message = None
         
+        self.debug: bool = self.config.get("debug", False)
         self.stream_handler = StreamHandler(
             url="https://www.youtube.com/live/DgfiqGPmGWY",
             quality="720p",
             on_new_frame=self.on_new_frame,
             fps=1,
-            quiet=True
+            quiet=not self.debug
         )
+        
+        self.logger = logging.getLogger("Bogobot")
+        self.logger.setLevel(logging.DEBUG if self.debug else logging.INFO)
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
@@ -110,9 +113,18 @@ class BotCore(discord.Client):
         async def get_stats_all(self):
             return self.outer.stats_cache
     
+    ms = 0
     async def on_new_frame(self, img: Image.Image):
-        await self.update_ocr_data(img)
+        if self.ms == 0:
+            self.ms = time.monotonic()
+        dt = time.monotonic() - self.ms
+        self.ms = time.monotonic()
+        self.logger.debug(f"New frame received (dt={dt:.2f}s)")
+        
         img.save("live_720p.png", format="PNG")
+        await self.update_ocr_data(img)
+        dt = time.monotonic() - self.ms
+        self.logger.debug(f"OCR data updated (dt={dt:.2f}s)")
     
     async def update_ocr_data(self, img: Image.Image):
         try:
@@ -139,10 +151,10 @@ class BotCore(discord.Client):
             self.current_vals = []
             self._current_vals_updated = True
             coords = self.CELL_COORDS
-            for _ in range(4): # last 4 cells
+            for _ in range(3): # last 3 cells
                 cell_crop = img.crop(coords)
                 output, conf = await self.tesseract_parse(
-                    cell_crop, "0123456789" # do not use psm 8, psm 8 is unreliable
+                    cell_crop, "0123456789"
                 )
                 self.current_vals.append((output, conf))
                 coords = (
@@ -152,7 +164,7 @@ class BotCore(discord.Client):
             self.current_vals.reverse()
             self._last_ocr_refresh = time.time()
         except Exception as e:
-            print(f"OCR processing error: {e}")
+            self.logger.warning(f"OCR processing error: {e}")
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
@@ -320,7 +332,7 @@ class BotCore(discord.Client):
                 mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
                 if hasattr(mod, "setup"):
                     await mod.setup(self)
-                print(f"✅ Loaded Plugin: {filename}")
+                self.logger.info(f"Loaded Plugin: {filename}")
     def save_config(self):
         with open(self.config_path, 'w') as f:
             json.dump(self.config, f, indent=4)

@@ -5,7 +5,8 @@ import threading
 import time
 import asyncio
 import inspect
-from typing import Callable, Awaitable, Coroutine, Any
+import warnings
+from typing import Callable, Coroutine, Any
 from PIL import Image
 FrameCallback = Callable[[Image.Image], None | Coroutine[Any, Any, None]]
 
@@ -118,7 +119,7 @@ class StreamHandler:
             try:
                 self._run_once()
             except Exception as e:
-                print(f"stream failed: {e!r}")
+              warnings.warn(f"Stream failed with error: {e}", RuntimeWarning)
 
             lifetime = time.monotonic() - t0
             if lifetime < self.quick_fail_s:
@@ -185,6 +186,10 @@ class StreamHandler:
               raise RuntimeError("Async frame callback was used, but no async loop exists")
 
           if self._frame_future and not self._frame_future.done():
+              warnings.warn(
+                  "Previous frame is still being processed, dropping frame",
+                  RuntimeWarning
+              )
               return
 
           async def runner() -> None:
