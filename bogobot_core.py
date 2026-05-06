@@ -183,12 +183,16 @@ class BotCore(discord.Client):
             def __init__(self, outer: "BotCore"):
                 self.outer = outer
 
-            async def send(self, contents, response=False):
+            async def send(self, contents, response=False, ephemeral=False):
                 interaction = current_interaction.get()
 
                 message: discord.Message | None = None
                 if response and interaction:
-                    message = await interaction.followup.send(contents, wait=True)
+                    if interaction.response.is_done():
+                        message = await interaction.followup.send(contents, wait=True, ephemeral=ephemeral)
+                    else:
+                        await interaction.response.send_message(contents, ephemeral=ephemeral)
+                        message = await interaction.original_response()
                 elif interaction and hasattr(interaction.channel, 'send'):
                     message = await interaction.channel.send(contents) # pyright: ignore
                 if message is None:
@@ -220,7 +224,7 @@ class BotCore(discord.Client):
 
                     try:
                         await self.message.delete()
-                    except Exception:
+                    except (discord.NotFound, discord.Forbidden):
                         pass
                     finally:
                         self.message = None
@@ -233,7 +237,7 @@ class BotCore(discord.Client):
                         await self.message.add_reaction(emoji)
                     except discord.NotFound:
                         self.message = None
-                    except Exception:
+                    except discord.Forbidden:
                         pass
 
         class _Embeds:
@@ -304,6 +308,7 @@ class BotCore(discord.Client):
                 author="Bogobot",
                 color=discord.Color.blue(),
                 response=False,
+                ephemeral=False
             ):
                 interaction = current_interaction.get()
 
@@ -317,7 +322,11 @@ class BotCore(discord.Client):
 
                 message: discord.Message | None = None
                 if response and interaction:
-                    message = await interaction.followup.send(embed=embed, wait=True)
+                    if interaction.response.is_done():
+                        message = await interaction.followup.send(embed=embed, wait=True, ephemeral=ephemeral)
+                    else:
+                        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+                        message = await interaction.original_response()
                 elif interaction and hasattr(interaction.channel, 'send'):
                     message = await interaction.channel.send(embed=embed) # pyright: ignore
                 if message is None:
@@ -571,7 +580,7 @@ class BotCore(discord.Client):
                         await func(interaction, *args, **kwargs)
                     except Exception as e:
                         if interaction.response.is_done():
-                            await interaction.followup.send(f"⚠️ Error: {e}")
+                            await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
                         else:
                             await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
                     finally:

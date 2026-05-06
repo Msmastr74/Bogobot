@@ -69,6 +69,6 @@ async def setup(bot: 'BotCore'):
         assert embed is not None
 
         if not rows:
-            await embed.edit(contents="No data availiable")
+            await embed.edit(contents="No data available")
         else:
             await embed.edit(contents=f"{rows}")
