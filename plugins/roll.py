@@ -36,13 +36,13 @@ async def setup(bot: 'BotCore'):
     
     @bot.setup.command(name="shuffle", description="shuffles", eph=False, perm_requirement=0)
     async def shuffle(
-        interaction: discord.Interaction, items: str, delimiter: str = ",", output_delimiter: str | None = None
+        interaction: discord.Interaction, items: str, delimiter: str | None = None
     ):
-        if output_delimiter is None:
-            output_delimiter = delimiter
+        if delimiter is None:
+            delimiter = " "
         items_list = items.split(delimiter)
-        if output_delimiter == output_delimiter.strip() and output_delimiter != "":
-            output_delimiter += " "
+        output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+        if delimiter != " ":
             items_list = [item.strip() for item in items_list]
         random.shuffle(items_list)
         await bot.discord.messages.send(contents=f"{output_delimiter.join(items_list)}", response=True)
