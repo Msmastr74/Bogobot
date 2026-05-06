@@ -229,10 +229,14 @@ class BotCore(discord.Client):
                     finally:
                         self.message = None
                         
-                async def add_reaction(self, emoji):
+                async def add_reaction(self, emoji_data: int | discord.Emoji):
                     if not self.message:
                         return
 
+                    emoji = self.outer.get_emoji(emoji_data) if isinstance(emoji_data, int) else emoji_data
+                    if not emoji:
+                        self.outer.logger.warning(f"Emoji with ID {emoji_data} not found.")
+                        return
                     try:
                         await self.message.add_reaction(emoji)
                     except discord.NotFound:

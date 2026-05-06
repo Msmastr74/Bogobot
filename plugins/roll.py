@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
 
+UNSORTED_EMOJI_ID = 1495482469128999053
+SORTED_EMOJI_ID = 1495381291162402939
 async def setup(bot: 'BotCore'):
     @bot.setup.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     async def roll(interaction: discord.Interaction):
@@ -115,12 +117,12 @@ async def setup(bot: 'BotCore'):
             if counter <= 0:
                 await asyncio.sleep(1.5)
                 await message.edit(contents=f"Sort failed: `{text()}`")
-                await message.add_reaction("<:unsorted:1495482469128999053>")
+                await message.add_reaction(UNSORTED_EMOJI_ID)
                 return
 
         await asyncio.sleep(1.5)
         await message.edit(contents=f"Sorted: `{text()}`")
-        await message.add_reaction("<:sorted:1495381291162402939>")
+        await message.add_reaction(SORTED_EMOJI_ID)
         return
     
     @bot.setup.command(name="bogosortr", description="bogosorts?", defer=False, perm_requirement=0)
@@ -164,7 +166,7 @@ async def setup(bot: 'BotCore'):
 
             await asyncio.sleep(1.5)
             await message.edit(contents=f"Sort failed: `{text()}`")
-            await message.add_reaction("<:unsorted:1495482469128999053>")
+            await message.add_reaction(UNSORTED_EMOJI_ID)
             return
 
         def shuffle_unsorted(arr: list[float | int]) -> None:
@@ -199,9 +201,9 @@ async def setup(bot: 'BotCore'):
             if counter <= 0:
                 await asyncio.sleep(1.5)
                 await message.edit(contents=f"Sort failed: `{text()}`")
-                await message.add_reaction("<:unsorted:1495482469128999053>")
+                await message.add_reaction(UNSORTED_EMOJI_ID)
                 return
         await asyncio.sleep(1.5)
         await message.edit(contents=f"Sorted: `{text()}`")
-        await message.add_reaction("<:sorted:1495381291162402939>")
+        await message.add_reaction(SORTED_EMOJI_ID)
         return
