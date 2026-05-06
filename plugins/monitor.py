@@ -68,7 +68,7 @@ async def setup(bot: "BotCore"):
         bot.config["monitor_channels"] = monitor_channels
         bot.save_config()
 
-    @tasks.loop(seconds=0.5)
+    @tasks.loop(seconds=1)
     async def monitor_loop():
         global num_matrix
 
