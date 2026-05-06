@@ -4,5 +4,6 @@
     "authorized_users": [],
     "owner_username": "YOUR_USERNAME_HERE",
     "sync": true,
+    "debug": false,
     "save_ocr_debug": false
 }

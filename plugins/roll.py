@@ -35,10 +35,17 @@ async def setup(bot: 'BotCore'):
         await bot.discord.messages.send(contents=f"{''.join(char_list)}", response=True)
     
     @bot.setup.command(name="shuffle", description="shuffles", eph=False, perm_requirement=0)
-    async def shuffle(interaction: discord.Interaction, items: str):
-        items_list = items.split(",")
+    async def shuffle(
+        interaction: discord.Interaction, items: str, delimiter: str = ",", output_delimiter: str | None = None
+    ):
+        if output_delimiter is None:
+            output_delimiter = delimiter
+        items_list = items.split(delimiter)
+        if output_delimiter == output_delimiter.strip() and output_delimiter != "":
+            output_delimiter += " "
+            items_list = [item.strip() for item in items_list]
         random.shuffle(items_list)
-        await bot.discord.messages.send(contents=f"{', '.join(items_list)}", response=True)
+        await bot.discord.messages.send(contents=f"{output_delimiter.join(items_list)}", response=True)
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", eph=False, perm_requirement=0)
     async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1):
