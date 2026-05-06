@@ -348,6 +348,11 @@ class BotCore(discord.Client):
         self.stream_handler.start()
         await self.start(self.config['bot_token'])
 
+    async def close(self):
+        self.logger.info("Shutting down bot...")
+        self.stream_handler.stop()
+        await super().close() 
+
     def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=5):
         # 1. Scaling + Early Erosion to separate touching pixels
         img = np.array(pil_cell.convert("L"))
