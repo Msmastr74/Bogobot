@@ -17,7 +17,9 @@ from typing import Any
 from stream import StreamHandler
 import logging
 
+logging.basicConfig(level=logging.DEBUG)
 logging.captureWarnings(True)
+
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
     "current_interaction", default=None
 )
