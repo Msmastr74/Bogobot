@@ -70,8 +70,8 @@ async def setup(bot: 'BotCore'):
         await bot.discord.messages.send(contents=f"{random.choice([True, False])}", response=True)
 
     @bot.setup.command(name="bogosort", description="bogosorts a list of numbers", eph=False, perm_requirement=0)
-    async def bogosort(interaction: discord.Interaction, items: str):
-        items_list = items.split(" ")
+    async def bogosort(interaction: discord.Interaction, items: str, delimiter: str = " "):
+        items_list = items.split(delimiter)
         arr: list[float | int] = []
         for item in items_list:
             try:
@@ -83,31 +83,33 @@ async def setup(bot: 'BotCore'):
                 await bot.discord.messages.send(contents=f"Invalid item: {item}. All items must be numbers.", response=True)
                 return
         random.shuffle(arr)
+        output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+        def text(): return f"Sorting: `{output_delimiter.join(map(str, arr))}`"
 
         message = await bot.discord.messages.send(
-            contents=f"Sorting: `{', '.join(map(str, arr))}`", response=True
+            contents=f"Sorting: `{text()}`", response=True
         )
         if not message:
             return
         counter = 15
         while arr != sorted(arr):
             await asyncio.sleep(0.5)
-            await message.edit(contents=f"Sorting: `{', '.join(map(str, arr))}`")
+            await message.edit(contents=f"Sorting: `{text()}`")
             random.shuffle(arr)
             counter -= 1
             if counter <= 0:
                 await asyncio.sleep(1.5)
-                await message.edit(contents=f"Sort failed: `{', '.join(map(str, arr))}`")
+                await message.edit(contents=f"Sort failed: `{text()}`")
                 await message.add_reaction("<:unsorted:1495482469128999053>")
                 return
 
         await asyncio.sleep(1.5)
-        await message.edit(contents=f"Sorted: `{', '.join(map(str, arr))}`")
+        await message.edit(contents=f"Sorted: `{text()}`")
         await message.add_reaction("<:sorted:1495381291162402939>")
         return
     
     @bot.setup.command(name="bogosortr", description="bogosorts?", eph=False, perm_requirement=0)
-    async def bogosortr(interaction: discord.Interaction, items: str, percent: float):
+    async def bogosortr(interaction: discord.Interaction, items: str, percent: float, delimiter: str = " "):
         if percent < 0 or percent > 100:
             await bot.discord.messages.send(
                 contents="Percent must be between 0 and 100.",
@@ -115,7 +117,7 @@ async def setup(bot: 'BotCore'):
             )
             return
 
-        items_list = items.split(" ")
+        items_list = items.split(delimiter)
         arr: list[float | int] = []
 
         for item in items_list:
@@ -130,13 +132,15 @@ async def setup(bot: 'BotCore'):
                     response=True
                 )
                 return
+        output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+        def text(): return f"Sorting: `{output_delimiter.join(map(str, arr))}`"
 
         should_succeed = random.random() < (percent / 100)
         sorted_arr = sorted(arr)
 
         if not should_succeed and len(set(arr)) <= 1:
             message = await bot.discord.messages.send(
-                contents=f"Sorting: `{', '.join(map(str, arr))}`",
+                contents=f"Sorting: `{text()}`",
                 response=True
             )
 
@@ -144,7 +148,7 @@ async def setup(bot: 'BotCore'):
                 return
 
             await asyncio.sleep(1.5)
-            await message.edit(contents=f"Sort failed: `{', '.join(map(str, arr))}`")
+            await message.edit(contents=f"Sort failed: `{text()}`")
             await message.add_reaction("<:unsorted:1495482469128999053>")
             return
 
@@ -159,7 +163,7 @@ async def setup(bot: 'BotCore'):
         else:
             shuffle_unsorted(arr)
         message = await bot.discord.messages.send(
-            contents=f"Sorting: `{', '.join(map(str, arr))}`",
+            contents=f"Sorting: `{text()}`",
             response=True
         )
         if not message:
@@ -169,7 +173,7 @@ async def setup(bot: 'BotCore'):
         succeed_count = random.randint(0, counter // 2) if should_succeed else 0
         while arr != sorted_arr:
             await asyncio.sleep(0.5)
-            await message.edit(contents=f"Sorting: `{', '.join(map(str, arr))}`")
+            await message.edit(contents=f"Sorting: `{text()}`")
             counter -= 1
             if should_succeed and counter <= succeed_count:
                 arr = sorted_arr.copy()
@@ -179,10 +183,10 @@ async def setup(bot: 'BotCore'):
                 shuffle_unsorted(arr)
             if counter <= 0:
                 await asyncio.sleep(1.5)
-                await message.edit(contents=f"Sort failed: `{', '.join(map(str, arr))}`")
+                await message.edit(contents=f"Sort failed: `{text()}`")
                 await message.add_reaction("<:unsorted:1495482469128999053>")
                 return
         await asyncio.sleep(1.5)
-        await message.edit(contents=f"Sorted: `{', '.join(map(str, arr))}`")
+        await message.edit(contents=f"Sorted: `{text()}`")
         await message.add_reaction("<:sorted:1495381291162402939>")
         return
