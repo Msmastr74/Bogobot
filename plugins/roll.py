@@ -21,8 +21,8 @@ async def setup(bot: 'BotCore'):
         await bot.discord.messages.send(contents=f"{random.randint(min, max)}", response=True)
     
     @bot.setup.command(name="choice", description="Chooses a random item from a list of items", eph=False, perm_requirement=0)
-    async def choice(interaction: discord.Interaction, choices: str):
-        choices_list = choices.split(",")
+    async def choice(interaction: discord.Interaction, choices: str, delimiter: str = " "):
+        choices_list = choices.split(delimiter)
         if len(choices_list) == 0:
             await bot.discord.messages.send(contents="You must provide at least one choice.", response=True)
             return
@@ -36,10 +36,8 @@ async def setup(bot: 'BotCore'):
     
     @bot.setup.command(name="shuffle", description="shuffles", eph=False, perm_requirement=0)
     async def shuffle(
-        interaction: discord.Interaction, items: str, delimiter: str | None = None
+        interaction: discord.Interaction, items: str, delimiter: str = " "
     ):
-        if delimiter is None:
-            delimiter = " "
         items_list = items.split(delimiter)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         if delimiter != " ":
@@ -48,15 +46,17 @@ async def setup(bot: 'BotCore'):
         await bot.discord.messages.send(contents=f"{output_delimiter.join(items_list)}", response=True)
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", eph=False, perm_requirement=0)
-    async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1):
+    async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1, delimiter: str = " "):
         if length < 1:
             await bot.discord.messages.send(contents=f"Length {length} is invalid.", response=True)
             return
         if max < min:
             await bot.discord.messages.send(contents=f"Max cannot be smaller than min. Did you mean `/randlist {length} {min} {max}`?", response=True)
             return
+        if delimiter != " ":
+            delimiter = f"{delimiter} "
         rand_list = [random.randint(min, max) for _ in range(length)]
-        await bot.discord.messages.send(contents=f"{', '.join(map(str, rand_list))}", response=True)
+        await bot.discord.messages.send(contents=f"{delimiter.join(map(str, rand_list))}", response=True)
 
     @bot.setup.command(name="randfloat", description="Rolls a random float from user specified range", eph=False, perm_requirement=0)
     async def randfloat(interaction: discord.Interaction, max: float, min: float = 0.0):
@@ -69,9 +69,9 @@ async def setup(bot: 'BotCore'):
     async def randbool(interaction: discord.Interaction):
         await bot.discord.messages.send(contents=f"{random.choice([True, False])}", response=True)
 
-    @bot.setup.command(name="bogosort", description="bogosorts a comma-separated list of numbers", eph=False, perm_requirement=0)
+    @bot.setup.command(name="bogosort", description="bogosorts a list of numbers", eph=False, perm_requirement=0)
     async def bogosort(interaction: discord.Interaction, items: str):
-        items_list = items.split(",")
+        items_list = items.split(" ")
         arr: list[float | int] = []
         for item in items_list:
             try:
@@ -106,7 +106,7 @@ async def setup(bot: 'BotCore'):
         await message.add_reaction("<:sorted:1495381291162402939>")
         return
     
-    @bot.setup.command(name="bogosortr", description="bogosorts a comma-separated list of numbers?", eph=False, perm_requirement=0)
+    @bot.setup.command(name="bogosortr", description="bogosorts?", eph=False, perm_requirement=0)
     async def bogosortr(interaction: discord.Interaction, items: str, percent: float):
         if percent < 0 or percent > 100:
             await bot.discord.messages.send(
@@ -115,7 +115,7 @@ async def setup(bot: 'BotCore'):
             )
             return
 
-        items_list = items.split(",")
+        items_list = items.split(" ")
         arr: list[float | int] = []
 
         for item in items_list:
