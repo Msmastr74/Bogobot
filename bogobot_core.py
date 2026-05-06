@@ -17,6 +17,7 @@ import contextvars
 import requests
 import time
 from typing import Any
+from stream import StreamHandler
 
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
     "current_interaction", default=None
@@ -46,6 +47,14 @@ class BotCore(discord.Client):
         self._current_vals_updated: bool = False
         self.stats_cache: dict[str, str] = {}
         self.monitor_message = None
+        
+        self.stream_handler = StreamHandler(
+            url="https://www.youtube.com/live/DgfiqGPmGWY",
+            quality="720p",
+            on_new_frame=self.on_new_frame,
+            fps=1,
+            quiet=True
+        )
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
@@ -101,16 +110,12 @@ class BotCore(discord.Client):
         async def get_stats_all(self):
             return self.outer.stats_cache
     
-    @tasks.loop(seconds=1)
-    async def refresh_ocr_data(self):
-        mtime = os.path.getmtime('live_720p.png')
-        if mtime <= self._last_ocr_mtime:
-            return
-        self._last_ocr_mtime = mtime
-        self._last_ocr_refresh = time.time()
-        with Image.open('live_720p.png') as img:
-            img.load()
-
+    async def on_new_frame(self, img: Image.Image):
+        await self.update_ocr_data(img)
+        img.save("live_720p.png", format="PNG")
+    
+    async def update_ocr_data(self, img: Image.Image):
+        try:
             for name, coords in self.STATS_COORDS.items():
                 filter: str = "0123456789"
                 if len(coords) >= 5:
@@ -145,10 +150,9 @@ class BotCore(discord.Client):
                     coords[2] - self.CELL_OFFSET, coords[3]
                 )
             self.current_vals.reverse()
-
-    @refresh_ocr_data.error
-    async def refresh_ocr_data_error(self, error):
-        print(f"refresh_ocr_data failed with error: {error}")
+            self._last_ocr_refresh = time.time()
+        except Exception as e:
+            print(f"OCR processing error: {e}")
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
@@ -321,8 +325,8 @@ class BotCore(discord.Client):
         with open(self.config_path, 'w') as f:
             json.dump(self.config, f, indent=4)
 
-    async def run_bot(self): 
-        self.refresh_ocr_data.start()
+    async def run_bot(self):
+        self.stream_handler.start()
         await self.start(self.config['bot_token'])
 
     def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=5):
