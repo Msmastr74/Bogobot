@@ -19,7 +19,7 @@ import logging
 
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s',
+    format='[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s\x1b[K',
     datefmt='%d %H:%M:%S'
 )
 logging.captureWarnings(True)
