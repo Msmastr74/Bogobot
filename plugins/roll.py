@@ -84,7 +84,7 @@ async def setup(bot: 'BotCore'):
                 return
         random.shuffle(arr)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
-        def text(): return f"Sorting: `{output_delimiter.join(map(str, arr))}`"
+        def text(): return output_delimiter.join(map(str, arr))
 
         message = await bot.discord.messages.send(
             contents=f"Sorting: `{text()}`", response=True
@@ -133,7 +133,7 @@ async def setup(bot: 'BotCore'):
                 )
                 return
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
-        def text(): return f"Sorting: `{output_delimiter.join(map(str, arr))}`"
+        def text(): return output_delimiter.join(map(str, arr))
 
         should_succeed = random.random() < (percent / 100)
         sorted_arr = sorted(arr)
