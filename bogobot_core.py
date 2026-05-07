@@ -13,8 +13,9 @@ import importlib
 import contextvars
 import requests
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 from stream import StreamHandler
+from channel_proxy import ChannelProxyManager
 import logging
 
 logging.basicConfig(
@@ -28,12 +29,20 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
     "current_interaction", default=None
 )
 
+if TYPE_CHECKING:
+    from plugins.milestones import MilestoneTracker
+
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
-            
+        
+        self.channels_path: str = self.config.get("channels_path", "channels.json")
+        if not os.path.exists(self.channels_path):
+            with open(self.channels_path, 'w') as f:
+                json.dump({}, f)
+        
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
         
@@ -69,8 +78,28 @@ class BotCore(discord.Client):
         self.info = self._Info(self)
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)
-        self._last_ocr_mtime: float = 0.0
         self._last_ocr_refresh: float = 0.0
+        self._last_frame_ms = time.monotonic()
+        
+        with open(self.channels_path, 'r') as f:
+            channel_data: dict[str, Any] = json.load(f)
+        def save_channels(data: dict[str, Any]):
+            with open(self.channels_path, 'w') as f:
+                json.dump(data, f, indent=4)
+        self.channels = ChannelProxyManager(
+            self, channel_data=channel_data,
+            save_channels=save_channels,
+            logger=self.logger.getChild("ChannelProxy")
+        )
+        self._connected = False
+        
+        self.event(self.on_ready)
+        self.on_ready_callbacks = []
+        
+        self.milestones: 'MilestoneTracker | None' = None
+    
+    def init_callback(self, callback: Callable[[], Awaitable[None]]):
+        self.on_ready_callbacks.append(callback)
 
     class _Info:
         def __init__(self, outer: 'BotCore'):
@@ -120,18 +149,20 @@ class BotCore(discord.Client):
         async def get_stats_all(self):
             return self.outer.stats_cache
     
-    ms = 0
     async def on_new_frame(self, img: Image.Image):
-        if self.ms == 0:
-            self.ms = time.monotonic()
-        dt = time.monotonic() - self.ms
-        self.ms = time.monotonic()
+        dt = time.monotonic() - self._last_frame_ms
+        self._last_frame_ms = time.monotonic()
         self.logger.debug(f"New frame received (dt={dt:.2f}s)")
         
         img.save("live_720p.png", format="PNG")
         await self.update_ocr_data(img)
-        dt = time.monotonic() - self.ms
+        dt = time.monotonic() - self._last_frame_ms
         self.logger.debug(f"OCR data updated (dt={dt:.2f}s)")
+        
+        if self.milestones:
+            best_run = self.stats_cache.get("best_run")
+            if best_run:
+                await self.milestones.update(f"best_run={best_run}")
     
     async def update_ocr_data(self, img: Image.Image):
         try:
@@ -343,6 +374,25 @@ class BotCore(discord.Client):
             await self.tree.sync()
             self.config['sync'] = False
             self.save_config()
+    
+    async def on_ready(self):
+        assert self.user is not None
+        self.logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        
+        if self._connected:
+            return # Prevent multiple on_ready calls from causing issues
+        self._connected = True
+
+        try:
+            await self.channels.initialize_channels()
+        except Exception as e:
+            self.logger.warning(f"Failed initializing channel proxies: {e}")
+        
+        for callback in self.on_ready_callbacks:
+            try:
+                await callback()
+            except Exception as e:
+                self.logger.warning(f"Error in on_ready callback: {e}")
 
     async def load_plugins(self, folder_name="plugins"):
         if not os.path.exists(folder_name):

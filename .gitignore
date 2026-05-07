@@ -4,3 +4,4 @@ live_720p.png
 ocr_*.png
 local_config.json
 .DS_Store
+channels.json
