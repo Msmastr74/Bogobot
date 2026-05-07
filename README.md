@@ -32,6 +32,10 @@ Go into config.json and provide the following credentials:
 ```bash
 python main.py
 ```
+
+In your terminal output, you should see this:
+![Example of terminal output](./example_terminal_launch.png)
+
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
