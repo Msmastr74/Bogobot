@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 UNSORTED_EMOJI_ID = 1495482469128999053
 SORTED_EMOJI_ID = 1495381291162402939
 async def setup(bot: 'BotCore'):
+    def split(text: str, delim: str): return list(filter(bool, text.split(delim)))
     @bot.setup.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     async def roll(interaction: discord.Interaction):
         await bot.discord.messages.send(contents=f"{random.randint(1, 100)}", response=True)
@@ -28,7 +29,7 @@ async def setup(bot: 'BotCore'):
     
     @bot.setup.command(name="choice", description="Chooses a random item from a list of items", defer=False, perm_requirement=0)
     async def choice(interaction: discord.Interaction, choices: str, delimiter: str = " "):
-        choices_list = choices.split(delimiter)
+        choices_list = split(choices, delimiter)
         if len(choices_list) == 0:
             await bot.discord.messages.send(contents="You must provide at least one choice.", response=True, ephemeral=True)
             return
@@ -44,7 +45,7 @@ async def setup(bot: 'BotCore'):
     async def shuffle(
         interaction: discord.Interaction, items: str, delimiter: str = " "
     ):
-        items_list = items.split(delimiter)
+        items_list = split(items, delimiter)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         if delimiter != " ":
             items_list = [item.strip() for item in items_list]
@@ -85,7 +86,7 @@ async def setup(bot: 'BotCore'):
 
     @bot.setup.command(name="bogosort", description="bogosorts a list of numbers", defer=False, perm_requirement=0)
     async def bogosort(interaction: discord.Interaction, items: str, delimiter: str = " "):
-        items_list = items.split(delimiter)
+        items_list = split(items, delimiter)
         arr: list[float | int] = []
         for item in items_list:
             try:
@@ -134,7 +135,7 @@ async def setup(bot: 'BotCore'):
             )
             return
 
-        items_list = items.split(delimiter)
+        items_list = split(items, delimiter)
         arr: list[float | int] = []
 
         for item in items_list:
