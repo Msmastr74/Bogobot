@@ -11,6 +11,7 @@ Configuration is managed via `config.json`. Key fields include:
 - `authorized_users`: A list of user IDs with elevated permissions.
 - `sync`: Whether to sync the command tree on the next run. This parameter is automatically reset to false each run.
 - `ocr_debug`: Enable/disable saving ocr debug images.
+- `debug`: Enable/disable debug logging (loglevel).
 
 ## Info Subclass
 The `info` subclass handles data extraction from the livestream using a combination of OCR and API requests.

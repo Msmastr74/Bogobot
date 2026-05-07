@@ -12,9 +12,8 @@ The only thing required is Python 3.10+. Everything else is installed in the dep
    ```bash
    git clone https://github.com/Msmastr74/Bogobot
    cd Bogobot
-   
    ```
- 2. Run the dependency script for your environment:
+2. Run the dependency script for your environment:
    ```bash
    bash dependencies_android.sh   # For Android/Termux
    # OR
@@ -29,16 +28,9 @@ Go into config.json and provide the following credentials:
  * owner_username: Your username
 
 ## Execution
-The bot requires two concurrent processes: one to pipe the stream data to a local file and another to run the bot core.
-### Terminal 1: Stream Pipe
-```bash
-streamlink "https://www.youtube.com/live/DgfiqGPmGWY" 720p --stdout | ffmpeg -re -i pipe:0 -vf "fps=1" -update 1 -y live_720p.png
-
-```
-### Terminal 2: Bot Core
+### Terminal 1: Bot Core
 ```bash
 python main.py
-
 ```
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
