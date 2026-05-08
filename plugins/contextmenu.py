@@ -23,20 +23,26 @@ async def setup(bot: "BotCore"):
             if not text:
                 return text
 
-            chars = [c for c in text if not c.isspace()]
-            random.shuffle(chars)
+            def scramble_line(line: str) -> str:
+                chars = [c for c in line if not c.isspace()]
+                random.shuffle(chars)
 
-            scrambled = []
-            index = 0
+                scrambled = []
+                index = 0
 
-            for char in text:
-                if char.isspace():
-                    scrambled.append(char)
-                else:
-                    scrambled.append(chars[index])
-                    index += 1
+                for char in line:
+                    if char.isspace():
+                        scrambled.append(char)
+                    else:
+                        scrambled.append(chars[index])
+                        index += 1
 
-            return "".join(scrambled)
+                return "".join(scrambled)
+
+            return "".join(
+                scramble_line(line)
+                for line in text.splitlines(keepends=True)
+            )
 
         def scramble_embed(embed: discord.Embed) -> discord.Embed:
             data = embed.to_dict()
