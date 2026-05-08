@@ -221,7 +221,7 @@ async def setup(bot: "BotCore"):
         channel_id = interaction.channel_id
 
         if channel_id is None:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "Could not determine this channel.",
                 response=True,
             )
@@ -235,7 +235,7 @@ async def setup(bot: "BotCore"):
         )
 
         if proxy is None:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "I cannot access this channel.",
                 response=True,
             )
@@ -267,7 +267,7 @@ async def setup(bot: "BotCore"):
         if message is None:
             await remove_monitor_channel(channel_id)
 
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "Failed to create monitor message.",
                 response=True,
             )
@@ -276,7 +276,7 @@ async def setup(bot: "BotCore"):
         monitor_messages[channel_id_str] = message.id
         save_monitor_messages(monitor_messages)
 
-        await bot.discord.messages.send(
+        await bot.discord.send(
             "Monitor system online in this channel.",
             response=True,
         )
@@ -291,7 +291,7 @@ async def setup(bot: "BotCore"):
         channel_id = interaction.channel_id
 
         if channel_id is None:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "Could not determine this channel.",
                 response=True,
             )
@@ -301,7 +301,7 @@ async def setup(bot: "BotCore"):
         message_id = monitor_messages.pop(channel_id_str, None)
 
         if message_id is None:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "Monitor is not currently running in this channel.",
                 response=True,
             )
@@ -320,7 +320,7 @@ async def setup(bot: "BotCore"):
         # Remove channel usage after delete is queued.
         await remove_monitor_channel(channel_id)
 
-        await bot.discord.messages.send(
+        await bot.discord.send(
             "Monitor stopped in this channel.",
             response=True,
         )

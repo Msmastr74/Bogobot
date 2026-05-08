@@ -20,7 +20,7 @@ async def setup(bot: 'BotCore'):
         
 
         # Send the base embed
-        embed = await bot.discord.embeds.send(
+        embed = await bot.discord.send_embed(
             contents=f"Fetched at: <t:{int(round(time.time()))}:T>\nUpdated at: <t:{int(round(bot._last_ocr_refresh))}:T>",
             title="Current Bogosort Statistics",
             color=discord.Color.green(), response=True
@@ -28,9 +28,9 @@ async def setup(bot: 'BotCore'):
         assert embed is not None
         
         # Rapid-fire the fields 
-        await embed.edit(contents=f"{shuffles}", title="Shuffles", add_field=True)
-        await embed.edit(contents=f"{comparisons}", title="Comparisons", add_field=True)
-        await embed.edit(contents=f"{best_run}", title="Best Run", add_field=True)
-        await embed.edit(contents=f"{shuffles_min}", title="Shuffles Per Second", add_field=True)
-        await embed.edit(contents=f"{average_best_shuffle}", title="Average Best Shuffle", add_field=True)
-        await embed.edit(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)
+        await embed.edit_embed(contents=f"{shuffles}", title="Shuffles", add_field=True)
+        await embed.edit_embed(contents=f"{comparisons}", title="Comparisons", add_field=True)
+        await embed.edit_embed(contents=f"{best_run}", title="Best Run", add_field=True)
+        await embed.edit_embed(contents=f"{shuffles_min}", title="Shuffles Per Second", add_field=True)
+        await embed.edit_embed(contents=f"{average_best_shuffle}", title="Average Best Shuffle", add_field=True)
+        await embed.edit_embed(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)

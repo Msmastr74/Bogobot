@@ -13,7 +13,7 @@ import importlib
 import contextvars
 import requests
 import time
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Literal, Coroutine, ParamSpec, Sequence, TypeVar, overload
 from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
 import logging
@@ -207,146 +207,47 @@ class BotCore(discord.Client):
     class _Discord:
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
-            self.embeds = self._Embeds(outer)
-            self.messages = self._Messages(outer)
 
-        class _Messages:
-            def __init__(self, outer: "BotCore"):
-                self.outer = outer
+        async def send(
+            self,
+            contents=None,
+            *,
+            response=False,
+            ephemeral=False,
+            **kwargs,
+        ):
+            if contents is not None and "content" not in kwargs:
+                kwargs["content"] = contents
 
-            async def send(self, contents, response=False, ephemeral=False):
-                interaction = current_interaction.get()
+            message = await self._send(
+                response=response,
+                ephemeral=ephemeral,
+                **kwargs,
+            )
+            if message is None:
+                return None
+            
+            return self.MessageHandle(
+                self.outer,
+                message,
+                content=kwargs.get("content"),
+                embed=kwargs.get("embed"),
+            )
 
-                message: discord.Message | None = None
-                if response and interaction:
-                    if interaction.response.is_done():
-                        message = await interaction.followup.send(contents, wait=True, ephemeral=ephemeral)
-                    else:
-                        await interaction.response.send_message(contents, ephemeral=ephemeral)
-                        message = await interaction.original_response()
-                elif interaction and hasattr(interaction.channel, 'send'):
-                    message = await interaction.channel.send(contents) # pyright: ignore
-                if message is None:
-                    return None
-
-                return self.MessageHandle(self.outer, message)
-
-            class MessageHandle:
-                def __init__(self, outer: "BotCore", message: discord.Message):
-                    self.outer = outer
-                    self.message: discord.Message | None = message
-
-                @property
-                def exists(self) -> bool:
-                    return self.message is not None
-
-                async def edit(self, contents):
-                    if not self.message:
-                        return
-
-                    try:
-                        await self.message.edit(content=contents)
-                    except discord.NotFound:
-                        self.message = None
-
-                async def delete(self):
-                    if not self.message:
-                        return
-
-                    try:
-                        await self.message.delete()
-                    except (discord.NotFound, discord.Forbidden):
-                        pass
-                    finally:
-                        self.message = None
-                        
-                async def add_reaction(self, emoji_data: int | discord.Emoji):
-                    if not self.message:
-                        return
-
-                    emoji = self.outer.get_emoji(emoji_data) if isinstance(emoji_data, int) else emoji_data
-                    if not emoji:
-                        self.outer.logger.warning(f"Emoji with ID {emoji_data} not found.")
-                        return
-                    try:
-                        await self.message.add_reaction(emoji)
-                    except discord.NotFound:
-                        self.message = None
-                    except discord.Forbidden:
-                        pass
-
-        class _Embeds:
-            def __init__(self, outer: "BotCore"):
-                self.outer = outer
-
-            class EmbedHandle:
-                def __init__(self, message: discord.Message, embed: discord.Embed):
-                    self.message: discord.Message | None = message
-                    self.embed: discord.Embed = embed
-                
-                @property
-                def message_id(self):
-                    return self.message.id if self.message else None
-
-                async def edit(self, contents=None, title=None, footer=None, author=None, color=None, add_field=False):
-                    if not self.message:
-                        return
-
-                    old = self.embed
-
-                    if add_field:
-                        new_embed = discord.Embed.from_dict(old.to_dict())
-                        new_embed.add_field(
-                            name=title or "Info",
-                            value=contents or "N/A",
-                            inline=False,
-                        )
-                    else:
-                        new_embed = discord.Embed(
-                            title=title or old.title,
-                            description=contents or old.description,
-                            color=color or old.color,
-                        )
-
-                        for field in old.fields:
-                            new_embed.add_field(
-                                name=field.name,
-                                value=field.value,
-                                inline=field.inline,
-                            )
-
-                    current_author = old.author.name if old.author else ""
-                    new_embed.set_author(name=author or current_author)
-                    current_footer = old.footer.text if old.footer else ""
-                    new_embed.set_footer(text=footer or current_footer)
-
-                    self.embed = new_embed
-
-                    try:
-                        await self.message.edit(embed=new_embed)
-                    except discord.NotFound:
-                        self.message = None
-
-                async def delete(self):
-                    if self.message:
-                        try:
-                            await self.message.delete()
-                        except discord.NotFound:
-                            pass
-                        finally:
-                            self.message = None
-            async def send(
-                self,
-                contents,
-                title="embed",
-                footer="",
-                author="Bogobot",
-                color=discord.Color.blue(),
-                response=False,
-                ephemeral=False
-            ):
-                interaction = current_interaction.get()
-
+        async def send_embed(
+            self,
+            contents=None,
+            *,
+            embed: discord.Embed | None = None,
+            title="embed",
+            footer="",
+            author="Bogobot",
+            color=discord.Color.blue(),
+            response=False,
+            ephemeral=False,
+            **kwargs,
+        ):
+            if embed is None:
                 embed = discord.Embed(
                     title=title,
                     description=contents,
@@ -355,19 +256,165 @@ class BotCore(discord.Client):
                 embed.set_footer(text=footer)
                 embed.set_author(name=author)
 
-                message: discord.Message | None = None
-                if response and interaction:
-                    if interaction.response.is_done():
-                        message = await interaction.followup.send(embed=embed, wait=True, ephemeral=ephemeral)
-                    else:
-                        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
-                        message = await interaction.original_response()
-                elif interaction and hasattr(interaction.channel, 'send'):
-                    message = await interaction.channel.send(embed=embed) # pyright: ignore
-                if message is None:
-                    return None
-                
-                return self.EmbedHandle(message, embed)
+            message = await self._send(
+                response=response,
+                ephemeral=ephemeral,
+                embed=embed,
+                **kwargs,
+            )
+            if message is None:
+                return None
+            
+            return self.MessageHandle(self.outer, message, content=kwargs.get("content"), embed=embed)
+
+        async def _send(
+            self,
+            response=False,
+            ephemeral=False,
+            **kwargs,
+        ):
+            interaction = current_interaction.get()
+
+            if response and interaction:
+                if interaction.response.is_done():
+                    return await interaction.followup.send(wait=True, ephemeral=ephemeral, **kwargs)
+
+                await interaction.response.send_message(ephemeral=ephemeral, **kwargs)
+                return await interaction.original_response()
+
+            if interaction and hasattr(interaction.channel, 'send'):
+                return await interaction.channel.send(**kwargs) # pyright: ignore
+
+            return None
+
+        class MessageHandle:
+            def __init__(
+                self,
+                outer: "BotCore",
+                message: discord.Message,
+                content=None,
+                embed: discord.Embed | None = None,
+            ):
+                self.outer = outer
+                self.message: discord.Message | None = message
+                self.content = content
+                self.embed = embed
+
+            @property
+            def exists(self) -> bool:
+                return self.message is not None
+            
+            @property
+            def message_id(self):
+                return self.message.id if self.message else None
+
+            async def edit(self, contents=None, **kwargs):
+                if not self.message:
+                    return
+
+                if self.embed is not None and any(
+                    key in kwargs for key in ("title", "footer", "author", "color", "add_field")
+                ):
+                    await self.edit_embed(contents, **kwargs)
+                    return
+
+                if contents is not None and "content" not in kwargs:
+                    kwargs["content"] = contents
+
+                try:
+                    self.content = kwargs.get("content", self.content)
+                    if isinstance(kwargs.get("embed"), discord.Embed):
+                        self.embed = kwargs["embed"]
+                    await self.message.edit(**kwargs)
+                except discord.NotFound:
+                    self.message = None
+
+            async def edit_embed(
+                self,
+                contents=None,
+                *,
+                embed: discord.Embed | None = None,
+                title=None,
+                footer=None,
+                author=None,
+                color=None,
+                add_field=False,
+                **kwargs,
+            ):
+                if not self.message:
+                    return
+
+                new_embed = embed or self._updated_embed(
+                    contents=contents,
+                    title=title,
+                    footer=footer,
+                    author=author,
+                    color=color,
+                    add_field=add_field,
+                )
+
+                try:
+                    self.embed = new_embed
+                    await self.message.edit(embed=new_embed, **kwargs)
+                except discord.NotFound:
+                    self.message = None
+
+            def _updated_embed(self, contents=None, title=None, footer=None, author=None, color=None, add_field=False):
+                old = self.embed or discord.Embed()
+
+                if add_field:
+                    new_embed = discord.Embed.from_dict(old.to_dict())
+                    new_embed.add_field(
+                        name=title or "Info",
+                        value=contents or "N/A",
+                        inline=False,
+                    )
+                else:
+                    new_embed = discord.Embed(
+                        title=title or old.title,
+                        description=contents or old.description,
+                        color=color or old.color,
+                    )
+
+                    for field in old.fields:
+                        new_embed.add_field(
+                            name=field.name,
+                            value=field.value,
+                            inline=field.inline,
+                        )
+
+                current_author = old.author.name if old.author else ""
+                new_embed.set_author(name=author or current_author)
+                current_footer = old.footer.text if old.footer else ""
+                new_embed.set_footer(text=footer or current_footer)
+
+                return new_embed
+
+            async def delete(self):
+                if not self.message:
+                    return
+
+                try:
+                    await self.message.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+                finally:
+                    self.message = None
+            
+            async def add_reaction(self, emoji_data: int | discord.Emoji):
+                if not self.message:
+                    return
+
+                emoji = self.outer.get_emoji(emoji_data) if isinstance(emoji_data, int) else emoji_data
+                if not emoji:
+                    self.outer.logger.warning(f"Emoji with ID {emoji_data} not found.")
+                    return
+                try:
+                    await self.message.add_reaction(emoji)
+                except discord.NotFound:
+                    self.message = None
+                except discord.Forbidden:
+                    pass
 
     async def setup_hook(self):
         if self.config.get('sync', True):
@@ -608,9 +655,41 @@ class BotCore(discord.Client):
     class _Setup:
         def __init__(self, outer: 'BotCore'): self.outer = outer
 
-        def command(self, name, description="No description", perm_requirement=1, eph=True, defer=True):
+        T = TypeVar('T')
+        P = ParamSpec('P')
+        @overload
+        def command(
+            self, name: str, *, description="No description", perm_requirement=1,
+            eph=True, defer=True, mode: Literal['command'] = 'command'
+        ) -> Callable[[
+                Callable[Concatenate['discord.Interaction', P], Coroutine[Any, Any, T]] |
+                Callable[Concatenate[discord.app_commands.Group, 'discord.Interaction', P],
+                         Coroutine[Any, Any, T]]
+            ], discord.app_commands.Command[discord.app_commands.Group, P, T]]:...
+        @overload
+        def command(
+            self, name: str, *, perm_requirement=1,
+            eph=True, defer=True, mode: Literal['context_menu']
+        ) -> Callable[[
+                Callable[['discord.Interaction', discord.Member], Coroutine[Any, Any, T]] |
+                Callable[['discord.Interaction', discord.User], Coroutine[Any, Any, T]] |
+                Callable[['discord.Interaction', discord.Message], Coroutine[Any, Any, T]] |
+                Callable[['discord.Interaction', discord.Member | discord.User],
+                         Coroutine[Any, Any, T]]
+            ], discord.app_commands.ContextMenu]:...
+        def command(
+            self, name: str, *, description="No description", perm_requirement=1,
+            eph=True, defer=True, mode: Literal['command', 'context_menu'] = 'command'
+        ) -> Callable[[
+                Callable[..., Coroutine[Any, Any, Any]]
+            ], Any]:
             def decorator(func):
-                @self.outer.tree.command(name=name, description=description)
+                if mode == 'command':
+                    dec = self.outer.tree.command(name=name, description=description)
+                elif mode == 'context_menu':
+                    dec = self.outer.tree.context_menu(name=name)
+                
+                @dec
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
                     token = current_interaction.set(interaction)

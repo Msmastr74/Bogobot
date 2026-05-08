@@ -284,7 +284,7 @@ async def setup(bot: "BotCore"):
         channel_id = interaction.channel_id
 
         if channel_id is None:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "Could not determine this channel.",
                 response=True,
             )
@@ -293,13 +293,13 @@ async def setup(bot: "BotCore"):
         subscribed = await milestones.subscribe(channel_id)
 
         if not subscribed:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "I cannot access this channel.",
                 response=True,
             )
             return
 
-        await bot.discord.messages.send(
+        await bot.discord.send(
             "This channel is now subscribed to milestone notifications.",
             response=True,
         )
@@ -312,7 +312,7 @@ async def setup(bot: "BotCore"):
         channel_id = interaction.channel_id
 
         if channel_id is None:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "Could not determine this channel.",
                 response=True,
             )
@@ -321,13 +321,13 @@ async def setup(bot: "BotCore"):
         unsubscribed = await milestones.unsubscribe(channel_id)
 
         if not unsubscribed:
-            await bot.discord.messages.send(
+            await bot.discord.send(
                 "This channel is not subscribed to milestone notifications.",
                 response=True,
             )
             return
 
-        await bot.discord.messages.send(
+        await bot.discord.send(
             "This channel is no longer subscribed to milestone notifications.",
             response=True,
         )

@@ -65,10 +65,10 @@ async def setup(bot: 'BotCore'):
         raw_lb = await fetch_leaderboard()
         rows = format_leaderboard(rows=raw_lb, limit=10)
         
-        embed = await bot.discord.embeds.send(contents="Top players ranked by elo", title="Leaderboard", footer="Data from swapjs.dev", color=discord.Color.gold(), response=True)
+        embed = await bot.discord.send_embed(contents="Top players ranked by elo", title="Leaderboard", footer="Data from swapjs.dev", color=discord.Color.gold(), response=True)
         assert embed is not None
 
         if not rows:
-            await embed.edit(contents="No data available")
+            await embed.edit_embed(contents="No data available")
         else:
-            await embed.edit(contents=f"{rows}")
+            await embed.edit_embed(contents=f"{rows}")
