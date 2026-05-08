@@ -6,7 +6,6 @@ if TYPE_CHECKING:
     from logging import Logger
 
 import discord
-import aiohttp
 
 
 OperationKind = Literal["send", "edit", "delete"]
@@ -42,21 +41,15 @@ class ChannelProxy:
 
     def __init__(
         self,
-        bot: discord.Client,
         channel: 'discord.abc.PartialMessageableChannel',
         *,
         logger: Any | None = None,
         min_interval: float = 0.15,
-        max_retries: int = 3,
-        retry_base_delay: float = 0.75,
     ):
-        self.bot = bot
         self.channel = channel
         self.channel_id = channel.id  # pyright: ignore[reportAttributeAccessIssue]
         self.logger = logger
         self.min_interval = min_interval
-        self.max_retries = max_retries
-        self.retry_base_delay = retry_base_delay
 
         self._queue: asyncio.Queue[QueuedOperation] = asyncio.Queue()
         self._pending_edits: dict[int, QueuedOperation] = {}
@@ -167,7 +160,7 @@ class ChannelProxy:
                 if op.cancelled:
                     continue
 
-                result = await self._run_operation_with_retries(op)
+                result = await self._run_operation(op)
 
                 if op.future is not None and not op.future.done():
                     op.future.set_result(result)
@@ -187,10 +180,7 @@ class ChannelProxy:
 
             except Exception as exc:
                 if op.future is not None and not op.future.done():
-                    if self._is_transient_error(exc):
-                        op.future.set_result(None)
-                    else:
-                        op.future.set_exception(exc)
+                    op.future.set_exception(exc)
                 elif self.logger is not None:
                     self.logger.warning(
                         f"ChannelProxy operation failed for {self.channel_id}: {op.kind}",
@@ -206,76 +196,6 @@ class ChannelProxy:
 
                 if self.min_interval > 0:
                     await asyncio.sleep(self.min_interval)
-
-    async def _run_operation_with_retries(self, op: QueuedOperation) -> Any:
-        attempt = 0
-
-        while True:
-            if not await self._wait_for_bot_ready():
-                return None
-
-            try:
-                return await self._run_operation(op)
-            except Exception as exc:
-                if self._is_transient_error(exc) and not await self._wait_for_bot_ready():
-                    return None
-
-                if not self._should_retry(op, exc, attempt):
-                    raise
-
-                attempt += 1
-                delay = self.retry_base_delay * (2 ** (attempt - 1))
-
-                if self.logger is not None:
-                    self.logger.warning(
-                        f"Transient ChannelProxy failure for {self.channel_id}: "
-                        f"{op.kind}; retrying in {delay:.2f}s "
-                        f"({attempt}/{self.max_retries})",
-                        exc_info=exc,
-                    )
-
-                await asyncio.sleep(delay)
-
-                if op.cancelled:
-                    return None
-
-    async def _wait_for_bot_ready(self) -> bool:
-        if self.bot.is_closed():
-            return False
-
-        if self.bot.is_ready():
-            return True
-
-        await self.bot.wait_until_ready()
-        return not self.bot.is_closed()
-
-    def _should_retry(
-        self,
-        op: QueuedOperation,
-        exc: Exception,
-        attempt: int,
-    ) -> bool:
-        if op.cancelled:
-            return False
-
-        if attempt >= self.max_retries:
-            return False
-
-        if op.kind == "send":
-            return False
-
-        return self._is_transient_error(exc)
-
-    @staticmethod
-    def _is_transient_error(exc: Exception) -> bool:
-        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)):
-            return True
-
-        if isinstance(exc, discord.HTTPException):
-            status = getattr(exc, "status", None)
-            return status is not None and 500 <= status < 600
-
-        return False
 
     async def _run_operation(self, op: QueuedOperation) -> Any:
         if op.kind == "send":
@@ -407,7 +327,6 @@ class ChannelProxyManager:
             channel = cast('discord.abc.PartialMessageableChannel', channel)
 
             proxy = ChannelProxy(
-                self.bot,
                 channel,
                 logger=self.logger,
             )
@@ -457,7 +376,6 @@ class ChannelProxyManager:
 
         if proxy is None:
             proxy = ChannelProxy(
-                self.bot,
                 channel,
                 logger=self.logger,
             )

@@ -11,7 +11,7 @@ import functools
 import asyncio
 import importlib
 import contextvars
-import requests
+import aiohttp
 import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Literal, Coroutine, ParamSpec, Sequence, TypeVar, overload
 from stream import StreamHandler
@@ -131,14 +131,15 @@ class BotCore(discord.Client):
             }
             
             try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: requests.post(url, json=payload, timeout=10)
-                )
-                data = response.json()
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload) as response:
+                        response.raise_for_status()
+                        data = await response.json()
                 raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
                 
                 return self.format_to_ddhhmmss(raw_seconds)
-            except (KeyError, requests.RequestException):
+            except (KeyError, aiohttp.ClientError, asyncio.TimeoutError):
                 return "00:00:00:00"
 
         async def get_best_shuffles(self):
@@ -189,7 +190,7 @@ class BotCore(discord.Client):
             self.current_vals = []
             self._current_vals_updated = True
             coords = self.CELL_COORDS
-            for _ in range(3): # last 3 cells
+            for _ in range(4): # last 4 cells
                 cell_crop = img.crop(coords)
                 output, conf = await self.tesseract_parse(
                     cell_crop, "0123456789"
