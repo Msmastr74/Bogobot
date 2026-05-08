@@ -257,7 +257,7 @@ class ChannelProxyManager:
         *,
         channel_data: dict[str, Any],
         save_channels: Callable[[dict[str, Any]], None],
-        logger: Logger | None = None,
+        logger: 'Logger | None' = None,
     ):
         self.bot = bot
         self.channel_data = channel_data
