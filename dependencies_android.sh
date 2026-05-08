@@ -15,4 +15,4 @@ pkg install opencv-python
 
 # Install Python libraries
 # Pillow may require a moment to compile on mobile devices
-pip install discord.py numpy Pillow requests streamlink
+pip install discord.py numpy Pillow aiohttp streamlink

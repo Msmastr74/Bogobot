@@ -7,7 +7,7 @@ winget install -e --id UB-Mannheim.TesseractOCR
 winget install -e --id gyan.ffmpeg
 
 # Install Python libraries
-pip install discord.py numpy Pillow requests streamlink opencv-python
+pip install discord.py numpy Pillow aiohttp streamlink opencv-python
 
 # Note: Manual verification of PATH environment variables for 
 # Tesseract and FFmpeg is recommended after installation.
