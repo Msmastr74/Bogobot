@@ -132,7 +132,7 @@ class StreamHandler:
 
     def _run_once(self) -> None:
         streamlink = subprocess.Popen(
-            ["streamlink", self.url, self.quality, "--stdout"],
+            ["streamlink", self.url, self.quality, "--stdout", "--loglevel", "error" if self.quiet else "info"],
             stdout=subprocess.PIPE
         )
 
@@ -155,7 +155,7 @@ class StreamHandler:
             stdout=subprocess.PIPE
         )
 
-        self._procs = [ffmpeg, streamlink]
+        self._procs = [streamlink, ffmpeg]
         streamlink.stdout.close()
 
         if ffmpeg.stdout is None:

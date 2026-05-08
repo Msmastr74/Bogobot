@@ -48,6 +48,9 @@ class BotCore(discord.Client):
         
         self.CELL_COORDS = (1170, 665, 1195, 685)
         self.CELL_OFFSET = 37 # x offset per historical cell
+        self.SORT_AREA_COORDS = (75, 60, 1205, 575)
+        self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.05)
+        self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 2)))
         self.STATS_COORDS: dict[str, tuple[int, int, int, int] | tuple[int, int, int, int, str]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
@@ -59,6 +62,7 @@ class BotCore(discord.Client):
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
         self._current_vals_updated: bool = False
+        self._last_sort_signature: np.ndarray | None = None
         self.stats_cache: dict[str, str] = {}
         self.monitor_message = None
         
@@ -67,8 +71,9 @@ class BotCore(discord.Client):
             url="https://www.youtube.com/live/DgfiqGPmGWY",
             quality="720p",
             on_new_frame=self.on_new_frame,
-            fps=1,
-            quiet=not self.debug
+            fps=1.5,
+            quiet=self.config.get(
+                "silence_stream", False) or not self.debug
         )
         
         self.logger = logging.getLogger("Bogobot")
@@ -156,7 +161,8 @@ class BotCore(discord.Client):
         self.logger.debug(f"New frame received (dt={dt:.2f}s)")
         
         img.save("live_720p.png", format="PNG")
-        await self.update_ocr_data(img)
+        sort_changed = self._sort_visual_changed(img)
+        await self.update_ocr_data(img, sort_changed=sort_changed)
         dt = time.monotonic() - self._last_frame_ms
         self.logger.debug(f"OCR data updated (dt={dt:.2f}s)")
         
@@ -165,41 +171,87 @@ class BotCore(discord.Client):
             if best_run:
                 await self.milestones.update(f"best_run={best_run}")
     
-    async def update_ocr_data(self, img: Image.Image):
+    def _sort_visual_changed(self, img: Image.Image) -> bool:
+        crop = img.crop(self.SORT_AREA_COORDS).convert("RGB")
+        rgb = np.array(crop)
+        small = cv2.resize(rgb, (160, 72), interpolation=cv2.INTER_AREA).astype(np.int16)
+
+        red = (
+            (small[:, :, 0] > small[:, :, 1] + 25) &
+            (small[:, :, 0] > small[:, :, 2] + 25) &
+            (small[:, :, 0] > 80)
+        )
+        green = (
+            (small[:, :, 1] > small[:, :, 0] + 15) &
+            (small[:, :, 1] > small[:, :, 2] + 15) &
+            (small[:, :, 1] > 80)
+        )
+
+        signature = np.zeros(small.shape[:2], dtype=np.uint8)
+        signature[red] = 1
+        signature[green] = 2
+
+        if self._last_sort_signature is None:
+            self._last_sort_signature = signature
+            return True
+
+        changed_ratio = np.count_nonzero(signature != self._last_sort_signature) / signature.size
+        self._last_sort_signature = signature
+
+        changed = changed_ratio >= self.SORT_CHANGE_THRESHOLD
+        self.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
+        return changed.item()
+    
+    async def update_ocr_data(self, img: Image.Image, *, sort_changed: bool = True):
         try:
-            for name, coords in self.STATS_COORDS.items():
-                filter: str = "0123456789"
-                if len(coords) >= 5:
-                    filter = coords[4]
-                    coords = coords[:4]
-                stat_crop = img.crop(coords)
-                
-                if filter != "0123456789":
-                    text, conf = await self.tesseract_parse(
-                        stat_crop, filter
+            semaphore = asyncio.Semaphore(self.OCR_CONCURRENCY)
+
+            async def parse_crop(coords, whitelist: str):
+                async with semaphore:
+                    return await self.tesseract_parse(
+                        img.crop(coords),
+                        whitelist,
                     )
-                    if text and conf >= 0:
-                        self.stats_cache[name] = text
+
+            stats_tasks = []
+            stats_specs = []
+
+            for name, coords in self.STATS_COORDS.items():
+                whitelist = "0123456789"
+                if len(coords) >= 5:
+                    whitelist = coords[4]
+                    coords = coords[:4]
+
+                stats_specs.append((name, whitelist))
+                stats_tasks.append(parse_crop(coords, whitelist))
+
+            stats_results = await asyncio.gather(*stats_tasks)
+
+            for (name, whitelist), (text, conf) in zip(stats_specs, stats_results):
+                if not text or conf < 0:
+                    continue
+
+                if whitelist != "0123456789":
+                    self.stats_cache[name] = text
                 else:
-                    digits, conf = await self.tesseract_parse(
-                        stat_crop, "0123456789"
-                    ) 
-                    if digits and conf >= 0:
-                        self.stats_cache[name] = f"{int(digits):,}"
+                    self.stats_cache[name] = f"{int(text):,}"
             
+            if not sort_changed:
+                self._last_ocr_refresh = time.time()
+                return
+
             self.current_vals = []
             self._current_vals_updated = True
             coords = self.CELL_COORDS
+            cell_tasks = []
             for _ in range(4): # last 4 cells
-                cell_crop = img.crop(coords)
-                output, conf = await self.tesseract_parse(
-                    cell_crop, "0123456789"
-                )
-                self.current_vals.append((output, conf))
+                cell_tasks.append(parse_crop(coords, "0123456789"))
                 coords = (
                     coords[0] - self.CELL_OFFSET, coords[1],
                     coords[2] - self.CELL_OFFSET, coords[3]
                 )
+
+            self.current_vals = await asyncio.gather(*cell_tasks)
             self.current_vals.reverse()
             self._last_ocr_refresh = time.time()
         except Exception as e:
