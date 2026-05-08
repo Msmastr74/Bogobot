@@ -8,10 +8,9 @@ if TYPE_CHECKING:
     from main import BotCore
 
 async def setup(bot: "BotCore"):
-    @bot.setup.command(
+    @bot.setup.context_menu(
         name="Bogoscramble",
         perm_requirement=0,
-        mode="context_menu",
         eph=False
     )
     async def bogoscramble(ctx, message: discord.Message):

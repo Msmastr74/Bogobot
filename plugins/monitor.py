@@ -214,6 +214,7 @@ async def setup(bot: "BotCore"):
     @bot.setup.command(
         name="monitor",
         description="Begins monitoring sorted number counts from the stream in this channel",
+        group="manage"
     )
     async def monitor(interaction: discord.Interaction):
         monitor_messages = get_monitor_messages()
@@ -282,8 +283,9 @@ async def setup(bot: "BotCore"):
         )
 
     @bot.setup.command(
-        name="stop",
+        name="stop_monitor",
         description="Stops the stream monitor in this channel",
+        group="manage"
     )
     async def stop_monitor(interaction: discord.Interaction):
         monitor_messages = get_monitor_messages()

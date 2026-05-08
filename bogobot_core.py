@@ -13,7 +13,7 @@ import importlib
 import contextvars
 import aiohttp
 import time
-from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Literal, Coroutine, ParamSpec, Sequence, TypeVar, overload
+from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, overload
 from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
 import logging
@@ -707,70 +707,146 @@ class BotCore(discord.Client):
             f.write(image_data)
 
     class _Setup:
-        def __init__(self, outer: 'BotCore'): self.outer = outer
+        def __init__(self, outer: 'BotCore'):
+            self.outer = outer
+            self.groups: dict[str, discord.app_commands.Group] = {}
 
         T = TypeVar('T')
         P = ParamSpec('P')
+
         @overload
         def command(
             self, name: str, *, description="No description", perm_requirement=1,
-            eph=True, defer=True, mode: Literal['command'] = 'command'
+            eph=True, defer=True, group: None = None, group_description="No description"
         ) -> Callable[[
-                Callable[Concatenate['discord.Interaction', P], Coroutine[Any, Any, T]] |
-                Callable[Concatenate[discord.app_commands.Group, 'discord.Interaction', P],
+                Callable[Concatenate[discord.Interaction, P], Coroutine[Any, Any, T]]
+            ], discord.app_commands.Command[discord.app_commands.Group, P, T]]:...
+
+        @overload
+        def command(
+            self, name: str, *, description="No description", perm_requirement=1,
+            eph=True, defer=True, group: str | discord.app_commands.Group,
+            group_description="No description"
+        ) -> Callable[[
+                Callable[Concatenate[discord.Interaction, P], Coroutine[Any, Any, T]] |
+                Callable[Concatenate[discord.app_commands.Group, discord.Interaction, P],
                          Coroutine[Any, Any, T]]
             ], discord.app_commands.Command[discord.app_commands.Group, P, T]]:...
-        @overload
-        def command(
-            self, name: str, *, perm_requirement=1,
-            eph=True, defer=True, mode: Literal['context_menu']
-        ) -> Callable[[
-                Callable[['discord.Interaction', discord.Member], Coroutine[Any, Any, T]] |
-                Callable[['discord.Interaction', discord.User], Coroutine[Any, Any, T]] |
-                Callable[['discord.Interaction', discord.Message], Coroutine[Any, Any, T]] |
-                Callable[['discord.Interaction', discord.Member | discord.User],
-                         Coroutine[Any, Any, T]]
-            ], discord.app_commands.ContextMenu]:...
+
         def command(
             self, name: str, *, description="No description", perm_requirement=1,
-            eph=True, defer=True, mode: Literal['command', 'context_menu'] = 'command'
+            eph=True, defer=True, group: str | discord.app_commands.Group | None = None,
+            group_description="No description"
         ) -> Callable[[
                 Callable[..., Coroutine[Any, Any, Any]]
             ], Any]:
             def decorator(func):
-                if mode == 'command':
+                target = self._get_group(group, group_description)
+                if target is None:
                     dec = self.outer.tree.command(name=name, description=description)
-                elif mode == 'context_menu':
-                    dec = self.outer.tree.context_menu(name=name)
+                else:
+                    dec = target.command(name=name, description=description)
                 
                 @dec
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-                    token = current_interaction.set(interaction)
-                    uid = interaction.user.id
-                    owner_id = self.outer.config.get("owner_uid")
-                    auth_list = self.outer.config.get("authorized_users", [])
-                    
-                    allowed = False
-                    if perm_requirement == 0: 
-                        allowed = True
-                    elif perm_requirement == 2 and uid == owner_id: 
-                        allowed = True
-                    elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): 
-                        allowed = True
-
-                    try:
-                        if not allowed:
-                            return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
-                        if defer:
-                            await interaction.response.defer(ephemeral=(eph))
-                        await func(interaction, *args, **kwargs)
-                    except Exception as e:
-                        if interaction.response.is_done():
-                            await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
-                        else:
-                            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
-                    finally:
-                        current_interaction.reset(token)
+                    await self._run_command(
+                        interaction,
+                        func,
+                        args,
+                        kwargs,
+                        perm_requirement=perm_requirement,
+                        eph=eph,
+                        defer=defer,
+                    )
                 return wrapper
             return decorator
+
+        def context_menu(
+            self, name: str, *, perm_requirement=1,
+            eph=True, defer=True
+        ) -> Callable[[
+                Callable[[discord.Interaction, discord.Member], Coroutine[Any, Any, Any]] |
+                Callable[[discord.Interaction, discord.User], Coroutine[Any, Any, Any]] |
+                Callable[[discord.Interaction, discord.Message], Coroutine[Any, Any, Any]] |
+                Callable[[discord.Interaction, discord.Member | discord.User],
+                         Coroutine[Any, Any, Any]]
+            ], discord.app_commands.ContextMenu]:
+            def decorator(func):
+                @self.outer.tree.context_menu(name=name)
+                @functools.wraps(func)
+                async def wrapper(interaction: discord.Interaction, *args, **kwargs):
+                    await self._run_command(
+                        interaction,
+                        func,
+                        args,
+                        kwargs,
+                        perm_requirement=perm_requirement,
+                        eph=eph,
+                        defer=defer,
+                    )
+                return wrapper
+            return decorator
+
+        def _get_group(
+            self,
+            group: str | discord.app_commands.Group | None,
+            description: str,
+        ) -> discord.app_commands.Group | None:
+            if group is None:
+                return None
+
+            if isinstance(group, discord.app_commands.Group):
+                self.groups.setdefault(group.name, group)
+                if self.outer.tree.get_command(group.name) is None:
+                    self.outer.tree.add_command(group)
+                return group
+
+            group_obj = self.groups.get(group)
+            if group_obj is None:
+                group_obj = discord.app_commands.Group(
+                    name=group,
+                    description=description,
+                )
+                self.groups[group] = group_obj
+                self.outer.tree.add_command(group_obj)
+
+            return group_obj
+
+        async def _run_command(
+            self,
+            interaction: discord.Interaction,
+            func: Callable[..., Coroutine[Any, Any, Any]],
+            args,
+            kwargs,
+            *,
+            perm_requirement,
+            eph,
+            defer,
+        ):
+            token = current_interaction.set(interaction)
+            uid = interaction.user.id
+            owner_id = self.outer.config.get("owner_uid")
+            auth_list = self.outer.config.get("authorized_users", [])
+            
+            allowed = False
+            if perm_requirement == 0: 
+                allowed = True
+            elif perm_requirement == 2 and uid == owner_id: 
+                allowed = True
+            elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): 
+                allowed = True
+
+            try:
+                if not allowed:
+                    return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
+                if defer:
+                    await interaction.response.defer(ephemeral=(eph))
+                await func(interaction, *args, **kwargs)
+            except Exception as e:
+                if interaction.response.is_done():
+                    await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
+                else:
+                    await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+            finally:
+                current_interaction.reset(token)

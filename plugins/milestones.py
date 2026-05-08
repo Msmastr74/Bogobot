@@ -279,6 +279,7 @@ async def setup(bot: "BotCore"):
     @bot.setup.command(
         name="subscribe_milestones",
         description="Subscribe this channel to milestone notifications",
+        group="manage"
     )
     async def subscribe_milestones(interaction: discord.Interaction):
         channel_id = interaction.channel_id
@@ -307,6 +308,7 @@ async def setup(bot: "BotCore"):
     @bot.setup.command(
         name="unsubscribe_milestones",
         description="Unsubscribe this channel from milestone notifications",
+        group="manage"
     )
     async def unsubscribe_milestones(interaction: discord.Interaction):
         channel_id = interaction.channel_id
