@@ -461,6 +461,7 @@ class BotCore(discord.Client):
     async def close(self):
         self.logger.info("Shutting down bot...")
         self.stream_handler.stop()
+        await self.channels.close()
         await super().close() 
 
     def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=5):
