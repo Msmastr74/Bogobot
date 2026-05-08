@@ -71,7 +71,7 @@ class BotCore(discord.Client):
             url="https://www.youtube.com/live/DgfiqGPmGWY",
             quality="720p",
             on_new_frame=self.on_new_frame,
-            fps=1.5,
+            fps=1.1,
             quiet=self.config.get(
                 "silence_stream", False) or not self.debug
         )
@@ -244,7 +244,7 @@ class BotCore(discord.Client):
             self._current_vals_updated = True
             coords = self.CELL_COORDS
             cell_tasks = []
-            for _ in range(4): # last 4 cells
+            for _ in range(2): # last 2 cells
                 cell_tasks.append(parse_crop(coords, "0123456789"))
                 coords = (
                     coords[0] - self.CELL_OFFSET, coords[1],
