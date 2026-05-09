@@ -20,7 +20,6 @@ Configuration is managed via `config.json`. Key fields include:
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
-- `telemetry_recent_limit`: Number of recent actions kept for `/manage telemetry`. Defaults to 200.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.

@@ -1,4 +1,4 @@
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict
 import asyncio
 import contextlib
 from dataclasses import dataclass
@@ -44,12 +44,11 @@ async def setup(bot: "BotCore"):
 
     manage = groups.manage(bot)
     telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.jsonl"))
-    recent_limit = max(1, int(bot.config.get("telemetry_recent_limit", 200)))
     flush_interval = max(0.1, float(bot.config.get("telemetry_flush_interval", 2)))
-    recent_actions: deque["CommandTelemetryEnd"] = deque(maxlen=recent_limit)
     active: dict[tuple[int, str], "CommandTelemetryEvent"] = {}
     pending_lines: list[str] = []
     flush_task: asyncio.Task[None] | None = None
+    telemetry_lock = asyncio.Lock()
     username_by_user: dict[int, str] = {}
     total_by_user: Counter[int] = Counter()
     commands_by_user: defaultdict[int, Counter[str]] = defaultdict(Counter)
@@ -109,7 +108,6 @@ async def setup(bot: "BotCore"):
                     with contextlib.suppress(json.JSONDecodeError):
                         action = parse_action(json.loads(line))
                         if action is not None:
-                            recent_actions.append(action)
                             add_usage(action)
         except OSError:
             bot.logger.warning(f"Could not read telemetry file: {telemetry_path}")
@@ -123,7 +121,7 @@ async def setup(bot: "BotCore"):
                 f.write(line)
                 f.write("\n")
 
-    async def flush_pending() -> None:
+    async def flush_pending_locked() -> None:
         nonlocal pending_lines
 
         if not pending_lines:
@@ -137,6 +135,10 @@ async def setup(bot: "BotCore"):
         except OSError as e:
             pending_lines = lines + pending_lines
             bot.logger.warning(f"Could not save telemetry file: {e}")
+
+    async def flush_pending() -> None:
+        async with telemetry_lock:
+            await flush_pending_locked()
 
     def schedule_flush() -> None:
         nonlocal flush_task
@@ -156,6 +158,65 @@ async def setup(bot: "BotCore"):
     def save_action(action: "CommandTelemetryEnd") -> None:
         pending_lines.append(json.dumps(action, separators=(",", ":")))
         schedule_flush()
+
+    def read_recent_from_file(
+        requested: set[str],
+        action_count: int,
+    ) -> list["CommandTelemetryEnd"]:
+        if not telemetry_path.exists():
+            return []
+
+        recent: list[CommandTelemetryEnd] = []
+        leftover = b""
+
+        with telemetry_path.open("rb") as f:
+            position = f.seek(0, 2)
+
+            while position > 0 and len(recent) < action_count:
+                read_size = min(8192, position)
+                position -= read_size
+                f.seek(position)
+
+                data = f.read(read_size) + leftover
+                lines = data.split(b"\n")
+                leftover = lines[0]
+
+                for raw_line in reversed(lines[1:]):
+                    if not raw_line:
+                        continue
+
+                    with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
+                        action = parse_action(json.loads(raw_line.decode("utf-8")))
+                        if action is None:
+                            continue
+                        if requested and action["command"] not in requested:
+                            continue
+
+                        recent.append(action)
+
+                        if len(recent) >= action_count:
+                            break
+
+            if leftover and len(recent) < action_count:
+                with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
+                    action = parse_action(json.loads(leftover.decode("utf-8")))
+                    if action is not None and (not requested or action["command"] in requested):
+                        recent.append(action)
+
+        recent.reverse()
+        return recent
+
+    async def read_recent_actions(
+        requested: set[str],
+        action_count: int,
+    ) -> list["CommandTelemetryEnd"]:
+        async with telemetry_lock:
+            await flush_pending_locked()
+            return await asyncio.to_thread(
+                read_recent_from_file,
+                requested,
+                action_count,
+            )
 
     def ranked_usage(commands: list[str] | None) -> list[UserUsage]:
         cache_key = () if commands is None else tuple(dict.fromkeys(commands))
@@ -186,15 +247,70 @@ async def setup(bot: "BotCore"):
         ]
         return ranked
 
+    def parse_commands(commands: str | None) -> list[str] | None:
+        if commands is None or not commands.strip():
+            return None
+
+        return [
+            " ".join(item.strip().removeprefix("/").split())
+            for item in commands.split(",")
+            if item.strip()
+        ]
+
+    def invalid_commands(
+        requested_commands: list[str] | None,
+        valid_commands: set[str],
+    ) -> list[str]:
+        if requested_commands is None:
+            return []
+
+        return [
+            item
+            for item in requested_commands
+            if item not in valid_commands
+        ]
+
+    def autocomplete_commands(
+        current: str,
+        valid_commands: set[str],
+    ) -> list[discord.app_commands.Choice[str]]:
+        parts = current.split(",")
+        previous = [
+            " ".join(part.strip().removeprefix("/").split())
+            for part in parts[:-1]
+            if part.strip()
+        ]
+        partial = " ".join(parts[-1].strip().removeprefix("/").split()).lower()
+        already_selected = set(previous)
+
+        choices = []
+        for command in sorted(valid_commands):
+            if command in already_selected:
+                continue
+            if partial and not command.startswith(partial):
+                continue
+
+            value = ", ".join([*previous, command])
+            choices.append(discord.app_commands.Choice(name=f"/{command}", value=value))
+
+            if len(choices) >= 25:
+                break
+
+        return choices
+
+    all_valid_commands: set[str] = set()
     valid_public_commands: set[str] = set()
     
     @bot.init_callback
     async def init():
-        for command in bot.tree.get_commands():
+        for command in bot.tree.walk_commands():
             if isinstance(command, discord.app_commands.Group):
                 continue
-            if command.qualified_name.startswith(manage.group.name + " "):
+            all_valid_commands.add(command.qualified_name)
+
+            if manage.group in (command.parent, command.root_parent):
                 continue
+
             valid_public_commands.add(command.qualified_name)
 
     load_actions()
@@ -209,7 +325,6 @@ async def setup(bot: "BotCore"):
         
         if event["phase"] == "end":
             active.pop(key, None)
-            recent_actions.append(event)
             add_usage(event)
             save_action(event)
             return
@@ -221,14 +336,32 @@ async def setup(bot: "BotCore"):
         description="Show recent bot command activity",
         eph=True,
     )
-    async def telemetry(interaction: discord.Interaction, action_count: int = 20):
+    async def telemetry(
+        interaction: discord.Interaction,
+        commands: str | None = None,
+        action_count: int = 20,
+    ):
         if action_count < 1:
             await bot.discord.send("Action count must be at least 1.", response=True)
             return
-        recent = list(recent_actions)[-action_count:]
+
+        requested_commands = parse_commands(commands)
+        invalid = invalid_commands(requested_commands, all_valid_commands)
+
+        if invalid:
+            valid_list = ", ".join(sorted(all_valid_commands))
+            plural = "s" if len(invalid) > 1 else ""
+            await bot.discord.send(
+                f"Unknown command{plural}: {', '.join(invalid)}\nValid commands: {valid_list}",
+                response=True, ephemeral=True
+            )
+            return
+
+        requested = set(requested_commands or [])
+        recent = await read_recent_actions(requested, action_count)
 
         if not recent:
-            body = "No telemetry yet."
+            body = "No telemetry for that query." if requested else "No telemetry yet."
         else:
             lines = []
             for item in recent:
@@ -270,6 +403,13 @@ async def setup(bot: "BotCore"):
             response=True
         )
 
+    @telemetry.autocomplete("commands")
+    async def telemetry_commands_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[discord.app_commands.Choice[str]]:
+        return autocomplete_commands(current, all_valid_commands)
+
     @bot.setup.command(
         name="usage",
         description="Show command usage totals",
@@ -277,28 +417,18 @@ async def setup(bot: "BotCore"):
         defer=False,
     )
     async def usage(interaction: discord.Interaction, commands: str | None = None):
-        requested_commands: list[str] | None = None
+        requested_commands = parse_commands(commands)
+        invalid = invalid_commands(requested_commands, valid_public_commands)
 
-        if commands is not None and commands.strip():
-            requested_commands = [
-                item.strip().removeprefix("/")
-                for item in commands.split(",")
-                if item.strip()
-            ]
+        if invalid:
+            valid_list = ", ".join(sorted(valid_public_commands))
+            plural = "s" if len(invalid) > 1 else ""
+            await bot.discord.send(
+                f"Unknown command{plural}: {', '.join(invalid)}\nValid commands: {valid_list}",
+                response=True, ephemeral=True
+            )
+            return
 
-            valid = valid_public_commands
-            invalid = [
-                item for item in requested_commands if item not in valid
-            ]
-
-            if invalid:
-                valid_list = ", ".join(sorted(valid))
-                plural = "s" if len(invalid) > 1 else ""
-                await bot.discord.send(
-                    f"Unknown command{plural}: {', '.join(invalid)}\nValid commands: {valid_list}",
-                    response=True, ephemeral=True
-                )
-                return
         await interaction.response.defer()
 
         ranked = ranked_usage(requested_commands)
@@ -335,3 +465,10 @@ async def setup(bot: "BotCore"):
             allowed_mentions=discord.AllowedMentions.none(),
             response=True
         )
+
+    @usage.autocomplete("commands")
+    async def usage_commands_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[discord.app_commands.Choice[str]]:
+        return autocomplete_commands(current, valid_public_commands)
