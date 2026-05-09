@@ -252,7 +252,7 @@ async def setup(bot: "BotCore"):
             return None
 
         return [
-            " ".join(item.strip().removeprefix("/").split())
+            " ".join(item.strip().removeprefix("/").lstrip().split())
             for item in commands.split(",")
             if item.strip()
         ]
@@ -275,23 +275,34 @@ async def setup(bot: "BotCore"):
         valid_commands: set[str],
     ) -> list[discord.app_commands.Choice[str]]:
         parts = current.split(",")
+        raw_current = parts[-1].strip()
+        use_slash = raw_current.startswith("/")
         previous = [
-            " ".join(part.strip().removeprefix("/").split())
+            " ".join(part.strip().removeprefix("/").lstrip().split())
             for part in parts[:-1]
             if part.strip()
         ]
-        partial = " ".join(parts[-1].strip().removeprefix("/").split()).lower()
+        partial = " ".join(raw_current.removeprefix("/").lstrip().split()).lower()
         already_selected = set(previous)
 
         choices = []
         for command in sorted(valid_commands):
             if command in already_selected:
                 continue
-            if partial and not command.startswith(partial):
+            if partial and not command.lower().startswith(partial):
                 continue
 
             value = ", ".join([*previous, command])
-            choices.append(discord.app_commands.Choice(name=f"/{command}", value=value))
+            display_commands = [
+                f"/{item}" if use_slash else item
+                for item in [*previous, command]
+            ]
+            choices.append(
+                discord.app_commands.Choice(
+                    name=", ".join(display_commands),
+                    value=value,
+                )
+            )
 
             if len(choices) >= 25:
                 break
