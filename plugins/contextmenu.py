@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from main import BotCore
 
 SCRAMBLE_TILE_PERCENT = 0.1
+MAXIMUM_FRAMES = 5000
 
 async def setup(bot: "BotCore"):
     @bot.setup.context_menu(
@@ -188,6 +189,10 @@ async def setup(bot: "BotCore"):
 
                 is_animated = getattr(image, "is_animated", False) and getattr(image, "n_frames", 1) > 1
                 if is_animated and image_format in ("GIF", "WEBP"):
+                    frame_count = getattr(image, "n_frames", 1)
+                    if frame_count > MAXIMUM_FRAMES:
+                        raise ValueError(f"Animated image has too many frames: {frame_count}")
+
                     frames = []
                     durations = [
                         frame.info.get("duration", image.info.get("duration", 100))
@@ -245,7 +250,7 @@ async def setup(bot: "BotCore"):
                     return None
 
                 frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                if frame_count > 5000:
+                if frame_count > MAXIMUM_FRAMES:
                     cap.release()
                     return None
 
@@ -296,7 +301,7 @@ async def setup(bot: "BotCore"):
                             break
 
                         processed += 1
-                        if processed > 5000:
+                        if processed > MAXIMUM_FRAMES:
                             process.stdin.close()
                             process.kill()
                             cap.release()
