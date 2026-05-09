@@ -1,7 +1,7 @@
 import random
 import discord
 
-from typing import Optional, overload
+from typing import Any, Optional, overload
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -68,25 +68,73 @@ async def setup(bot: "BotCore"):
 
             return discord.Embed.from_dict(data)
 
-        content = bogo_scramble(message.content)
+        sources: list[Any] = []
+        if message.content or message.embeds or message.attachments:
+            sources.append(message)
+
+        sources.extend(message.message_snapshots)
+
+        if not sources:
+            await bot.discord.send(
+                "Nothing scrambleable found.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        content_parts = [
+            scrambled
+            for source in sources
+            if (scrambled := bogo_scramble(getattr(source, "content", None)))
+        ]
+        content = "\n\n".join(content_parts)
 
         embeds = [
             scramble_embed(embed)
-            for embed in message.embeds[:10]
+            for source in sources
+            for embed in getattr(source, "embeds", [])
         ]
+        embeds = embeds[:10]
 
         files: list[discord.File] = []
 
-        for attachment in message.attachments:
-            try:
-                files.append(await attachment.to_file())
-            except discord.HTTPException:
-                pass
+        for source in sources:
+            attachments = getattr(source, "attachments", [])
+            for attachment in attachments:
+                to_file = getattr(attachment, "to_file", None)
+                if to_file is None:
+                    continue
 
-        await bot.discord.send(
-            content=content or None,
-            embeds=embeds,
-            files=files,
-            allowed_mentions=discord.AllowedMentions.none(),
-            response=True
-        )
+                try:
+                    files.append(await to_file())
+                except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                    pass
+
+        if not content and not embeds and not files:
+            await bot.discord.send(
+                "Nothing scrambleable found.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        send_kwargs = {
+            "content": content or None,
+            "allowed_mentions": discord.AllowedMentions.none(),
+            "response": True,
+        }
+
+        if embeds:
+            send_kwargs["embeds"] = embeds
+
+        if files:
+            send_kwargs["files"] = files
+
+        try:
+            await bot.discord.send(**send_kwargs)
+        finally:
+            try:
+                for file in files:
+                    file.close()
+            except Exception:
+                pass
