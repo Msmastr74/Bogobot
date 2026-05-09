@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
 
-SCRAMBLE_TILE_PERCENT = 0.05
+SCRAMBLE_TILE_PERCENT = 0.1
 
 async def setup(bot: "BotCore"):
     @bot.setup.context_menu(
