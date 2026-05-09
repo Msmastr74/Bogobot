@@ -94,6 +94,9 @@ async def setup(bot: "BotCore"):
                 ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"
             ))
 
+        def is_image_content_type(content_type: str) -> bool:
+            return content_type.lower().startswith("image/")
+
         def is_text_attachment(filename: str, content_type: str) -> bool:
             content_type = content_type.lower()
             filename = filename.lower()
@@ -648,7 +651,7 @@ async def setup(bot: "BotCore"):
 
             data, content_type = result
             filename = filename_from_url(url, f"embed_image_{index}.png")
-            if not is_image_attachment(filename, content_type):
+            if not is_image_content_type(content_type):
                 set_embed_media(embed, kind, None)
                 return None, None
 
