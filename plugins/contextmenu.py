@@ -528,7 +528,7 @@ async def setup(bot: "BotCore"):
             return name or fallback
 
         def embed_proxy_url(proxy) -> str | None:
-            return proxy.url or proxy.proxy_url
+            return proxy.proxy_url or proxy.url
 
         def embed_media_jobs(embed: discord.Embed) -> list[tuple[str, str]]:
             jobs: list[tuple[str, str]] = []
