@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 SCRAMBLE_TILE_PERCENT = 0.1
 MAXIMUM_FRAMES = 5000
 
+class BogoUserError(Exception):
+    pass
+
 async def setup(bot: "BotCore"):
     @bot.setup.context_menu(
         name="Bogoscramble",
@@ -100,6 +103,13 @@ async def setup(bot: "BotCore"):
             return content_type.startswith("video/") or filename.endswith((
                 ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"
             ))
+
+        def is_scrambleable_attachment(filename: str, content_type: str) -> bool:
+            return (
+                is_image_attachment(filename, content_type)
+                or is_video_attachment(filename, content_type)
+                or is_text_attachment(filename, content_type)
+            )
 
         def tile_plan(width: int, height: int):
             tile_width = max(1, round(width * SCRAMBLE_TILE_PERCENT))
@@ -192,7 +202,9 @@ async def setup(bot: "BotCore"):
                 if is_animated and image_format in ("GIF", "WEBP"):
                     frame_count = getattr(image, "n_frames", 1)
                     if frame_count > MAXIMUM_FRAMES:
-                        raise ValueError(f"Animated image has too many frames: {frame_count}")
+                        raise BogoUserError(
+                            f"{filename} has too many frames ({frame_count} > {MAXIMUM_FRAMES})."
+                        )
 
                     frames = []
                     durations = [
@@ -233,7 +245,12 @@ async def setup(bot: "BotCore"):
             stem = filename.rsplit(".", 1)[0] or "image"
             return discord.File(buffer, filename=f"bogo_{stem}.{extension}")
 
-        def bogo_video(data: bytes, filename: str) -> discord.File | None:
+        def bogo_video(
+            data: bytes,
+            filename: str,
+            width_hint: int | None = None,
+            height_hint: int | None = None,
+        ) -> discord.File | None:
             suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ".mp4"
             input_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
             output_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
@@ -248,18 +265,25 @@ async def setup(bot: "BotCore"):
 
                 cap = cv2.VideoCapture(input_path)
                 if not cap.isOpened():
+                    bot.logger.warning(f"Could not bogo video {filename}: cv2 could not open it")
                     return None
 
                 frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                 if frame_count > MAXIMUM_FRAMES:
                     cap.release()
-                    return None
+                    bot.logger.warning(
+                        f"Could not bogo video {filename}: too many frames ({frame_count} > {MAXIMUM_FRAMES})"
+                    )
+                    raise BogoUserError(
+                        f"{filename} has too many frames ({frame_count} > {MAXIMUM_FRAMES})."
+                    )
 
                 fps = cap.get(cv2.CAP_PROP_FPS) or 30
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width_hint or 0)
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height_hint or 0)
                 if width <= 0 or height <= 0:
                     cap.release()
+                    bot.logger.warning(f"Could not bogo video {filename}: invalid size ({width}x{height})")
                     return None
 
                 process = subprocess.Popen(
@@ -278,18 +302,20 @@ async def setup(bot: "BotCore"):
                         "-map", "1:a?",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-c:a", "copy",
+                        "-c:a", "aac",
+                        "-b:a", "128k",
                         "-shortest",
                         "-movflags", "+faststart",
                         output_path,
                     ],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                 )
                 if process.stdin is None:
                     cap.release()
                     process.kill()
+                    bot.logger.warning(f"Could not bogo video {filename}: failed to open ffmpeg pipe")
                     return None
 
                 plans: dict[tuple[int, int], object] = {}
@@ -303,10 +329,14 @@ async def setup(bot: "BotCore"):
 
                         processed += 1
                         if processed > MAXIMUM_FRAMES:
-                            process.stdin.close()
                             process.kill()
                             cap.release()
-                            return None
+                            bot.logger.warning(
+                                f"Could not bogo video {filename}: exceeded {MAXIMUM_FRAMES} frames while reading"
+                            )
+                            raise BogoUserError(
+                                f"{filename} has too many frames (more than {MAXIMUM_FRAMES})."
+                            )
 
                         h, w = frame.shape[:2]
                         plan = plans.get((w, h))
@@ -314,14 +344,24 @@ async def setup(bot: "BotCore"):
                         plans[(w, h)] = plan
                         process.stdin.write(scrambled.tobytes())
                 except BrokenPipeError:
-                    cap.release()
+                    bot.logger.warning(f"Could not bogo video {filename}: ffmpeg pipe broke")
                     return None
                 finally:
                     cap.release()
                     with contextlib.suppress(BrokenPipeError, OSError):
                         process.stdin.close()
 
+                if processed == 0:
+                    process.kill()
+                    bot.logger.warning(f"Could not bogo video {filename}: cv2 read zero frames")
+                    return None
+
                 if process.wait(timeout=30) != 0:
+                    stderr = ""
+                    if process.stderr is not None:
+                        with contextlib.suppress(OSError):
+                            stderr = process.stderr.read().decode("utf-8", errors="replace").strip()
+                    bot.logger.warning(f"Could not bogo video {filename}: ffmpeg failed: {stderr}")
                     return None
 
                 with open(output_path, "rb") as f:
@@ -343,12 +383,18 @@ async def setup(bot: "BotCore"):
             buffer = io.BytesIO(scrambled.encode("utf-8"))
             return discord.File(buffer, filename=f"bogo_{filename}")
 
-        def transform_attachment(data: bytes, filename: str, content_type: str) -> discord.File | None:
+        def transform_attachment(
+            data: bytes,
+            filename: str,
+            content_type: str,
+            width_hint: int | None = None,
+            height_hint: int | None = None,
+        ) -> discord.File | None:
             if is_image_attachment(filename, content_type):
                 return bogo_image(data, filename)
 
             if is_video_attachment(filename, content_type):
-                return bogo_video(data, filename)
+                return bogo_video(data, filename, width_hint, height_hint)
 
             if is_text_attachment(filename, content_type):
                 return bogo_text(data, filename)
@@ -357,33 +403,53 @@ async def setup(bot: "BotCore"):
 
         attachment_semaphore = asyncio.Semaphore(2)
 
-        async def bogo_attachment(attachment) -> discord.File | None:
+        async def read_attachment(attachment) -> bytes | None:
             read = getattr(attachment, "read", None)
             if read is None:
                 return None
 
-            async with attachment_semaphore:
-                try:
-                    data = await read()
-                except (discord.HTTPException, discord.NotFound, discord.Forbidden):
-                    return None
+            with contextlib.suppress(TypeError, discord.HTTPException, discord.NotFound, discord.Forbidden):
+                return await read(use_cached=True)
 
-                filename = getattr(attachment, "filename", "attachment")
-                content_type = getattr(attachment, "content_type", "") or ""
+            with contextlib.suppress(discord.HTTPException, discord.NotFound, discord.Forbidden):
+                return await read()
+
+            return None
+
+        async def bogo_attachment(attachment) -> tuple[discord.File | None, str | None]:
+            filename = getattr(attachment, "filename", "attachment")
+            content_type = getattr(attachment, "content_type", "") or ""
+            width = getattr(attachment, "width", None)
+            height = getattr(attachment, "height", None)
+            if not is_scrambleable_attachment(filename, content_type):
+                return None, None
+
+            async with attachment_semaphore:
+                data = await read_attachment(attachment)
+                if data is None:
+                    bot.logger.warning(f"Could not read supported attachment {filename}")
+                    return None, None
 
                 try:
                     loop = asyncio.get_running_loop()
-                    return await loop.run_in_executor(
+                    file = await loop.run_in_executor(
                         None,
                         transform_attachment,
                         data,
                         filename,
                         content_type,
+                        width,
+                        height,
                     )
+                    if file is None:
+                        bot.logger.warning(f"Could not bogo supported attachment {filename}")
+                    return file, None
+                except BogoUserError as e:
+                    return None, str(e)
                 except Exception as e:
                     bot.logger.warning(f"Could not bogo attachment {filename}: {e}")
 
-            return None
+            return None, None
 
         sources: list[Any] = []
         if message.content or message.embeds or message.attachments:
@@ -420,15 +486,21 @@ async def setup(bot: "BotCore"):
             for attachment in attachments:
                 attachment_tasks.append(bogo_attachment(attachment))
 
+        attachment_results = await asyncio.gather(*attachment_tasks)
         files: list[discord.File] = [
             file
-            for file in await asyncio.gather(*attachment_tasks)
+            for file, _ in attachment_results
             if file is not None
+        ]
+        user_errors = [
+            error
+            for _, error in attachment_results
+            if error is not None
         ]
 
         if not content and not embeds and not files:
             await bot.discord.send(
-                "Nothing scrambleable found.",
+                "\n".join(user_errors) if user_errors else "Nothing scrambleable found.",
                 response=True,
                 ephemeral=True,
             )
