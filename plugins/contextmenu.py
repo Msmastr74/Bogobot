@@ -153,6 +153,33 @@ async def setup(bot: "BotCore"):
             fmt = (image.format or "PNG").upper()
             return fmt, fmt.lower().replace("jpeg", "jpg")
 
+        def webp_frame_durations(data: bytes) -> list[int]:
+            if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+                return []
+
+            durations: list[int] = []
+            offset = 12
+
+            while offset + 8 <= len(data):
+                chunk_type = data[offset:offset + 4]
+                chunk_size = int.from_bytes(data[offset + 4:offset + 8], "little")
+                chunk_start = offset + 8
+                chunk_end = chunk_start + chunk_size
+
+                if chunk_end > len(data):
+                    break
+
+                if chunk_type == b"ANMF" and chunk_size >= 16:
+                    duration = int.from_bytes(
+                        data[chunk_start + 12:chunk_start + 15],
+                        "little",
+                    )
+                    durations.append(max(10, duration))
+
+                offset = chunk_end + (chunk_size % 2)
+
+            return durations
+
         def bogo_image(data: bytes, filename: str) -> discord.File:
             with Image.open(io.BytesIO(data)) as image:
                 image_format, extension = output_format(image, filename)
@@ -166,20 +193,26 @@ async def setup(bot: "BotCore"):
                         frame.info.get("duration", image.info.get("duration", 100))
                         for frame in ImageSequence.Iterator(image)
                     ]
+                    if image_format == "WEBP":
+                        durations = webp_frame_durations(data) or durations
+
                     for frame in ImageSequence.Iterator(image):
                         arr = np.array(frame.convert("RGBA"))
                         scrambled, _ = scramble_array(arr, plan)
                         frames.append(Image.fromarray(scrambled, "RGBA"))
 
-                    frames[0].save(
-                        buffer,
-                        format=image_format,
-                        save_all=True,
-                        append_images=frames[1:],
-                        duration=durations,
-                        loop=image.info.get("loop", 0),
-                        disposal=image.info.get("disposal", 2),
-                    )
+                    save_kwargs = {
+                        "format": image_format,
+                        "save_all": True,
+                        "append_images": frames[1:],
+                        "duration": durations,
+                        "loop": image.info.get("loop", 0),
+                    }
+
+                    if image_format == "GIF":
+                        save_kwargs["disposal"] = image.info.get("disposal", 2)
+
+                    frames[0].save(buffer, **save_kwargs)
                 else:
                     arr = np.array(image.convert("RGBA"))
                     scrambled, _ = scramble_array(arr, plan)
