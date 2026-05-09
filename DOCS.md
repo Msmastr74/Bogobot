@@ -76,8 +76,8 @@ Milestones are stored by display name:
 The default messages are:
 
 ```text
-$milestone_name initialized to `$new_value`
-$milestone_name updated from `$old_value` to `$new_value`
+$milestone_name initialized to `$new_value`.
+$milestone_name updated from `$old_value` to `$new_value`.
 ```
 
 These can be overridden in config. For example, to ping a role on updates:

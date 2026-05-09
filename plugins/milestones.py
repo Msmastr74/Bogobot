@@ -10,8 +10,8 @@ if TYPE_CHECKING:
 
 MILESTONE_USAGE_TYPE = "milestones"
 MILESTONE_WINDOW_SIZE = 60
-DEFAULT_MILESTONE_INITIALIZE_FORMAT = "$milestone_name initialized to `$new_value`"
-DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to `$new_value`"
+DEFAULT_MILESTONE_INITIALIZE_FORMAT = "$milestone_name initialized to `$new_value`."
+DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to `$new_value`."
 
 
 class MilestoneTracker:
