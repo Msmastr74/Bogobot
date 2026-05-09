@@ -18,7 +18,7 @@ async def setup(bot: "BotCore"):
 
     manage = groups.manage(bot)
 
-    def get_monitor_messages() -> dict[str, int]:
+    async def get_monitor_messages() -> dict[str, int]:
         """
         Stored in config as:
 
@@ -42,7 +42,7 @@ async def setup(bot: "BotCore"):
         if not isinstance(messages, dict):
             messages = {}
             bot.config["monitor_messages"] = messages
-            bot.save_config()
+            await bot.save_config()
             return messages
 
         normalized: dict[str, int] = {}
@@ -55,14 +55,14 @@ async def setup(bot: "BotCore"):
 
         if normalized != messages:
             bot.config["monitor_messages"] = normalized
-            bot.save_config()
+            await bot.save_config()
             return normalized
 
         return messages
 
-    def save_monitor_messages(monitor_messages: dict[str, int]) -> None:
+    async def save_monitor_messages(monitor_messages: dict[str, int]) -> None:
         bot.config["monitor_messages"] = monitor_messages
-        bot.save_config()
+        await bot.save_config()
 
     async def ensure_monitor_proxy(channel_id: int):
         """
@@ -96,7 +96,7 @@ async def setup(bot: "BotCore"):
         Removes stale monitor entries when the channel is not available.
         """
 
-        monitor_messages = get_monitor_messages()
+        monitor_messages = await get_monitor_messages()
         stale_channel_ids: list[str] = []
 
         for channel_id_str in list(monitor_messages.keys()):
@@ -112,7 +112,7 @@ async def setup(bot: "BotCore"):
                 stale_channel_ids.append(channel_id_str)
 
         if stale_channel_ids:
-            monitor_messages = get_monitor_messages()
+            monitor_messages = await get_monitor_messages()
 
             for channel_id_str in stale_channel_ids:
                 monitor_messages.pop(channel_id_str, None)
@@ -122,13 +122,13 @@ async def setup(bot: "BotCore"):
                 except ValueError:
                     pass
 
-            save_monitor_messages(monitor_messages)
+            await save_monitor_messages(monitor_messages)
 
     @tasks.loop(seconds=1)
     async def monitor_loop():
         global num_matrix
 
-        monitor_messages = get_monitor_messages()
+        monitor_messages = await get_monitor_messages()
 
         if not monitor_messages:
             return
@@ -203,7 +203,7 @@ async def setup(bot: "BotCore"):
             )
 
         if stale_channel_ids:
-            monitor_messages = get_monitor_messages()
+            monitor_messages = await get_monitor_messages()
 
             for channel_id_str in stale_channel_ids:
                 monitor_messages.pop(channel_id_str, None)
@@ -213,14 +213,14 @@ async def setup(bot: "BotCore"):
                 except ValueError:
                     pass
 
-            save_monitor_messages(monitor_messages)
+            await save_monitor_messages(monitor_messages)
 
     @manage.command(
         name="monitor",
         description="Begins monitoring sorted number counts from the stream in this channel",
     )
     async def monitor(interaction: discord.Interaction):
-        monitor_messages = get_monitor_messages()
+        monitor_messages = await get_monitor_messages()
 
         channel_id = interaction.channel_id
 
@@ -255,7 +255,7 @@ async def setup(bot: "BotCore"):
             )
 
             monitor_messages.pop(channel_id_str, None)
-            save_monitor_messages(monitor_messages)
+            await save_monitor_messages(monitor_messages)
 
         embed = discord.Embed(
             title="Monitor",
@@ -278,7 +278,7 @@ async def setup(bot: "BotCore"):
             return
 
         monitor_messages[channel_id_str] = message.id
-        save_monitor_messages(monitor_messages)
+        await save_monitor_messages(monitor_messages)
 
         await bot.discord.send(
             "Monitor system online in this channel.",
@@ -290,7 +290,7 @@ async def setup(bot: "BotCore"):
         description="Stops the stream monitor in this channel",
     )
     async def stop_monitor(interaction: discord.Interaction):
-        monitor_messages = get_monitor_messages()
+        monitor_messages = await get_monitor_messages()
 
         channel_id = interaction.channel_id
 
@@ -311,7 +311,7 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        save_monitor_messages(monitor_messages)
+        await save_monitor_messages(monitor_messages)
 
         proxy = bot.channels.get(channel_id)
 

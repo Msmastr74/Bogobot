@@ -21,13 +21,13 @@ class MilestoneTracker:
             lambda: deque(maxlen=MILESTONE_WINDOW_SIZE)
         )
 
-    def _get_state(self) -> dict[str, str]:
+    async def _get_state(self) -> dict[str, str]:
         state = self.bot.config.get("milestones")
 
         if not isinstance(state, dict):
             state = {}
             self.bot.config["milestones"] = state
-            self.bot.save_config()
+            await self.bot.save_config()
 
         normalized = {
             name: value
@@ -41,13 +41,13 @@ class MilestoneTracker:
 
         if normalized != state:
             self.bot.config["milestones"] = normalized
-            self.bot.save_config()
+            await self.bot.save_config()
             state = normalized
 
         return state
 
-    def _get_current_value(self, milestone_name: str) -> str | None:
-        state = self._get_state()
+    async def _get_current_value(self, milestone_name: str) -> str | None:
+        state = await self._get_state()
         value = state.get(milestone_name)
 
         if isinstance(value, str):
@@ -55,19 +55,19 @@ class MilestoneTracker:
 
         return None
 
-    def _set_current_value(self, milestone_name: str, milestone_value: str) -> None:
-        state = self._get_state()
+    async def _set_current_value(self, milestone_name: str, milestone_value: str) -> None:
+        state = await self._get_state()
         state[milestone_name] = milestone_value
         self.bot.config["milestones"] = state
-        self.bot.save_config()
+        await self.bot.save_config()
 
-    def _get_subscriptions(self) -> dict[str, bool]:
+    async def _get_subscriptions(self) -> dict[str, bool]:
         subscriptions = self.bot.config.get("milestone_channels")
 
         if not isinstance(subscriptions, dict):
             subscriptions = {}
             self.bot.config["milestone_channels"] = subscriptions
-            self.bot.save_config()
+            await self.bot.save_config()
 
         normalized: dict[str, bool] = {}
 
@@ -82,13 +82,13 @@ class MilestoneTracker:
 
         if normalized != subscriptions:
             self.bot.config["milestone_channels"] = normalized
-            self.bot.save_config()
+            await self.bot.save_config()
 
         return normalized
 
-    def _save_subscriptions(self, subscriptions: dict[str, bool]) -> None:
+    async def _save_subscriptions(self, subscriptions: dict[str, bool]) -> None:
         self.bot.config["milestone_channels"] = subscriptions
-        self.bot.save_config()
+        await self.bot.save_config()
 
     def _format_message(
         self,
@@ -123,7 +123,7 @@ class MilestoneTracker:
         Removes stale subscriptions if the channel is unavailable.
         """
 
-        subscriptions = self._get_subscriptions()
+        subscriptions = await self._get_subscriptions()
         stale_channel_ids: list[str] = []
 
         for channel_id_str in subscriptions:
@@ -145,7 +145,7 @@ class MilestoneTracker:
                 stale_channel_ids.append(channel_id_str)
 
         if stale_channel_ids:
-            subscriptions = self._get_subscriptions()
+            subscriptions = await self._get_subscriptions()
 
             for channel_id_str in stale_channel_ids:
                 subscriptions.pop(channel_id_str, None)
@@ -158,7 +158,7 @@ class MilestoneTracker:
                 except ValueError:
                     pass
 
-            self._save_subscriptions(subscriptions)
+            await self._save_subscriptions(subscriptions)
 
     async def subscribe(self, channel_id: int) -> bool:
         proxy = await self.bot.channels.add_channel(
@@ -169,21 +169,21 @@ class MilestoneTracker:
         if proxy is None:
             return False
 
-        subscriptions = self._get_subscriptions()
+        subscriptions = await self._get_subscriptions()
         subscriptions[str(channel_id)] = True
-        self._save_subscriptions(subscriptions)
+        await self._save_subscriptions(subscriptions)
 
         return True
 
     async def unsubscribe(self, channel_id: int) -> bool:
-        subscriptions = self._get_subscriptions()
+        subscriptions = await self._get_subscriptions()
         channel_id_str = str(channel_id)
 
         if channel_id_str not in subscriptions:
             return False
 
         subscriptions.pop(channel_id_str, None)
-        self._save_subscriptions(subscriptions)
+        await self._save_subscriptions(subscriptions)
 
         await self.bot.channels.remove_channel(
             MILESTONE_USAGE_TYPE,
@@ -249,12 +249,12 @@ class MilestoneTracker:
         if stable_value is None:
             return None
 
-        current_value = self._get_current_value(milestone_name)
+        current_value = await self._get_current_value(milestone_name)
 
         if stable_value == current_value:
             return None
 
-        self._set_current_value(milestone_name, stable_value)
+        await self._set_current_value(milestone_name, stable_value)
 
         await self.notify_milestone_change(
             milestone_name=milestone_name,
@@ -271,7 +271,7 @@ class MilestoneTracker:
         old_value: str | None,
         new_value: str,
     ) -> None:
-        subscriptions = self._get_subscriptions()
+        subscriptions = await self._get_subscriptions()
         stale_channel_ids: list[str] = []
 
         if old_value is None:
@@ -316,7 +316,7 @@ class MilestoneTracker:
             )
 
         if stale_channel_ids:
-            subscriptions = self._get_subscriptions()
+            subscriptions = await self._get_subscriptions()
 
             for channel_id_str in stale_channel_ids:
                 subscriptions.pop(channel_id_str, None)
@@ -329,7 +329,7 @@ class MilestoneTracker:
                 except ValueError:
                     pass
 
-            self._save_subscriptions(subscriptions)
+            await self._save_subscriptions(subscriptions)
 
 
 async def setup(bot: "BotCore"):

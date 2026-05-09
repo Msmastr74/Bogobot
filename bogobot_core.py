@@ -14,7 +14,6 @@ import importlib
 import contextvars
 import aiohttp
 import time
-import threading
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
@@ -40,7 +39,7 @@ class BotCore(discord.Client):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
-        self._config_lock = threading.Lock()
+        self._config_lock = asyncio.Lock()
         
         self.channels_path: str = self.config.get("channels_path", "channels.json")
         if not os.path.exists(self.channels_path):
@@ -501,7 +500,7 @@ class BotCore(discord.Client):
             await self.tree.sync()
             self.config['sync'] = False
             self.config["command_tree_hash"] = command_tree_hash
-            self.save_config()
+            await self.save_config()
 
     def _command_tree_hash(self) -> str:
         commands = [
@@ -540,8 +539,8 @@ class BotCore(discord.Client):
                     await mod.setup(self)
                 self.logger.info(f"Loaded Plugin: {filename}")
     
-    def save_config(self):
-        with self._config_lock:
+    async def save_config(self):
+        async with self._config_lock:
             tmp_path = f"{self.config_path}.tmp"
 
             with open(tmp_path, 'w') as f:
