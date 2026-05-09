@@ -190,10 +190,10 @@ async def setup(bot: "BotCore"):
     
     @bot.init_callback
     async def init():
-        for command in bot.tree.walk_commands():
+        for command in bot.tree.get_commands():
             if isinstance(command, discord.app_commands.Group):
                 continue
-            if manage.group in (command.parent, command.root_parent):
+            if command.qualified_name.startswith(manage.group.name + " "):
                 continue
             valid_public_commands.add(command.qualified_name)
 
@@ -276,13 +276,13 @@ async def setup(bot: "BotCore"):
         perm_requirement=0,
         defer=False,
     )
-    async def usage(interaction: discord.Interaction, command: str | None = None):
+    async def usage(interaction: discord.Interaction, commands: str | None = None):
         requested_commands: list[str] | None = None
 
-        if command is not None and command.strip():
+        if commands is not None and commands.strip():
             requested_commands = [
                 item.strip().removeprefix("/")
-                for item in command.split(",")
+                for item in commands.split(",")
                 if item.strip()
             ]
 
