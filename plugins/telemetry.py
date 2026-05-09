@@ -286,7 +286,7 @@ async def setup(bot: "BotCore"):
         already_selected = set(previous)
 
         choices = []
-        for command in sorted(valid_commands):
+        for command in sorted(valid_commands, key=str.casefold):
             if command in already_selected:
                 continue
             if partial and not command.lower().startswith(partial):
@@ -360,7 +360,7 @@ async def setup(bot: "BotCore"):
         invalid = invalid_commands(requested_commands, all_valid_commands)
 
         if invalid:
-            valid_list = ", ".join(sorted(all_valid_commands))
+            valid_list = ", ".join(sorted(all_valid_commands, key=str.casefold))
             plural = "s" if len(invalid) > 1 else ""
             await bot.discord.send(
                 f"Unknown command{plural}: {', '.join(invalid)}\nValid commands: {valid_list}",
@@ -432,7 +432,7 @@ async def setup(bot: "BotCore"):
         invalid = invalid_commands(requested_commands, valid_public_commands)
 
         if invalid:
-            valid_list = ", ".join(sorted(valid_public_commands))
+            valid_list = ", ".join(sorted(valid_public_commands, key=str.casefold))
             plural = "s" if len(invalid) > 1 else ""
             await bot.discord.send(
                 f"Unknown command{plural}: {', '.join(invalid)}\nValid commands: {valid_list}",
