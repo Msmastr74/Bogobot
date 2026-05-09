@@ -83,7 +83,7 @@ $milestone_name updated from `$old_value` to `$new_value`.
 These can be overridden in config. For example, to ping a role on updates:
 
 ```json
-"milestone_update_format": "<@&role_id> $milestone_name updated from `$old_value` to `$new_value`"
+"milestone_update_format": "<@&role_id> $milestone_name updated from `$old_value` to `$new_value`."
 ```
 
 The available template variables are `$milestone_name`, `$old_value`, and `$new_value`.

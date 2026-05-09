@@ -39,7 +39,7 @@ This is useful for local testing without changing the main config file.
 Milestone templates use Python's `string.Template` syntax:
 
 ```json
-"milestone_update_format": "<@&role_id> $milestone_name updated from `$old_value` to `$new_value`"
+"milestone_update_format": "<@&role_id> $milestone_name updated from `$old_value` to `$new_value`."
 ```
 
 ## Execution
