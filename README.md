@@ -30,9 +30,17 @@ Go into `config.json` and provide the main credentials:
  * `owner_uid`: Your Discord user ID.
  * `authorized_users`: User IDs allowed to run authorized commands.
  * `sync`: Set true when slash commands need to be synced.
+ * `milestone_initialize_format`: Optional message template for new milestones.
+ * `milestone_update_format`: Optional message template for milestone changes.
 
 If `local_config.json` exists, `main.py` uses that instead of `config.json`.
 This is useful for local testing without changing the main config file.
+
+Milestone templates use Python's `string.Template` syntax:
+
+```json
+"milestone_update_format": "<@&role_id> $milestone_name updated from `$old_value` to `$new_value`"
+```
 
 ## Execution
 ```bash

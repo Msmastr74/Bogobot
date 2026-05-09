@@ -187,7 +187,7 @@ class BotCore(discord.Client):
         if self.milestones:
             best_run = self.stats_cache.get("best_run")
             if best_run:
-                await self.milestones.update(f"best_run={best_run}")
+                await self.milestones.update("Best run", best_run)
     
     def _sort_visual_changed(self, img: Image.Image) -> bool:
         crop = img.crop(self.SORT_AREA_COORDS).convert("RGB")

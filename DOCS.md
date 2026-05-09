@@ -16,6 +16,9 @@ Configuration is managed via `config.json`. Key fields include:
 - `channels_path`: Path to the channel usage store. Defaults to `channels.json`.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame.
 - `ocr_concurrency`: Maximum number of Tesseract processes to run at once. Defaults to 2.
+- `milestones`: Stores the latest confirmed value for each milestone name.
+- `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
+- `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
 
@@ -58,6 +61,32 @@ The monitor does not rely only on OCR to decide whether the sort changed. The bo
 Each proxy serializes operations for one Discord channel. Its main useful behavior is edit coalescing: if several edits for the same message are queued before Discord receives them, only the newest pending edit is sent.
 
 `ChannelProxyManager` tracks which channels are used for which feature and stores that in `channels.json` by default.
+
+## Milestones
+`MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. Values are confirmed using a rolling window, so noisy OCR does not immediately publish a milestone.
+
+Milestones are stored by display name:
+
+```json
+"milestones": {
+  "Best run": "11/25"
+}
+```
+
+The default messages are:
+
+```text
+$milestone_name initialized to `$new_value`
+$milestone_name updated from `$old_value` to `$new_value`
+```
+
+These can be overridden in config. For example, to ping a role on updates:
+
+```json
+"milestone_update_format": "<@&role_id> $milestone_name updated from `$old_value` to `$new_value`"
+```
+
+The available template variables are `$milestone_name`, `$old_value`, and `$new_value`.
 
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.

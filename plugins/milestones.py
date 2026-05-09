@@ -1,4 +1,5 @@
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
+from string import Template
 from typing import TYPE_CHECKING
 
 import discord
@@ -9,14 +10,18 @@ if TYPE_CHECKING:
 
 MILESTONE_USAGE_TYPE = "milestones"
 MILESTONE_WINDOW_SIZE = 60
+DEFAULT_MILESTONE_INITIALIZE_FORMAT = "$milestone_name initialized to `$new_value`"
+DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to `$new_value`"
 
 
 class MilestoneTracker:
     def __init__(self, bot: "BotCore"):
         self.bot = bot
-        self.history: deque[str] = deque(maxlen=MILESTONE_WINDOW_SIZE)
+        self.history: defaultdict[str, deque[str]] = defaultdict(
+            lambda: deque(maxlen=MILESTONE_WINDOW_SIZE)
+        )
 
-    def _get_state(self) -> dict:
+    def _get_state(self) -> dict[str, str]:
         state = self.bot.config.get("milestones")
 
         if not isinstance(state, dict):
@@ -24,23 +29,35 @@ class MilestoneTracker:
             self.bot.config["milestones"] = state
             self.bot.save_config()
 
-        if "current_value" in state and not isinstance(state["current_value"], str):
-            state["current_value"] = None
+        normalized = {
+            name: value
+            for name, value in state.items()
+            if (
+                isinstance(name, str)
+                and name != "current_value"
+                and isinstance(value, str)
+            )
+        }
+
+        if normalized != state:
+            self.bot.config["milestones"] = normalized
+            self.bot.save_config()
+            state = normalized
 
         return state
 
-    def _get_current_value(self) -> str | None:
+    def _get_current_value(self, milestone_name: str) -> str | None:
         state = self._get_state()
-        value = state.get("current_value")
+        value = state.get(milestone_name)
 
         if isinstance(value, str):
             return value
 
         return None
 
-    def _set_current_value(self, value: str) -> None:
+    def _set_current_value(self, milestone_name: str, milestone_value: str) -> None:
         state = self._get_state()
-        state["current_value"] = value
+        state[milestone_name] = milestone_value
         self.bot.config["milestones"] = state
         self.bot.save_config()
 
@@ -72,6 +89,32 @@ class MilestoneTracker:
     def _save_subscriptions(self, subscriptions: dict[str, bool]) -> None:
         self.bot.config["milestone_channels"] = subscriptions
         self.bot.save_config()
+
+    def _format_message(
+        self,
+        template_key: str,
+        default_template: str,
+        *,
+        milestone_name: str,
+        old_value: str | None,
+        new_value: str,
+    ) -> str:
+        template = self.bot.config.get(template_key, default_template)
+
+        if not isinstance(template, str):
+            template = default_template
+
+        values = {
+            "milestone_name": milestone_name,
+            "old_value": old_value or "",
+            "new_value": new_value,
+        }
+
+        try:
+            return Template(template).substitute(values)
+        except (KeyError, ValueError):
+            self.bot.logger.warning(f"Invalid milestone format in config key {template_key!r}")
+            return Template(default_template).substitute(values)
 
     async def reconcile_channels(self) -> None:
         """
@@ -149,7 +192,7 @@ class MilestoneTracker:
 
         return True
 
-    def _get_stable_value(self) -> str | None:
+    def _get_stable_value(self, milestone_name: str) -> str | None:
         """
         Returns the mode of the last 60 updates.
 
@@ -159,10 +202,12 @@ class MilestoneTracker:
         is ambiguous.
         """
 
-        if len(self.history) < MILESTONE_WINDOW_SIZE:
+        history = self.history[milestone_name]
+
+        if len(history) < MILESTONE_WINDOW_SIZE:
             return None
 
-        counts = Counter(self.history)
+        counts = Counter(history)
         most_common = counts.most_common()
 
         if not most_common:
@@ -173,14 +218,14 @@ class MilestoneTracker:
 
         return most_common[0][0]
 
-    async def update(self, best_run: str) -> str | None:
+    async def update(self, milestone_name: str, milestone_value: str) -> str | None:
         """
         Called by your update stats function.
 
         Example:
-            await bot.milestones.update("11/25")
+            await bot.milestones.update("Best run", "11/25")
 
-        The input best_run is considered one update.
+        The input milestone value is considered one update.
 
         Nothing happens until 60 updates have been collected in memory. After
         that, the mode of the last 60 updates is considered the stable value.
@@ -191,26 +236,28 @@ class MilestoneTracker:
         Returns the newly confirmed value if it changed, otherwise None.
         """
 
-        best_run = best_run.strip()
+        milestone_name = milestone_name.strip()
+        milestone_value = milestone_value.strip()
 
-        if not best_run:
+        if not milestone_name or not milestone_value:
             return None
 
-        self.history.append(best_run)
+        self.history[milestone_name].append(milestone_value)
 
-        stable_value = self._get_stable_value()
+        stable_value = self._get_stable_value(milestone_name)
 
         if stable_value is None:
             return None
 
-        current_value = self._get_current_value()
+        current_value = self._get_current_value(milestone_name)
 
         if stable_value == current_value:
             return None
 
-        self._set_current_value(stable_value)
+        self._set_current_value(milestone_name, stable_value)
 
         await self.notify_milestone_change(
+            milestone_name=milestone_name,
             old_value=current_value,
             new_value=stable_value,
         )
@@ -220,6 +267,7 @@ class MilestoneTracker:
     async def notify_milestone_change(
         self,
         *,
+        milestone_name: str,
         old_value: str | None,
         new_value: str,
     ) -> None:
@@ -227,9 +275,21 @@ class MilestoneTracker:
         stale_channel_ids: list[str] = []
 
         if old_value is None:
-            content = f"Milestone initialized: `{new_value}`"
+            content = self._format_message(
+                "milestone_initialize_format",
+                DEFAULT_MILESTONE_INITIALIZE_FORMAT,
+                milestone_name=milestone_name,
+                old_value=old_value,
+                new_value=new_value,
+            )
         else:
-            content = f"Milestone updated: `{old_value}` → `{new_value}`"
+            content = self._format_message(
+                "milestone_update_format",
+                DEFAULT_MILESTONE_UPDATE_FORMAT,
+                milestone_name=milestone_name,
+                old_value=old_value,
+                new_value=new_value,
+            )
 
         for channel_id_str in list(subscriptions.keys()):
             try:
