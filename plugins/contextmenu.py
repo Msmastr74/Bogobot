@@ -25,12 +25,13 @@ class BogoUserError(Exception):
     pass
 
 async def setup(bot: "BotCore"):
-    @bot.setup.context_menu(
-        name="Bogoscramble",
-        perm_requirement=0,
-        eph=False
-    )
-    async def bogoscramble(ctx, message: discord.Message):
+    async def send_bogoscramble(
+        ctx,
+        *,
+        content: str | None = None,
+        embeds: list[discord.Embed] | None = None,
+        attachments: list[Any] | None = None,
+    ):
         upload_limit = getattr(ctx, "filesize_limit", discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES)
 
         @overload
@@ -675,13 +676,10 @@ async def setup(bot: "BotCore"):
             set_embed_media(embed, kind, f"attachment://{file.filename}")
             return file, None
 
-        sources: list[Any] = []
-        if message.content or message.embeds or message.attachments:
-            sources.append(message)
+        embeds = embeds or []
+        attachments = attachments or []
 
-        sources.extend(message.message_snapshots)
-
-        if not sources:
+        if not content and not embeds and not attachments:
             await bot.discord.send(
                 "Nothing scrambleable found.",
                 response=True,
@@ -689,18 +687,16 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        content_parts = [
-            scrambled
-            for source in sources
-            if (scrambled := bogo_scramble(getattr(source, "content", None)))
-        ]
+        content_parts = []
+
+        if scrambled_text := bogo_scramble(content):
+            content_parts.append(scrambled_text)
         content = "\n\n".join(content_parts)
 
         embed_pairs = [
             (embed, scramble_embed(embed))
-            for source in sources
-            for embed in getattr(source, "embeds", [])
-        ][:10]
+            for embed in embeds[:10]
+        ]
         omit_embed_indexes = {
             index
             for index, (original, _) in enumerate(embed_pairs)
@@ -712,12 +708,10 @@ async def setup(bot: "BotCore"):
             if index not in omit_embed_indexes
         ]
 
-        attachment_tasks = []
-
-        for source in sources:
-            attachments = getattr(source, "attachments", [])
-            for attachment in attachments:
-                attachment_tasks.append(bogo_attachment(attachment))
+        attachment_tasks = [
+            bogo_attachment(attachment)
+            for attachment in attachments
+        ]
 
         attachment_results = await asyncio.gather(*attachment_tasks)
         files: list[discord.File] = [
@@ -797,3 +791,108 @@ async def setup(bot: "BotCore"):
                     file.close()
             except Exception:
                 pass
+
+    @bot.setup.context_menu(
+        name="Bogoscramble",
+        perm_requirement=0,
+        eph=False,
+    )
+    async def Bogoscramble(ctx, message: discord.Message):
+        sources: list[discord.Message | discord.MessageSnapshot] = [
+            message,
+            *message.message_snapshots
+        ]
+
+        content_parts = [
+            source.content
+            for source in sources
+            if source.content
+        ]
+        embeds = [
+            embed
+            for source in sources
+            for embed in source.embeds
+        ]
+        attachments = [
+            attachment
+            for source in sources
+            for attachment in source.attachments
+        ]
+
+        await send_bogoscramble(
+            ctx,
+            content="\n\n".join(content_parts),
+            embeds=embeds,
+            attachments=attachments,
+        )
+
+    @bot.setup.command(
+        name="bogoscramble",
+        description="Bogoscramble text and attachments",
+        perm_requirement=0,
+        eph=False,
+    )
+    async def bogoscramble(
+        interaction: discord.Interaction,
+        text: str | None = None,
+        attachment1: discord.Attachment | None = None,
+        attachment2: discord.Attachment | None = None,
+        attachment3: discord.Attachment | None = None,
+        attachment4: discord.Attachment | None = None,
+        attachment5: discord.Attachment | None = None,
+        attachment6: discord.Attachment | None = None,
+        attachment7: discord.Attachment | None = None,
+        attachment8: discord.Attachment | None = None,
+        attachment9: discord.Attachment | None = None,
+        attachment10: discord.Attachment | None = None,
+        attachment11: discord.Attachment | None = None,
+        attachment12: discord.Attachment | None = None,
+        attachment13: discord.Attachment | None = None,
+        attachment14: discord.Attachment | None = None,
+        attachment15: discord.Attachment | None = None,
+        attachment16: discord.Attachment | None = None,
+        attachment17: discord.Attachment | None = None,
+        attachment18: discord.Attachment | None = None,
+        attachment19: discord.Attachment | None = None,
+        attachment20: discord.Attachment | None = None,
+        attachment21: discord.Attachment | None = None,
+        attachment22: discord.Attachment | None = None,
+        attachment23: discord.Attachment | None = None,
+        attachment24: discord.Attachment | None = None,
+    ):
+        attachments = [
+            attachment
+            for attachment in (
+                attachment1,
+                attachment2,
+                attachment3,
+                attachment4,
+                attachment5,
+                attachment6,
+                attachment7,
+                attachment8,
+                attachment9,
+                attachment10,
+                attachment11,
+                attachment12,
+                attachment13,
+                attachment14,
+                attachment15,
+                attachment16,
+                attachment17,
+                attachment18,
+                attachment19,
+                attachment20,
+                attachment21,
+                attachment22,
+                attachment23,
+                attachment24,
+            )
+            if attachment is not None
+        ]
+
+        await send_bogoscramble(
+            interaction,
+            content=text,
+            attachments=attachments,
+        )
