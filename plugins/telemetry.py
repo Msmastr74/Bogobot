@@ -314,12 +314,12 @@ async def setup(bot: "BotCore"):
     
     @bot.init_callback
     async def init():
-        for command in bot.tree.walk_commands():
+        for command in bot.tree.get_commands():
             if isinstance(command, discord.app_commands.Group):
                 continue
             all_valid_commands.add(command.qualified_name)
 
-            if manage.group in (command.parent, command.root_parent):
+            if command.qualified_name.startswith(manage.group.name + " ")
                 continue
 
             valid_public_commands.add(command.qualified_name)
