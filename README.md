@@ -47,7 +47,23 @@ python harness.py
 ```
 
 In your terminal output, you should see this:
-![Example of terminal output](./example_terminal_launch.png)
+```log
+[08 22:17:05.832 WARNING  | discord.client  ] PyNaCl is not installed, voice will NOT be supported
+[08 22:17:05.832 WARNING  | discord.client  ] davey is not installed, voice will NOT be supported
+[08 22:17:05.837 INFO     | Bogobot         ] Loaded Plugin: monitor.py
+[08 22:17:05.837 INFO     | Bogobot         ] Loaded Plugin: top10.py
+[08 22:17:05.838 INFO     | Bogobot         ] Loaded Plugin: getinfo.py
+[08 22:17:05.838 INFO     | Bogobot         ] Loaded Plugin: milestones.py
+[08 22:17:05.838 INFO     | Bogobot         ] Loaded Plugin: authorize.py
+[08 22:17:05.839 INFO     | Bogobot         ] Loaded Plugin: get_all_stats.py
+[08 22:17:05.839 INFO     | Bogobot         ] Loaded Plugin: activity.py
+[08 22:17:05.843 INFO     | Bogobot         ] Loaded Plugin: telemetry.py
+[08 22:17:05.843 INFO     | Bogobot         ] Loaded Plugin: roll.py
+[08 22:17:05.844 INFO     | Bogobot         ] Loaded Plugin: contextmenu.py
+[08 22:17:05.844 INFO     | discord.client  ] logging in using static token
+[08 22:17:06.541 INFO     | discord.gateway ] Shard ID None has connected to Gateway (Session ID: e971cb07a3df4800a5201371544de28f).
+[08 22:17:08.545 INFO     | Bogobot         ] Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
+```
 
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
