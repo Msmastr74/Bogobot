@@ -148,7 +148,7 @@ async def setup(bot: "BotCore"):
         if action_count < 1:
             await bot.discord.send("Action count must be at least 1.", response=True)
             return
-        recent = list(recent_actions)[-action_count:][::-1]
+        recent = list(recent_actions)[-action_count:]
 
         if not recent:
             body = "No telemetry yet."
