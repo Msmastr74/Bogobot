@@ -1,4 +1,5 @@
 import io
+import asyncio
 import contextlib
 import os
 import random
@@ -79,23 +80,23 @@ async def setup(bot: "BotCore"):
 
             return discord.Embed.from_dict(data)
 
-        def is_image_attachment(attachment) -> bool:
-            content_type = getattr(attachment, "content_type", "") or ""
-            filename = getattr(attachment, "filename", "").lower()
+        def is_image_attachment(filename: str, content_type: str) -> bool:
+            content_type = content_type.lower()
+            filename = filename.lower()
             return content_type.startswith("image/") or filename.endswith((
                 ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"
             ))
 
-        def is_text_attachment(attachment) -> bool:
-            content_type = getattr(attachment, "content_type", "") or ""
-            filename = getattr(attachment, "filename", "").lower()
+        def is_text_attachment(filename: str, content_type: str) -> bool:
+            content_type = content_type.lower()
+            filename = filename.lower()
             return content_type.startswith("text/") or filename.endswith((
                 ".txt", ".md", ".py", ".json", ".csv", ".log", ".yaml", ".yml"
             ))
 
-        def is_video_attachment(attachment) -> bool:
-            content_type = getattr(attachment, "content_type", "") or ""
-            filename = getattr(attachment, "filename", "").lower()
+        def is_video_attachment(filename: str, content_type: str) -> bool:
+            content_type = content_type.lower()
+            filename = filename.lower()
             return content_type.startswith("video/") or filename.endswith((
                 ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"
             ))
@@ -342,29 +343,45 @@ async def setup(bot: "BotCore"):
             buffer = io.BytesIO(scrambled.encode("utf-8"))
             return discord.File(buffer, filename=f"bogo_{filename}")
 
+        def transform_attachment(data: bytes, filename: str, content_type: str) -> discord.File | None:
+            if is_image_attachment(filename, content_type):
+                return bogo_image(data, filename)
+
+            if is_video_attachment(filename, content_type):
+                return bogo_video(data, filename)
+
+            if is_text_attachment(filename, content_type):
+                return bogo_text(data, filename)
+
+            return None
+
+        attachment_semaphore = asyncio.Semaphore(2)
+
         async def bogo_attachment(attachment) -> discord.File | None:
             read = getattr(attachment, "read", None)
             if read is None:
                 return None
 
-            try:
-                data = await read()
-            except (discord.HTTPException, discord.NotFound, discord.Forbidden):
-                return None
+            async with attachment_semaphore:
+                try:
+                    data = await read()
+                except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                    return None
 
-            filename = getattr(attachment, "filename", "attachment")
+                filename = getattr(attachment, "filename", "attachment")
+                content_type = getattr(attachment, "content_type", "") or ""
 
-            try:
-                if is_image_attachment(attachment):
-                    return bogo_image(data, filename)
-
-                if is_video_attachment(attachment):
-                    return bogo_video(data, filename)
-
-                if is_text_attachment(attachment):
-                    return bogo_text(data, filename)
-            except Exception as e:
-                bot.logger.warning(f"Could not bogo attachment {filename}: {e}")
+                try:
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(
+                        None,
+                        transform_attachment,
+                        data,
+                        filename,
+                        content_type,
+                    )
+                except Exception as e:
+                    bot.logger.warning(f"Could not bogo attachment {filename}: {e}")
 
             return None
 
@@ -396,14 +413,18 @@ async def setup(bot: "BotCore"):
         ]
         embeds = embeds[:10]
 
-        files: list[discord.File] = []
+        attachment_tasks = []
 
         for source in sources:
             attachments = getattr(source, "attachments", [])
             for attachment in attachments:
-                file = await bogo_attachment(attachment)
-                if file is not None:
-                    files.append(file)
+                attachment_tasks.append(bogo_attachment(attachment))
+
+        files: list[discord.File] = [
+            file
+            for file in await asyncio.gather(*attachment_tasks)
+            if file is not None
+        ]
 
         if not content and not embeds and not files:
             await bot.discord.send(
