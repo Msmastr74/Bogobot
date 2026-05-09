@@ -5,4 +5,4 @@ ocr_*.png
 local_config.json
 .DS_Store
 channels.json
-telemetry.json
+telemetry.jsonl

@@ -1,9 +1,10 @@
-from collections import Counter
-from collections import deque
-from dataclasses import dataclass, field
+from collections import Counter, defaultdict, deque
+import asyncio
+import contextlib
+from dataclasses import dataclass
+import heapq
 import json
 from pathlib import Path
-import time
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 import discord
@@ -12,7 +13,7 @@ class CommandTelemetryBase(TypedDict):
     interaction_id: int
     command: str
     user_id: int
-    user_name: str
+    username: str
     channel_id: int | None
     time: int
 
@@ -31,8 +32,8 @@ CommandTelemetryEvent = CommandTelemetryStart | CommandTelemetryEnd
 class UserUsage:
     user_id: int
     name: str
-    total: int = 0
-    commands: Counter[str] = field(default_factory=Counter)
+    total: int
+    commands: Counter[str]
 
 if TYPE_CHECKING:
     from main import BotCore
@@ -42,72 +43,148 @@ async def setup(bot: "BotCore"):
     import groups
 
     manage = groups.manage(bot)
-    telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.json"))
-    recent_actions: deque["CommandTelemetryEnd"] = deque(maxlen=200)
-    saved_actions: list["CommandTelemetryEnd"] = []
+    telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.jsonl"))
+    recent_limit = max(1, int(bot.config.get("telemetry_recent_limit", 200)))
+    flush_interval = max(0.1, float(bot.config.get("telemetry_flush_interval", 2)))
+    recent_actions: deque["CommandTelemetryEnd"] = deque(maxlen=recent_limit)
     active: dict[tuple[int, str], "CommandTelemetryEvent"] = {}
+    pending_lines: list[str] = []
+    flush_task: asyncio.Task[None] | None = None
+    username_by_user: dict[int, str] = {}
+    total_by_user: Counter[int] = Counter()
+    commands_by_user: defaultdict[int, Counter[str]] = defaultdict(Counter)
+    users_by_command: defaultdict[str, Counter[int]] = defaultdict(Counter)
+
+    def is_public_action(action: "CommandTelemetryEnd") -> bool:
+        return action["status"] == "ok" and not action["command"].startswith(
+            manage.group.name + " "
+        )
+
+    def add_usage(action: "CommandTelemetryEnd") -> None:
+        if not is_public_action(action):
+            return
+
+        user_id = action["user_id"]
+        command = action["command"]
+        username_by_user[user_id] = action["username"]
+        total_by_user[user_id] += 1
+        commands_by_user[user_id][command] += 1
+        users_by_command[command][user_id] += 1
+
+    def parse_action(item) -> "CommandTelemetryEnd | None":
+        if not isinstance(item, dict):
+            return None
+
+        if item.get("phase") != "end":
+            return None
+
+        try:
+            action: CommandTelemetryEnd = {
+                "interaction_id": int(item["interaction_id"]),
+                "command": str(item["command"]),
+                "user_id": int(item["user_id"]),
+                "username": str(item["username"]),
+                "channel_id": int(item["channel_id"]) if item.get("channel_id") is not None else None,
+                "time": int(item["time"]),
+                "phase": "end",
+                "status": item["status"],
+                "duration_ms": float(item["duration_ms"]),
+                "error": str(item["error"]) if item.get("error") is not None else None,
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        if action["status"] not in ("ok", "unauthorized", "error"):
+            return None
+
+        return action
 
     def load_actions() -> None:
         if not telemetry_path.exists():
             return
 
         try:
-            data = json.loads(telemetry_path.read_text())
-        except (OSError, json.JSONDecodeError):
+            with telemetry_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        action = parse_action(json.loads(line))
+                        if action is not None:
+                            recent_actions.append(action)
+                            add_usage(action)
+        except OSError:
             bot.logger.warning(f"Could not read telemetry file: {telemetry_path}")
+
+    def append_lines(lines: list[str]) -> None:
+        if telemetry_path.parent != Path("."):
+            telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with telemetry_path.open("a", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line)
+                f.write("\n")
+
+    async def flush_pending() -> None:
+        nonlocal pending_lines
+
+        if not pending_lines:
             return
 
-        if not isinstance(data, list):
-            return
+        lines = pending_lines
+        pending_lines = []
 
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-
-            if item.get("phase") != "end":
-                continue
-
-            try:
-                action: CommandTelemetryEnd = {
-                    "interaction_id": int(item["interaction_id"]),
-                    "command": str(item["command"]),
-                    "user_id": int(item["user_id"]),
-                    "user_name": str(item["user_name"]),
-                    "channel_id": int(item["channel_id"]) if item.get("channel_id") is not None else None,
-                    "time": int(item["time"]),
-                    "phase": "end",
-                    "status": item["status"],
-                    "duration_ms": float(item["duration_ms"]),
-                    "error": str(item["error"]) if item.get("error") is not None else None,
-                }
-            except (KeyError, TypeError, ValueError):
-                continue
-
-            if action["status"] not in ("ok", "unauthorized", "error"):
-                continue
-
-            saved_actions.append(action)
-            recent_actions.append(action)
-
-    def save_actions() -> None:
         try:
-            if telemetry_path.parent != Path("."):
-                telemetry_path.parent.mkdir(parents=True, exist_ok=True)
-
-            tmp_path = telemetry_path.with_suffix(f"{telemetry_path.suffix}.tmp")
-            tmp_path.write_text(json.dumps(saved_actions, separators=(",", ":")))
-            tmp_path.replace(telemetry_path)
+            await asyncio.to_thread(append_lines, lines)
         except OSError as e:
+            pending_lines = lines + pending_lines
             bot.logger.warning(f"Could not save telemetry file: {e}")
 
-    def public_actions() -> list["CommandTelemetryEnd"]:
-        return [
-            action
-            for action in saved_actions
-            if action["status"] == "ok" and not action["command"].startswith(
-                manage.group.name + " "
+    def schedule_flush() -> None:
+        nonlocal flush_task
+
+        if flush_task is not None and not flush_task.done():
+            return
+
+        async def delayed_flush():
+            nonlocal flush_task
+
+            await asyncio.sleep(flush_interval)
+            await flush_pending()
+            flush_task = None
+
+        flush_task = asyncio.create_task(delayed_flush())
+
+    def save_action(action: "CommandTelemetryEnd") -> None:
+        pending_lines.append(json.dumps(action, separators=(",", ":")))
+        schedule_flush()
+
+    def ranked_usage(commands: list[str] | None) -> list[UserUsage]:
+        cache_key = () if commands is None else tuple(dict.fromkeys(commands))
+
+        if not cache_key:
+            user_totals = total_by_user
+        elif len(cache_key) == 1:
+            user_totals = users_by_command.get(cache_key[0], Counter())
+        else:
+            user_totals: Counter[int] = Counter()
+
+            for command in cache_key:
+                user_totals.update(users_by_command.get(command, Counter()))
+
+        top_users = heapq.nlargest(10, user_totals.items(), key=lambda item: item[1])
+        ranked = [
+            UserUsage(
+                user_id=user_id,
+                name=username_by_user.get(user_id, str(user_id)),
+                total=total,
+                commands=commands_by_user[user_id] if not cache_key else Counter({
+                    command: commands_by_user[user_id][command]
+                    for command in cache_key
+                    if commands_by_user[user_id][command]
+                }),
             )
+            for user_id, total in top_users
         ]
+        return ranked
 
     valid_public_commands: set[str] = set()
     
@@ -133,8 +210,8 @@ async def setup(bot: "BotCore"):
         if event["phase"] == "end":
             active.pop(key, None)
             recent_actions.append(event)
-            saved_actions.append(event)
-            save_actions()
+            add_usage(event)
+            save_action(event)
             return
 
         raise ValueError(f"Invalid telemetry event phase: {event['phase']}")
@@ -162,10 +239,19 @@ async def setup(bot: "BotCore"):
                 channel_id = item["channel_id"]
                 user = f"<@{item['user_id']}>"
                 channel = f"<#{channel_id}>" if channel_id is not None else "DM"
+                
+                if status == "ok":
+                    status_icon = "✅"
+                elif status == "unauthorized":
+                    status_icon = "🔒"
+                elif status == "error":
+                    status_icon = "⚠️"
+                else:
+                    status_icon = status
 
                 line = (
-                    f"{timestamp} {status} `{duration}ms` "
-                    f"`/{command}` {user} in {channel}"
+                    f"{timestamp} {status_icon} `/{command}` "
+                    f"{duration}ms {user} in {channel}"
                 )
 
                 error = item["error"]
@@ -215,30 +301,7 @@ async def setup(bot: "BotCore"):
                 return
         await interaction.response.defer()
 
-        actions = public_actions()
-        if requested_commands is not None:
-            requested = set(requested_commands)
-            actions = [
-                action
-                for action in actions
-                if action["command"] in requested
-            ]
-
-        users: dict[int, UserUsage] = {}
-        for action in actions:
-            user = users.setdefault(
-                action["user_id"],
-                UserUsage(user_id=action["user_id"], name=action["user_name"]),
-            )
-            user.name = action["user_name"]
-            user.total += 1
-            user.commands[action["command"]] += 1
-
-        ranked = sorted(
-            users.values(),
-            key=lambda item: item.total,
-            reverse=True,
-        )[:10]
+        ranked = ranked_usage(requested_commands)
 
         if not ranked:
             body = "No usage data for that query."

@@ -32,6 +32,7 @@ Go into `config.json` and provide the main credentials:
  * `sync`: Set true when slash commands need to be synced.
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.
+ * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
 
 If `local_config.json` exists, `main.py` uses that instead of `config.json`.
 This is useful for local testing without changing the main config file.

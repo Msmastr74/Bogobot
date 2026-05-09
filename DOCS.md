@@ -19,6 +19,9 @@ Configuration is managed via `config.json`. Key fields include:
 - `milestones`: Stores the latest confirmed value for each milestone name.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
+- `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
+- `telemetry_recent_limit`: Number of recent actions kept for `/manage telemetry`. Defaults to 200.
+- `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
 
@@ -87,6 +90,11 @@ These can be overridden in config. For example, to ping a role on updates:
 ```
 
 The available template variables are `$milestone_name`, `$old_value`, and `$new_value`.
+
+## Telemetry
+The telemetry plugin records command completions to a JSONL file. Each line is one completed command event, so new events can be appended without rewriting the whole history.
+
+The plugin keeps a small recent-action buffer for `/manage telemetry` and builds in-memory usage indexes at startup for `/usage`. New command events update those indexes as they arrive, which keeps `/usage` cheap even after the telemetry file grows.
 
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.

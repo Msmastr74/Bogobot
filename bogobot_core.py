@@ -871,7 +871,7 @@ class BotCore(discord.Client):
                 "interaction_id": interaction.id,
                 "command": command_name,
                 "user_id": interaction.user.id,
-                "user_name": str(interaction.user),
+                "username": str(interaction.user),
                 "channel_id": interaction.channel_id,
                 "time": 0
             }
