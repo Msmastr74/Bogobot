@@ -13,7 +13,7 @@ import importlib
 import contextvars
 import aiohttp
 import time
-from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, overload
+from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
 import logging
@@ -728,44 +728,19 @@ class BotCore(discord.Client):
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
             self.groups: dict[str, discord.app_commands.Group] = {}
-
+        
         T = TypeVar('T')
         P = ParamSpec('P')
-
-        @overload
+        _Callable = Callable[Concatenate[discord.Interaction, P], Coroutine[Any, Any, T]]
+        _Command = discord.app_commands.Command[discord.app_commands.Group, P, T]
+        
         def command(
             self, name: str, *, description="No description", perm_requirement=1,
-            eph=True, defer=True, group: None = None, group_description="No description"
-        ) -> Callable[[
-                Callable[Concatenate[discord.Interaction, P], Coroutine[Any, Any, T]]
-            ], discord.app_commands.Command[discord.app_commands.Group, P, T]]:...
-
-        @overload
-        def command(
-            self, name: str, *, description="No description", perm_requirement=1,
-            eph=True, defer=True, group: str | discord.app_commands.Group,
-            group_description="No description"
-        ) -> Callable[[
-                Callable[Concatenate[discord.Interaction, P], Coroutine[Any, Any, T]] |
-                Callable[Concatenate[discord.app_commands.Group, discord.Interaction, P],
-                         Coroutine[Any, Any, T]]
-            ], discord.app_commands.Command[discord.app_commands.Group, P, T]]:...
-
-        def command(
-            self, name: str, *, description="No description", perm_requirement=1,
-            eph=True, defer=True, group: str | discord.app_commands.Group | None = None,
-            group_description="No description"
-        ) -> Callable[[
-                Callable[..., Coroutine[Any, Any, Any]]
-            ], Any]:
-            def decorator(func):
-                target = self._get_group(group, group_description)
-                if target is None:
-                    dec = self.outer.tree.command(name=name, description=description)
-                else:
-                    dec = target.command(name=name, description=description)
-                
-                @dec
+            eph=True, defer=True
+        ) -> Callable[[_Callable], _Command]:
+            def decorator(
+                func: 'BotCore._Setup._Callable'
+            ) -> 'BotCore._Setup._Command':
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
                     await self._run_command(
@@ -777,7 +752,9 @@ class BotCore(discord.Client):
                         eph=eph,
                         defer=defer,
                     )
-                return wrapper
+                return self.outer.tree.command(
+                    name=name, description=description
+                )(cast('BotCore._Setup._Callable', wrapper))
             return decorator
 
         class _CommandGroup:
@@ -788,21 +765,29 @@ class BotCore(discord.Client):
             ):
                 self.setup = setup
                 self.group = group
-
+            
             def command(
                 self, name: str, *, description="No description", perm_requirement=1,
                 eph=True, defer=True
-            ) -> Callable[[
-                    Callable[..., Coroutine[Any, Any, Any]]
-                ], Any]:
-                return self.setup.command(
-                    name,
-                    description=description,
-                    perm_requirement=perm_requirement,
-                    eph=eph,
-                    defer=defer,
-                    group=self.group,
-                )
+            ) -> Callable[['BotCore._Setup._Callable'], 'BotCore._Setup._Command']:
+                def decorator(
+                    func: 'BotCore._Setup._Callable'
+                ) -> 'BotCore._Setup._Command':
+                    @functools.wraps(func)
+                    async def wrapper(interaction: discord.Interaction, *args, **kwargs):
+                        await self.setup._run_command(
+                            interaction,
+                            func,
+                            args,
+                            kwargs,
+                            perm_requirement=perm_requirement,
+                            eph=eph,
+                            defer=defer,
+                        )
+                    return self.group.command(
+                        name=name, description=description
+                    )(cast('BotCore._Setup._Callable', wrapper))
+                return decorator
 
         def group(
             self,

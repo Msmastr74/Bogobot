@@ -395,6 +395,38 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
+    @manage.command(
+        name="spoof_milestone",
+        description="Spoof a milestone value for testing",
+    )
+    async def spoof_milestone(interaction: discord.Interaction, name: str, data: str):
+        name = name.strip()
+        data = data.strip()
+
+        if not name or not data:
+            await bot.discord.send(
+                "Milestone name and data are required.",
+                response=True,
+            )
+            return
+
+        changed_value = None
+
+        for _ in range(MILESTONE_WINDOW_SIZE):
+            changed_value = await milestones.update(name, data) or changed_value
+
+        if changed_value is None:
+            await bot.discord.send(
+                f"`{name}` is already `{data}`.",
+                response=True,
+            )
+            return
+
+        await bot.discord.send(
+            f"Set `{name}` to `{changed_value}`.",
+            response=True,
+        )
+
     @bot.init_callback
     async def init():
         await bot.channels.wait_until_ready()
