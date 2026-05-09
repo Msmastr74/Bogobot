@@ -95,7 +95,7 @@ async def setup(bot: "BotCore"):
                 telemetry_path.parent.mkdir(parents=True, exist_ok=True)
 
             tmp_path = telemetry_path.with_suffix(f"{telemetry_path.suffix}.tmp")
-            tmp_path.write_text(json.dumps(saved_actions))
+            tmp_path.write_text(json.dumps(saved_actions, separators=(",", ":")))
             tmp_path.replace(telemetry_path)
         except OSError as e:
             bot.logger.warning(f"Could not save telemetry file: {e}")
