@@ -319,7 +319,7 @@ async def setup(bot: "BotCore"):
                 continue
             all_valid_commands.add(command.qualified_name)
 
-            if command.qualified_name.startswith(manage.group.name + " ")
+            if command.qualified_name.startswith(manage.group.name + " "):
                 continue
 
             valid_public_commands.add(command.qualified_name)
