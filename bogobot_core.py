@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 import json
+import hashlib
 import csv
 import io
 import numpy as np
@@ -13,6 +14,7 @@ import importlib
 import contextvars
 import aiohttp
 import time
+import threading
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
@@ -38,6 +40,7 @@ class BotCore(discord.Client):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
+        self._config_lock = threading.Lock()
         
         self.channels_path: str = self.config.get("channels_path", "channels.json")
         if not os.path.exists(self.channels_path):
@@ -488,10 +491,25 @@ class BotCore(discord.Client):
                     pass
 
     async def setup_hook(self):
-        if self.config.get('sync', True):
+        command_tree_hash = self._command_tree_hash()
+        sync_forced = bool(self.config.get('sync', False))
+        sync_needed = self.config.get("command_tree_hash") != command_tree_hash
+
+        if sync_forced or sync_needed:
+            reason = "forced" if sync_forced else "command tree changed"
+            self.logger.info(f"Syncing Discord command tree ({reason})")
             await self.tree.sync()
             self.config['sync'] = False
+            self.config["command_tree_hash"] = command_tree_hash
             self.save_config()
+
+    def _command_tree_hash(self) -> str:
+        commands = [
+            command.to_dict(self.tree)
+            for command in self.tree.get_commands()
+        ]
+        payload = json.dumps(commands, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     
     async def on_ready(self):
         assert self.user is not None
@@ -521,9 +539,15 @@ class BotCore(discord.Client):
                 if hasattr(mod, "setup"):
                     await mod.setup(self)
                 self.logger.info(f"Loaded Plugin: {filename}")
+    
     def save_config(self):
-        with open(self.config_path, 'w') as f:
-            json.dump(self.config, f, indent=4)
+        with self._config_lock:
+            tmp_path = f"{self.config_path}.tmp"
+
+            with open(tmp_path, 'w') as f:
+                json.dump(self.config, f, indent=4)
+
+            os.replace(tmp_path, self.config_path)
 
     async def run_bot(self):
         self.stream_handler.start()

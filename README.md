@@ -29,7 +29,7 @@ Go into `config.json` and provide the main credentials:
  * `bot_token`: Discord bot token.
  * `owner_uid`: Your Discord user ID.
  * `authorized_users`: User IDs allowed to run authorized commands.
- * `sync`: Set true when slash commands need to be synced.
+ * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.

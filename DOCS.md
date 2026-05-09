@@ -9,7 +9,8 @@ The `BotCore` class is the central manager for the bot, handling configuration, 
 Configuration is managed via `config.json`. Key fields include:
 - `bot_token`: The Discord bot token.
 - `authorized_users`: A list of user IDs with elevated permissions.
-- `sync`: Whether to sync the command tree on the next run. This parameter is automatically reset to false each run.
+- `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes.
+- `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
 - `save_ocr_debug`: Enable/disable saving OCR debug images.
 - `debug`: Enable/disable debug logging (loglevel).
 - `silence_stream`: Suppress Streamlink/FFmpeg output.
