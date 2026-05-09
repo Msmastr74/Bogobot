@@ -14,6 +14,10 @@ MONITOR_USAGE_TYPE = "monitor"
 
 
 async def setup(bot: "BotCore"):
+    import groups
+
+    manage = groups.manage(bot)
+
     def get_monitor_messages() -> dict[str, int]:
         """
         Stored in config as:
@@ -211,10 +215,9 @@ async def setup(bot: "BotCore"):
 
             save_monitor_messages(monitor_messages)
 
-    @bot.setup.command(
+    @manage.command(
         name="monitor",
         description="Begins monitoring sorted number counts from the stream in this channel",
-        group="manage"
     )
     async def monitor(interaction: discord.Interaction):
         monitor_messages = get_monitor_messages()
@@ -282,10 +285,9 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
-    @bot.setup.command(
+    @manage.command(
         name="stop_monitor",
         description="Stops the stream monitor in this channel",
-        group="manage"
     )
     async def stop_monitor(interaction: discord.Interaction):
         monitor_messages = get_monitor_messages()

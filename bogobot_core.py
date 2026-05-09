@@ -31,6 +31,7 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
 
 if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
+    from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
@@ -83,6 +84,7 @@ class BotCore(discord.Client):
         self.info = self._Info(self)
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)
+        self.command_telemetry_callbacks: list[Callable[["CommandTelemetryEvent"], Awaitable[None] | None]] = []
         self._last_ocr_refresh: float = 0.0
         self._last_frame_ms = time.monotonic()
         
@@ -105,6 +107,22 @@ class BotCore(discord.Client):
     
     def init_callback(self, callback: Callable[[], Awaitable[None]]):
         self.on_ready_callbacks.append(callback)
+
+    def command_telemetry_callback(
+        self,
+        callback: Callable[["CommandTelemetryEvent"], Awaitable[None] | None],
+    ):
+        self.command_telemetry_callbacks.append(callback)
+        return callback
+
+    async def emit_command_telemetry(self, event: "CommandTelemetryEvent"):
+        for callback in self.command_telemetry_callbacks:
+            try:
+                result = callback(event)
+                if result is not None:
+                    await result
+            except Exception as e:
+                self.logger.warning(f"Command telemetry callback failed: {e}")
 
     class _Info:
         def __init__(self, outer: 'BotCore'):
@@ -762,6 +780,39 @@ class BotCore(discord.Client):
                 return wrapper
             return decorator
 
+        class _CommandGroup:
+            def __init__(
+                self,
+                setup: "BotCore._Setup",
+                group: discord.app_commands.Group,
+            ):
+                self.setup = setup
+                self.group = group
+
+            def command(
+                self, name: str, *, description="No description", perm_requirement=1,
+                eph=True, defer=True
+            ) -> Callable[[
+                    Callable[..., Coroutine[Any, Any, Any]]
+                ], Any]:
+                return self.setup.command(
+                    name,
+                    description=description,
+                    perm_requirement=perm_requirement,
+                    eph=eph,
+                    defer=defer,
+                    group=self.group,
+                )
+
+        def group(
+            self,
+            name: str | discord.app_commands.Group,
+            description="No description",
+        ) -> "BotCore._Setup._CommandGroup":
+            group = self._get_group(name, description)
+            assert group is not None
+            return self._CommandGroup(self, group)
+
         def context_menu(
             self, name: str, *, perm_requirement=1,
             eph=True, defer=True
@@ -824,6 +875,24 @@ class BotCore(discord.Client):
             eph,
             defer,
         ):
+            started_at = time.monotonic()
+            command_obj = interaction.command
+            command_name = (
+                getattr(command_obj, "qualified_name", None) or
+                getattr(command_obj, "name", None) or
+                getattr(func, "__name__", "unknown")
+            )
+            base_event: CommandTelemetryBase = {
+                "interaction_id": interaction.id,
+                "command": command_name,
+                "user_id": interaction.user.id,
+                "user_name": str(interaction.user),
+                "channel_id": interaction.channel_id,
+                "time": 0
+            }
+            status = "ok"
+            error: str | None = None
+
             token = current_interaction.set(interaction)
             uid = interaction.user.id
             owner_id = self.outer.config.get("owner_uid")
@@ -838,15 +907,31 @@ class BotCore(discord.Client):
                 allowed = True
 
             try:
+                await self.outer.emit_command_telemetry({
+                    **base_event,
+                    "phase": "start",
+                    "time": int(time.time()),
+                })
                 if not allowed:
+                    status = "unauthorized"
                     return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
                 if defer:
                     await interaction.response.defer(ephemeral=(eph))
                 await func(interaction, *args, **kwargs)
             except Exception as e:
+                status = "error"
+                error = str(e)
                 if interaction.response.is_done():
                     await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
                 else:
                     await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
             finally:
+                await self.outer.emit_command_telemetry({
+                    **base_event,
+                    "phase": "end",
+                    "time": int(time.time()),
+                    "status": status,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000, 1),
+                    "error": error,
+                })
                 current_interaction.reset(token)

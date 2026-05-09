@@ -273,13 +273,15 @@ class MilestoneTracker:
 
 
 async def setup(bot: "BotCore"):
+    import groups
+
+    manage = groups.manage(bot)
     milestones = MilestoneTracker(bot)
     bot.milestones = milestones
 
-    @bot.setup.command(
+    @manage.command(
         name="subscribe_milestones",
         description="Subscribe this channel to milestone notifications",
-        group="manage"
     )
     async def subscribe_milestones(interaction: discord.Interaction):
         channel_id = interaction.channel_id
@@ -305,10 +307,9 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
-    @bot.setup.command(
+    @manage.command(
         name="unsubscribe_milestones",
         description="Unsubscribe this channel from milestone notifications",
-        group="manage"
     )
     async def unsubscribe_milestones(interaction: discord.Interaction):
         channel_id = interaction.channel_id
