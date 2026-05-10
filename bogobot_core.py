@@ -41,7 +41,7 @@ class ColorFormatter(logging.Formatter):
         return f"{color}{message}{self.RESET}"
 
 CONSOLE_LOG_HANDLER = logging.StreamHandler()
-CONSOLE_LOG_HANDLER.setFormatter(ColorFormatter())
+CONSOLE_LOG_HANDLER.setFormatter(ColorFormatter(LOG_FORMAT, LOG_DATE_FORMAT))
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
