@@ -430,6 +430,30 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
+    @bot.setup.command(
+        name="milestone_info",
+        description="Show recent in-memory history for a milestone",
+    )
+    async def milestone_info(interaction: discord.Interaction, milestone_name: str):
+        milestone_name = milestone_name.strip()
+
+        if not milestone_name:
+            await bot.discord.send(
+                "Milestone name is required.",
+                response=True,
+            )
+            return
+
+        history = milestones.history.get(milestone_name)
+        history_items = list(history or ())
+        history_text = "\n".join(history_items) if history_items else "(empty)"
+
+        await bot.discord.send(
+            f"{milestone_name} history items: `{len(history_items)}`\n"
+            f"```\n{history_text}\n```",
+            response=True,
+        )
+
     @bot.init_callback
     async def init():
         await bot.channels.wait_until_ready()
