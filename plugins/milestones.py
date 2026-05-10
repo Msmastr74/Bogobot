@@ -68,6 +68,17 @@ class MilestoneTracker:
         self.bot.config["milestones"] = state
         await self.bot.save_config()
 
+    async def delete(self, milestone_name: str) -> bool:
+        state = await self._get_state()
+        removed = state.pop(milestone_name, None) is not None
+        self.history.pop(milestone_name, None)
+
+        if removed:
+            self.bot.config["milestones"] = state
+            await self.bot.save_config()
+
+        return removed
+
     def _format_message(
         self,
         template_key: str,
@@ -273,15 +284,30 @@ async def setup(bot: "BotCore"):
 
     @manage.command(
         name="spoof_milestone",
-        description="Spoof a milestone value for testing",
+        description="Spoof or delete a milestone value for testing",
     )
-    async def spoof_milestone(interaction: discord.Interaction, name: str, data: str):
+    async def spoof_milestone(interaction: discord.Interaction, name: str, data: str | None = None):
         name = name.strip()
-        data = data.strip()
+        data = data.strip() if data is not None else None
 
-        if not name or not data:
+        if not name:
             await bot.discord.send(
-                "Milestone name and data are required.",
+                "Milestone name is required.",
+                response=True,
+            )
+            return
+
+        if data is None:
+            deleted = await milestones.delete(name)
+            await bot.discord.send(
+                f"Deleted `{name}`." if deleted else f"`{name}` does not exist.",
+                response=True,
+            )
+            return
+
+        if not data:
+            await bot.discord.send(
+                "Milestone data is required when spoofing.",
                 response=True,
             )
             return

@@ -1,7 +1,10 @@
 from collections import deque
+import asyncio
 import contextlib
 from dataclasses import dataclass
 import logging
+import os
+import sys
 from typing import TYPE_CHECKING
 
 import discord
@@ -14,6 +17,7 @@ if TYPE_CHECKING:
 LOG_EMBED_TEXT_LIMIT = 3800
 MAX_LOG_MESSAGES = 5
 DEFAULT_LOG_LENGTH = 30
+RESTART_DELAY_SECONDS = 1.0
 
 LOG_LEVEL_COLORS = {
     logging.DEBUG: discord.Color.light_grey(),
@@ -85,6 +89,18 @@ class MemoryLogHandler(logging.Handler):
 MEMORY_LOG_HANDLER = MemoryLogHandler(500)
 MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
 MEMORY_LOG_HANDLER.setFormatter(logging.Formatter())
+
+
+async def restart_process(client: discord.Client, logger: logging.Logger) -> None:
+    await asyncio.sleep(RESTART_DELAY_SECONDS)
+    logger.critical("Restarting process by command request.")
+    with contextlib.suppress(Exception):
+        await client.close()
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+def schedule_restart(client: discord.Client, logger: logging.Logger) -> None:
+    asyncio.create_task(restart_process(client, logger))
 
 
 def configure_memory_log_capacity(capacity: int) -> None:
@@ -350,6 +366,14 @@ class FallbackHealthcheckClient(discord.Client):
     def _install_commands(self) -> None:
         manage = app_commands.Group(name="manage")
 
+        @manage.command(name="restart", description="Restart the bot process")
+        async def restart(interaction: discord.Interaction):
+            if not self.source_bot.is_authorized(interaction.user.id, 1):
+                await interaction.response.send_message("Unauthorized.", ephemeral=True)
+                return
+            await interaction.response.send_message("Restarting...", ephemeral=True)
+            schedule_restart(self, self.logger)
+
         @manage.command(name="logs", description="Show recent bot logs")
         async def logs(
             interaction: discord.Interaction,
@@ -404,6 +428,15 @@ async def setup(bot: "BotCore"):
     manage = groups.manage(bot)
     configure_memory_log_capacity(int(bot.config.get("healthcheck_log_capacity", 500)))
     handler = MEMORY_LOG_HANDLER
+
+    @manage.command(
+        name="restart",
+        description="Restart the bot process",
+        perm_requirement=2,
+    )
+    async def restart(interaction: discord.Interaction):
+        await bot.discord.send("Restarting...", response=True)
+        schedule_restart(bot, bot.logger)
 
     @manage.command(name="logs", description="Show recent bot logs")
     async def logs(
