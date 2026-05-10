@@ -58,6 +58,10 @@ class MilestoneTracker:
     async def get(self, milestone_name: str) -> str | None:
         return await self._get_current_value(milestone_name)
 
+    async def names(self) -> set[str]:
+        state = await self._get_state()
+        return set(state) | set(self.history)
+
     async def _set_current_value(self, milestone_name: str, milestone_value: str) -> None:
         state = await self._get_state()
         state[milestone_name] = milestone_value
@@ -447,12 +451,33 @@ async def setup(bot: "BotCore"):
         history = milestones.history.get(milestone_name)
         history_items = list(history or ())
         history_text = "\n".join(history_items) if history_items else "(empty)"
+        current_value = await milestones.get(milestone_name)
 
         await bot.discord.send(
-            f"{milestone_name} history items: `{len(history_items)}`\n"
+            f"{milestone_name} current value: `{current_value or 'None'}`\n"
+            f"History items: `{len(history_items)}`\n"
             f"```\n{history_text}\n```",
             response=True,
         )
+
+    @milestone_info.autocomplete("milestone_name")
+    async def milestone_info_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[discord.app_commands.Choice[str]]:
+        current = current.strip().lower()
+        choices = []
+
+        for name in sorted(await milestones.names(), key=str.casefold):
+            if current and not name.lower().startswith(current):
+                continue
+
+            choices.append(discord.app_commands.Choice(name=name, value=name))
+
+            if len(choices) >= 25:
+                break
+
+        return choices
 
     @bot.init_callback
     async def init():
