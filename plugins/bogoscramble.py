@@ -564,58 +564,89 @@ async def setup(bot: "BotCore"):
             name = os.path.basename(path)
             return name or fallback
 
-        def embed_proxy_url(proxy: discord.embeds._EmbedMediaProxy) -> str | None:
+        def embed_fetch_url(proxy: discord.embeds._EmbedMediaProxy) -> tuple[str, bool] | None:
             if proxy.url and proxy.url.startswith("https://cdn.discordapp.com/"):
-                return proxy.url
-            return proxy.proxy_url or proxy.url
+                return proxy.url, False
 
-        def embed_media_jobs(embed: discord.Embed) -> list[tuple[str, str]]:
-            jobs: list[tuple[str, str]] = []
+            if proxy.proxy_url:
+                return proxy.proxy_url, True
+
+            if proxy.url:
+                return proxy.url, False
+
+            return None
+
+        def embed_media_jobs(embed: discord.Embed) -> list[tuple[str, str, bool]]:
+            jobs: list[tuple[str, str, bool]] = []
             seen: set[str] = set()
 
-            for kind, url in (
-                ("image", embed_proxy_url(embed.image)),
-                ("thumbnail", embed_proxy_url(embed.thumbnail)),
+            for kind, result in (
+                ("image", embed_fetch_url(embed.image)),
+                ("thumbnail", embed_fetch_url(embed.thumbnail)),
             ):
+                if result is None:
+                    continue
+
+                url, use_discord_headers = result
                 if not url or url in seen:
                     continue
 
                 seen.add(url)
-                jobs.append((kind, url))
+                jobs.append((kind, url, use_discord_headers))
 
             return jobs
 
         def set_embed_media(embed: discord.Embed, kind: str, url: str | None):
             if kind == "thumbnail":
-                if embed.url == embed_proxy_url(embed.thumbnail):
+                if embed.url == embed.thumbnail.url:
                     embed.url = None
                 embed.set_thumbnail(url=url)
             else:
-                if embed.url == embed_proxy_url(embed.image):
+                if embed.url == embed.image.url:
                     embed.url = None
                 embed.set_image(url=url)
 
         def is_plain_image_embed(embed: discord.Embed) -> bool:
             return embed.type == "image"
 
-        async def read_url(url: str) -> tuple[bytes, str]:
+        def discord_fetch_headers() -> dict[str, str]:
+            headers: dict[str, str] = {
+                "User-Agent": bot.http.user_agent
+            }
+
+            if bot.http.token is not None:
+                headers['Authorization'] = 'Bot ' + bot.http.token
+
+            return headers
+
+        async def read_url(url: str, *, use_discord_headers: bool = False) -> tuple[bytes, str]:
             timeout = aiohttp.ClientTimeout(total=15)
+            session: aiohttp.ClientSession | discord.utils._MissingSentinel = (
+                bot.http.__session
+            )
+
+            if not isinstance(session, aiohttp.ClientSession) or session.closed:
+                raise BogoUserError("Could not access Discord HTTP session.")
+
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
-                        if response.status >= 400:
-                            raise BogoUserError(f"Could not read embed image (HTTP {response.status}).")
+                async with session.get(
+                    url,
+                    timeout=timeout,
+                    headers=discord_fetch_headers() if use_discord_headers else None,
+                ) as response:
+                    if response.status >= 400:
+                        raise BogoUserError(f"Could not read embed image (HTTP {response.status}).")
 
-                        content_length = response.headers.get("Content-Length")
-                        if content_length:
-                            with contextlib.suppress(ValueError):
-                                size = int(content_length)
-                                if size > upload_limit:
-                                    filename = filename_from_url(url, "embed_image.png")
-                                    raise BogoUserError(attachment_too_big_message(filename, size))
+                    content_length = response.headers.get("Content-Length")
+                    if content_length:
+                        with contextlib.suppress(ValueError):
+                            size = int(content_length)
+                            if size > upload_limit:
+                                filename = filename_from_url(url, "embed_image.png")
+                                raise BogoUserError(attachment_too_big_message(filename, size))
 
-                        content_type = response.headers.get("Content-Type", "")
-                        return await response.read(), content_type
+                    content_type = response.headers.get("Content-Type", "")
+                    return await response.read(), content_type
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 raise BogoUserError("Could not read embed image.") from e
 
@@ -671,9 +702,13 @@ async def setup(bot: "BotCore"):
             embed: discord.Embed,
             kind: str,
             url: str,
+            use_discord_headers: bool,
         ) -> discord.File | None:
             try:
-                data, content_type = await read_url(url)
+                data, content_type = await read_url(
+                    url,
+                    use_discord_headers=use_discord_headers,
+                )
             except BogoUserError:
                 set_embed_media(embed, kind, None)
                 raise
@@ -768,17 +803,17 @@ async def setup(bot: "BotCore"):
 
         try:
             embed_image_candidates = [
-                (index, embed, kind, url)
+                (index, embed, kind, url, use_discord_headers)
                 for index, (original, embed) in enumerate(embed_pairs)
-                for kind, url in embed_media_jobs(original)
+                for kind, url, use_discord_headers in embed_media_jobs(original)
             ]
             available_file_slots = max(0, 10 - len(files))
-            for _, embed, kind, _ in embed_image_candidates[available_file_slots:]:
+            for _, embed, kind, _, _ in embed_image_candidates[available_file_slots:]:
                 set_embed_media(embed, kind, None)
 
             embed_image_tasks = [
-                bogo_embed_image(index, embed, kind, url)
-                for index, embed, kind, url in embed_image_candidates[:available_file_slots]
+                bogo_embed_image(index, embed, kind, url, use_discord_headers)
+                for index, embed, kind, url, use_discord_headers in embed_image_candidates[:available_file_slots]
             ]
             files.extend(await gather_bogo_files(embed_image_tasks))
 
