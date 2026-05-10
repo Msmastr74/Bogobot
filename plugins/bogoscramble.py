@@ -817,12 +817,14 @@ async def setup(bot: "BotCore"):
         name="bogoscramble",
         description="Bogoscramble text and attachments",
         perm_requirement=0,
-        eph=False,
+        defer=False
     )
     async def bogoscramble(
         interaction: discord.Interaction,
         text: str | None = None,
         attachment1: discord.Attachment | None = None,
+        rows: int = DEFAULT_SCRAMBLE_SHAPE[0],
+        columns: int = DEFAULT_SCRAMBLE_SHAPE[1],
         attachment2: discord.Attachment | None = None,
         attachment3: discord.Attachment | None = None,
         attachment4: discord.Attachment | None = None,
@@ -841,9 +843,7 @@ async def setup(bot: "BotCore"):
         attachment17: discord.Attachment | None = None,
         attachment18: discord.Attachment | None = None,
         attachment19: discord.Attachment | None = None,
-        attachment20: discord.Attachment | None = None,
-        rows: int = DEFAULT_SCRAMBLE_SHAPE[0],
-        columns: int = DEFAULT_SCRAMBLE_SHAPE[1]
+        attachment20: discord.Attachment | None = None
     ):
         if rows and not 1 <= rows <= MAXIMUM_SCRAMBLE_SHAPE[0]:
             await bot.discord.send(
@@ -857,6 +857,7 @@ async def setup(bot: "BotCore"):
                 response=True, ephemeral=True
             )
             return
+        await interaction.response.defer()
         attachments = [
             attachment
             for attachment in (
