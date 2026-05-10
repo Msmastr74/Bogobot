@@ -14,6 +14,7 @@ from PIL import Image, ImageSequence
 
 from typing import Any, Optional, overload
 from types import CoroutineType
+from bogobot_core import current_interaction
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
@@ -26,6 +27,48 @@ class BogoUserError(Exception):
     pass
 
 async def setup(bot: "BotCore"):
+    def get_scramble_shape(rows: int | None, columns: int | None) -> tuple[int, int]:
+        if rows is None and columns is None:
+            return DEFAULT_SCRAMBLE_SHAPE
+
+        if rows is not None and not 1 <= rows <= MAXIMUM_SCRAMBLE_SHAPE[0]:
+            raise BogoUserError(
+                f"Number of rows must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[0]}"
+            )
+
+        if columns is not None and not 1 <= columns <= MAXIMUM_SCRAMBLE_SHAPE[1]:
+            raise BogoUserError(
+                f"Number of columns must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[1]}"
+            )
+
+        return rows or 1, columns or 1
+
+    def message_bogoscramble_inputs(
+        message: discord.Message,
+    ) -> tuple[str, list[discord.Embed], list[Any]]:
+        sources: list[discord.Message | discord.MessageSnapshot] = [
+            message,
+            *message.message_snapshots
+        ]
+
+        content_parts = [
+            source.content
+            for source in sources
+            if source.content
+        ]
+        embeds = [
+            embed
+            for source in sources
+            for embed in source.embeds
+        ]
+        attachments = [
+            attachment
+            for source in sources
+            for attachment in source.attachments
+        ]
+
+        return "\n\n".join(content_parts), embeds, attachments
+
     async def send_bogoscramble(
         interaction: discord.Interaction,
         *,
@@ -782,36 +825,81 @@ async def setup(bot: "BotCore"):
         eph=False,
     )
     async def Bogoscramble(interaction: discord.Interaction, message: discord.Message):
-        sources: list[discord.Message | discord.MessageSnapshot] = [
-            message,
-            *message.message_snapshots
-        ]
-
-        content_parts = [
-            source.content
-            for source in sources
-            if source.content
-        ]
-        embeds = [
-            embed
-            for source in sources
-            for embed in source.embeds
-        ]
-        attachments = [
-            attachment
-            for source in sources
-            for attachment in source.attachments
-        ]
+        content, embeds, attachments = message_bogoscramble_inputs(message)
 
         try:
             await send_bogoscramble(
                 interaction,
-                content="\n\n".join(content_parts),
+                content=content,
                 embeds=embeds,
                 attachments=attachments,
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
+
+    class CustomBogoscrambleModal(discord.ui.Modal, title="Custom Bogoscramble"):
+        rows = discord.ui.TextInput(
+            label="Rows",
+            default=str(DEFAULT_SCRAMBLE_SHAPE[0]),
+            required=True,
+            max_length=2,
+        )
+        columns = discord.ui.TextInput(
+            label="Columns",
+            default=str(DEFAULT_SCRAMBLE_SHAPE[1]),
+            required=True,
+            max_length=2,
+        )
+
+        def __init__(
+            self,
+            *,
+            content: str,
+            embeds: list[discord.Embed],
+            attachments: list[Any],
+        ):
+            super().__init__()
+            self.content = content
+            self.embeds = embeds
+            self.attachments = attachments
+
+        async def on_submit(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=False)
+            token = current_interaction.set(interaction)
+
+            try:
+                try:
+                    rows = int(str(self.rows.value).strip())
+                    columns = int(str(self.columns.value).strip())
+                except ValueError as e:
+                    raise BogoUserError("Rows and columns must be whole numbers.") from e
+
+                await send_bogoscramble(
+                    interaction,
+                    content=self.content,
+                    embeds=self.embeds,
+                    attachments=self.attachments,
+                    scramble_shape=get_scramble_shape(rows, columns),
+                )
+            except BogoUserError as e:
+                await send_bogo_error(interaction, e)
+            finally:
+                current_interaction.reset(token)
+    @bot.setup.context_menu(
+        name="Custom Bogoscramble",
+        perm_requirement=0,
+        eph=False,
+        defer=False,
+    )
+    async def CustomBogoscramble(interaction: discord.Interaction, message: discord.Message):
+        content, embeds, attachments = message_bogoscramble_inputs(message)
+        await interaction.response.send_modal(
+            CustomBogoscrambleModal(
+                content=content,
+                embeds=embeds,
+                attachments=attachments,
+            )
+        )
 
     @bot.setup.command(
         name="bogoscramble",
@@ -845,22 +933,16 @@ async def setup(bot: "BotCore"):
         attachment19: discord.Attachment | None = None,
         attachment20: discord.Attachment | None = None
     ):
-        if rows is None and columns is None:
-            scramble_shape = DEFAULT_SCRAMBLE_SHAPE
-        else:
-            if rows is not None and not 1 <= rows <= MAXIMUM_SCRAMBLE_SHAPE[0]:
-                await bot.discord.send(
-                    f"Number of rows must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[0]}",
-                    response=True, ephemeral=True
-                )
-                return
-            if columns is not None and not 1 <= columns <= MAXIMUM_SCRAMBLE_SHAPE[1]:
-                await bot.discord.send(
-                    f"Number of columns must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[1]}",
-                    response=True, ephemeral=True
-                )
-                return
-            scramble_shape = (rows or 1, columns or 1)
+        try:
+            scramble_shape = get_scramble_shape(rows, columns)
+        except BogoUserError as e:
+            await bot.discord.send(
+                str(e),
+                response=True,
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         attachments = [
             attachment
