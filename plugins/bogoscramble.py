@@ -18,8 +18,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
 
-SCRAMBLE_TILE_PERCENT = 0.1
 MAXIMUM_FRAMES = 5000
+DEFAULT_SCRAMBLE_SHAPE = (10, 10)
+MAXIMUM_SCRAMBLE_SHAPE = (30, 30)
 
 class BogoUserError(Exception):
     pass
@@ -31,6 +32,7 @@ async def setup(bot: "BotCore"):
         content: str | None = None,
         embeds: list[discord.Embed] | None = None,
         attachments: list[Any] | None = None,
+        scramble_shape: tuple[int, int] = DEFAULT_SCRAMBLE_SHAPE
     ):
         upload_limit = interaction.filesize_limit
 
@@ -136,8 +138,8 @@ async def setup(bot: "BotCore"):
             )
 
         def tile_plan(width: int, height: int):
-            columns = max(1, round(1 / SCRAMBLE_TILE_PERCENT))
-            rows = max(1, round(1 / SCRAMBLE_TILE_PERCENT))
+            rows = max(1, scramble_shape[0])
+            columns = max(1, scramble_shape[1])
             boxes = [
                 (
                     round(column * width / columns),
@@ -840,11 +842,21 @@ async def setup(bot: "BotCore"):
         attachment18: discord.Attachment | None = None,
         attachment19: discord.Attachment | None = None,
         attachment20: discord.Attachment | None = None,
-        attachment21: discord.Attachment | None = None,
-        attachment22: discord.Attachment | None = None,
-        attachment23: discord.Attachment | None = None,
-        attachment24: discord.Attachment | None = None,
+        rows: int = DEFAULT_SCRAMBLE_SHAPE[0],
+        columns: int = DEFAULT_SCRAMBLE_SHAPE[1]
     ):
+        if rows and not 1 <= rows <= MAXIMUM_SCRAMBLE_SHAPE[0]:
+            await bot.discord.send(
+                f"Number of rows must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[0]}",
+                response=True, ephemeral=True
+            )
+            return
+        if columns and not 1 <= columns <= MAXIMUM_SCRAMBLE_SHAPE[1]:
+            await bot.discord.send(
+                f"Number of columns must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[1]}",
+                response=True, ephemeral=True
+            )
+            return
         attachments = [
             attachment
             for attachment in (
@@ -867,11 +879,7 @@ async def setup(bot: "BotCore"):
                 attachment17,
                 attachment18,
                 attachment19,
-                attachment20,
-                attachment21,
-                attachment22,
-                attachment23,
-                attachment24,
+                attachment20
             )
             if attachment is not None
         ]
@@ -881,6 +889,7 @@ async def setup(bot: "BotCore"):
                 interaction,
                 content=text,
                 attachments=attachments,
+                scramble_shape=(rows, columns)
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
