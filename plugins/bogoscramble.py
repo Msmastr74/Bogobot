@@ -621,8 +621,8 @@ async def setup(bot: "BotCore"):
 
         async def read_url(url: str, *, use_discord_headers: bool = False) -> tuple[bytes, str]:
             timeout = aiohttp.ClientTimeout(total=15)
-            session: aiohttp.ClientSession | discord.utils._MissingSentinel = (
-                bot.http.__session
+            session: aiohttp.ClientSession | discord.utils._MissingSentinel | None = (
+                getattr(bot.http, '_HTTPClient__session', None)
             )
 
             if not isinstance(session, aiohttp.ClientSession) or session.closed:
@@ -755,6 +755,7 @@ async def setup(bot: "BotCore"):
                 if isinstance(result, Exception):
                     for file in files:
                         file.close()
+                    bot.logger.warning(result)
                     raise BogoUserError("Could not bogo media.") from result
                 
                 if isinstance(result, BaseException):
