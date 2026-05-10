@@ -153,7 +153,7 @@ class FallbackHealthcheckClient(discord.Client):
             start_from_last: int | None = None,
             end_at_last: int | None = None,
             start_from_first: int | None = None,
-            end_from_first: int | None = None,
+            end_at_first: int | None = None,
             msgs: int = 1,
         ):
             if not self.source_bot.is_authorized(interaction.user.id, 1):
@@ -167,7 +167,7 @@ class FallbackHealthcheckClient(discord.Client):
                 start_from_last=start_from_last,
                 end_at_last=end_at_last,
                 start_from_first=start_from_first,
-                end_from_first=end_from_first,
+                end_at_first=end_at_first,
                 msgs=msgs,
             )
             if error:
@@ -208,7 +208,7 @@ def validate_log_range(
     start_from_last: int | None = None,
     end_at_last: int | None = None,
     start_from_first: int | None = None,
-    end_from_first: int | None = None,
+    end_at_first: int | None = None,
     msgs: int = 1,
 ) -> tuple[LogRange | None, str | None]:
     if not 1 <= msgs <= MAX_LOG_MESSAGES:
@@ -218,59 +218,67 @@ def validate_log_range(
         (start_from_last is not None and start_from_last < 0)
         or (end_at_last is not None and end_at_last < 0)
         or (start_from_first is not None and start_from_first < 0)
-        or (end_from_first is not None and end_from_first < 0)
+        or (end_at_first is not None and end_at_first < 0)
     ):
         return None, "Log offsets must be non-negative."
 
-    if end_from_first is not None and start_from_first is not None and end_from_first <= start_from_first:
-        return None, "`end_from_first` must be greater than `start_from_first`."
+    if start_from_first is not None and start_from_last is not None:
+        return None, "Use only one start offset."
 
-    using_first = start_from_first is not None or end_from_first is not None
+    if end_at_first is not None and end_at_last is not None:
+        return None, "Use only one end offset."
+
+    def clamp(position: int) -> int:
+        return max(0, min(position, total))
 
     if (
-        not using_first
-        and end_at_last is not None
-        and start_from_last is not None
-        and end_at_last <= start_from_last
+        start_from_first is None
+        and start_from_last is None
+        and end_at_first is None
+        and end_at_last is None
     ):
-        return None, "`end_at_last` must be greater than `start_from_last`."
-
-    using_any = any(
-        value is not None
-        for value in (start_from_last, end_at_last, start_from_first, end_from_first)
-    )
-
-    start = 0
-    end = total
-
-    if not using_any:
         start = max(0, total - 30)
-    elif using_first:
-        if start_from_first is not None:
-            start = max(start, start_from_first)
-        if start_from_last is not None:
-            start = max(start, total - start_from_last)
-        if end_from_first is not None:
-            end = min(end, end_from_first)
-        if end_at_last is not None:
-            end = min(end, total - end_at_last)
+        end = total
+        truncate_mode = "last"
     else:
-        if end_at_last is not None:
-            start = max(start, total - end_at_last)
-        if start_from_last is not None:
-            end = min(end, total - start_from_last)
+        start: int | None = None
+        end: int | None = None
+        truncate_mode = "last"
 
-    start = max(0, min(start, total))
-    end = max(0, min(end, total))
+        if start_from_first is not None:
+            start = clamp(start_from_first)
+            truncate_mode = "first"
+        elif start_from_last is not None:
+            start = clamp(total - start_from_last)
 
-    if end < start:
-        return None, "Log range is empty after converting offsets."
+        if end_at_first is not None:
+            end = clamp(end_at_first)
+            if start is None:
+                start = end
+                end = clamp(start + 30)
+                truncate_mode = "first"
+        elif end_at_last is not None:
+            end = clamp(total - end_at_last)
+            if start is None:
+                start = clamp(end - 30)
+
+        if start is None:
+            start = max(0, total - 30)
+        if end is None:
+            if start_from_last is not None:
+                end = start
+                start = clamp(end - 30)
+            else:
+                end = clamp(start + 30)
+
+        if start > end:
+            start, end = end, start
 
     return LogRange(
         start=start,
         end=end,
         label=f"Showing log indexes `{start}` to `{end}`",
-        truncate_mode="first" if start_from_first is not None else "last",
+        truncate_mode=truncate_mode,
         msgs=msgs,
     ), None
 
@@ -290,7 +298,7 @@ async def setup(bot: "BotCore"):
         start_from_last: int | None = None,
         end_at_last: int | None = None,
         start_from_first: int | None = None,
-        end_from_first: int | None = None,
+        end_at_first: int | None = None,
         msgs: int = 1,
     ):
         log_range, error = validate_log_range(
@@ -298,7 +306,7 @@ async def setup(bot: "BotCore"):
             start_from_last=start_from_last,
             end_at_last=end_at_last,
             start_from_first=start_from_first,
-            end_from_first=end_from_first,
+            end_at_first=end_at_first,
             msgs=msgs,
         )
         if error:
