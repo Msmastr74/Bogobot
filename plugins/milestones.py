@@ -1,6 +1,6 @@
 from collections import Counter, defaultdict, deque
 from string import Template
-from typing import TYPE_CHECKING
+from typing import Literal, TYPE_CHECKING
 
 import discord
 
@@ -227,68 +227,68 @@ async def setup(bot: "BotCore"):
     bot.milestones = milestones
 
     @manage.command(
-        name="subscribe_milestones",
-        description="Subscribe this channel to milestone notifications",
+        name="milestone",
+        description="Subscribe, unsubscribe, or spoof/delete a milestone",
     )
-    async def subscribe_milestones(interaction: discord.Interaction):
-        channel_id = interaction.channel_id
-
-        if channel_id is None:
-            await bot.discord.send(
-                "Could not determine this channel.",
-                response=True,
-            )
-            return
-
-        subscribed = await milestones.subscribe(channel_id)
-
-        if not subscribed:
-            await bot.discord.send(
-                "I cannot access this channel.",
-                response=True,
-            )
-            return
-
-        await bot.discord.send(
-            "This channel is now subscribed to milestone notifications.",
-            response=True,
-        )
-
-    @manage.command(
-        name="unsubscribe_milestones",
-        description="Unsubscribe this channel from milestone notifications",
-    )
-    async def unsubscribe_milestones(interaction: discord.Interaction):
-        channel_id = interaction.channel_id
-
-        if channel_id is None:
-            await bot.discord.send(
-                "Could not determine this channel.",
-                response=True,
-            )
-            return
-
-        unsubscribed = await milestones.unsubscribe(channel_id)
-
-        if not unsubscribed:
-            await bot.discord.send(
-                "This channel is not subscribed to milestone notifications.",
-                response=True,
-            )
-            return
-
-        await bot.discord.send(
-            "This channel is no longer subscribed to milestone notifications.",
-            response=True,
-        )
-
-    @manage.command(
-        name="spoof_milestone",
-        description="Spoof or delete a milestone value for testing",
-    )
-    async def spoof_milestone(interaction: discord.Interaction, name: str, data: str | None = None):
-        name = name.strip()
+    async def milestone(
+        interaction: discord.Interaction,
+        action: Literal["subscribe", "unsubscribe", "spoof"],
+        name: str | None = None,
+        data: str | None = None,
+    ):
+        name = name.strip() if name is not None else None
         data = data.strip() if data is not None else None
+
+        if action in ("subscribe", "unsubscribe"):
+            if name is not None or data is not None:
+                await bot.discord.send(
+                    "`name` and `data` are only used with the `spoof` action.",
+                    response=True,
+                )
+                return
+
+            channel_id = interaction.channel_id
+
+            if channel_id is None:
+                await bot.discord.send(
+                    "Could not determine this channel.",
+                    response=True,
+                )
+                return
+
+            if action == "unsubscribe":
+                unsubscribed = await milestones.unsubscribe(channel_id)
+                await bot.discord.send(
+                    "This channel is no longer subscribed to milestone notifications."
+                    if unsubscribed
+                    else "This channel is not subscribed to milestone notifications.",
+                    response=True,
+                )
+                return
+
+            subscribed = await milestones.subscribe(channel_id)
+
+            if not subscribed:
+                await bot.discord.send(
+                    "I cannot access this channel.",
+                    response=True,
+                )
+                return
+
+            await bot.discord.send(
+                "This channel is now subscribed to milestone notifications.",
+                response=True,
+            )
+            return
+
+        assert action == "spoof"
+
+        if name is None:
+            await bot.discord.send(
+                "Milestone name is required when spoofing.",
+                response=True,
+            )
+            return
 
         if not name:
             await bot.discord.send(
@@ -329,6 +329,13 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
+    @milestone.autocomplete("name")
+    async def milestone_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[discord.app_commands.Choice[str]]:
+        return await milestone_name_choices(current)
+
     @bot.setup.command(
         name="milestone_info",
         description="Show recent in-memory history for a milestone",
@@ -362,6 +369,9 @@ async def setup(bot: "BotCore"):
         interaction: discord.Interaction,
         current: str,
     ) -> list[discord.app_commands.Choice[str]]:
+        return await milestone_name_choices(current)
+
+    async def milestone_name_choices(current: str) -> list[discord.app_commands.Choice[str]]:
         current = current.strip().lower()
         choices = []
 

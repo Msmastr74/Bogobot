@@ -1,5 +1,5 @@
 import time
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, Literal, TYPE_CHECKING, cast
 
 import discord
 from discord.ext import tasks
@@ -182,14 +182,43 @@ async def setup(bot: "BotCore"):
 
     @manage.command(
         name="monitor",
-        description="Begins monitoring sorted number counts from the stream in this channel",
+        description="Start or stop stream monitoring in this channel",
     )
-    async def monitor(interaction: discord.Interaction):
+    async def monitor(
+        interaction: discord.Interaction,
+        action: Literal["start", "stop"],
+    ):
         channel_id = interaction.channel_id
 
         if channel_id is None:
             await bot.discord.send(
                 "Could not determine this channel.",
+                response=True,
+            )
+            return
+
+        existing_message_id = await monitor_messages.get(channel_id)
+
+        if action == "stop":
+            if existing_message_id is None:
+                await bot.discord.send(
+                    "Monitor is not currently running in this channel.",
+                    response=True,
+                )
+                return
+
+            await monitor_messages.remove(channel_id)
+            await delete_monitor_message(channel_id, int(existing_message_id))
+
+            await bot.discord.send(
+                "Monitor stopped in this channel.",
+                response=True,
+            )
+            return
+
+        if existing_message_id is not None:
+            await bot.discord.send(
+                "Monitor is already running in this channel.",
                 response=True,
             )
             return
@@ -217,51 +246,11 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        existing_message_id = await monitor_messages.get(channel_id)
-
-        # Replace any existing monitor message in this channel.
-        if existing_message_id is not None:
-            await delete_monitor_message(channel_id, int(existing_message_id))
-
-            await monitor_messages.remove(channel_id)
-
         bot.edits.register(message)
         await monitor_messages.set(channel_id, message.id)
 
         await bot.discord.send(
             "Monitor system online in this channel.",
-            response=True,
-        )
-
-    @manage.command(
-        name="stop_monitor",
-        description="Stops the stream monitor in this channel",
-    )
-    async def stop_monitor(interaction: discord.Interaction):
-        channel_id = interaction.channel_id
-
-        if channel_id is None:
-            await bot.discord.send(
-                "Could not determine this channel.",
-                response=True,
-            )
-            return
-
-        message_id = await monitor_messages.get(channel_id)
-
-        if message_id is None:
-            await bot.discord.send(
-                "Monitor is not currently running in this channel.",
-                response=True,
-            )
-            return
-
-        await monitor_messages.remove(channel_id)
-
-        await delete_monitor_message(channel_id, int(message_id))
-
-        await bot.discord.send(
-            "Monitor stopped in this channel.",
             response=True,
         )
 

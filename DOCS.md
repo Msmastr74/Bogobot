@@ -11,7 +11,7 @@ Configuration is managed via `config.json`.
 User-edited settings:
 - `bot_token`: The Discord bot token.
 - `owner_uid`: Discord user ID for the bot owner. Permission level 2 commands require this ID.
-- `authorized_users`: Discord user IDs with permission level 1. This can also be changed with `/manage authorize` and `/manage deauthorize`.
+- `authorized_users`: Discord user IDs with permission level 1. This can also be changed with `/manage auth`.
 - `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes, then writes this back to false.
 - `debug`: Enable debug logging for Bogobot.
 - `silence_stream`: Suppress Streamlink/FFmpeg subprocess output. Defaults to false, but stream output is also quiet unless `debug` is true.
@@ -121,6 +121,14 @@ The healthcheck plugin adds `/manage restart` and `/manage logs`.
 In both modes, it replies with `Restarting...`, waits briefly, closes the Discord client, and then replaces the current process with a fresh invocation of the same Python executable and command-line arguments.
 
 If the main bot fails and `fallback_healthcheck` is enabled, `main.py` starts a fallback healthcheck client using the same bot token. In fallback mode, `/manage restart` is available to authorized users and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
+
+## Management Commands
+Several management commands use an explicit action parameter instead of separate start/stop style commands:
+
+- `/manage auth authorize|deauthorize user`: Adds or removes a user from `authorized_users`.
+- `/manage monitor start|stop`: Creates or removes the persistent monitor message in the current channel.
+- `/manage milestone subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
+- `/manage milestone spoof name [data]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 
 ### Creating a Plugin
 Each plugin must include a `setup` function to register commands with the `BotCore` instance:

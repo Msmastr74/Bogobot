@@ -81,10 +81,9 @@ In your terminal output, you should see this:
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
- * /monitor: Initiates a persistent tracking system for stream serial numbers.
- * /stop: Stops monitor updates in the current channel.
- * /subscribe_milestones: Subscribes a channel to best-run milestone updates.
+ * /manage monitor: Starts or stops a persistent tracking system for stream serial numbers.
+ * /manage milestone: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /roll: A random number generation utility.
- * /authorize: Manages user permissions.
+ * /manage auth: Manages user permissions.
 ## Documentation
 For technical details regarding the internal API, OCR configuration, channel proxies, and plugin development, refer to `DOCS.md`.
