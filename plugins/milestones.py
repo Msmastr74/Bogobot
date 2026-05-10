@@ -55,6 +55,9 @@ class MilestoneTracker:
 
         return None
 
+    async def get(self, milestone_name: str) -> str | None:
+        return await self._get_current_value(milestone_name)
+
     async def _set_current_value(self, milestone_name: str, milestone_value: str) -> None:
         state = await self._get_state()
         state[milestone_name] = milestone_value

@@ -190,6 +190,76 @@ class BotCore(discord.Client):
             best_run = self.stats_cache.get("best_run")
             if best_run:
                 await self.milestones.update("Best run", best_run)
+
+            for milestone_name, stat_name in (
+                ("Shuffles", "shuffles"),
+                ("Comparisons", "comparisons"),
+            ):
+                stat_value = self._round_stat_down_to_power(self.stats_cache.get(stat_name))
+                if stat_value:
+                    await self.milestones.update(milestone_name, stat_value)
+
+            shuffles_sec = self._round_stat_down_to_power(self.stats_cache.get("shuffles_min"))
+            if shuffles_sec:
+                await self._update_non_decreasing_milestone("Shuffles each second record", shuffles_sec)
+
+            average_best_shuffle = self._round_stat_down_to_int(
+                self.stats_cache.get("average_best_shuffle")
+            )
+            if average_best_shuffle:
+                await self._update_non_decreasing_milestone(
+                    "Average best shuffle record",
+                    average_best_shuffle,
+                )
+
+    async def _update_non_decreasing_milestone(
+        self,
+        milestone_name: str,
+        milestone_value: str,
+    ) -> str | None:
+        if self.milestones is None:
+            return None
+
+        current_value = await self.milestones.get(milestone_name)
+        current_number = self._parse_stat_value(current_value)
+        next_number = self._parse_stat_value(milestone_value)
+
+        if (
+            current_number is not None
+            and next_number is not None
+            and next_number < current_number
+        ):
+            return None
+
+        return await self.milestones.update(milestone_name, milestone_value)
+
+    def _parse_stat_value(self, value: str | None) -> float | None:
+        if not value:
+            return None
+
+        try:
+            return float(value.replace(",", ""))
+        except ValueError:
+            return None
+
+    def _round_stat_down_to_power(self, value: str | None) -> str | None:
+        number = self._parse_stat_value(value)
+        if number is None:
+            return None
+
+        number = int(number)
+        if number <= 0:
+            return None
+
+        power = 10 ** (len(str(number)) - 1)
+        return f"{number // power * power:,}"
+
+    def _round_stat_down_to_int(self, value: str | None) -> str | None:
+        number = self._parse_stat_value(value)
+        if number is None:
+            return None
+
+        return f"{int(number):,}"
     
     def _sort_visual_changed(self, img: Image.Image) -> bool:
         crop = img.crop(self.SORT_AREA_COORDS).convert("RGB")
