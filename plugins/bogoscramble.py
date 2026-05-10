@@ -823,8 +823,8 @@ async def setup(bot: "BotCore"):
         interaction: discord.Interaction,
         text: str | None = None,
         attachment1: discord.Attachment | None = None,
-        rows: int = DEFAULT_SCRAMBLE_SHAPE[0],
-        columns: int = DEFAULT_SCRAMBLE_SHAPE[1],
+        rows: int | None = None,
+        columns: int | None = None,
         attachment2: discord.Attachment | None = None,
         attachment3: discord.Attachment | None = None,
         attachment4: discord.Attachment | None = None,
@@ -845,18 +845,22 @@ async def setup(bot: "BotCore"):
         attachment19: discord.Attachment | None = None,
         attachment20: discord.Attachment | None = None
     ):
-        if rows and not 1 <= rows <= MAXIMUM_SCRAMBLE_SHAPE[0]:
-            await bot.discord.send(
-                f"Number of rows must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[0]}",
-                response=True, ephemeral=True
-            )
-            return
-        if columns and not 1 <= columns <= MAXIMUM_SCRAMBLE_SHAPE[1]:
-            await bot.discord.send(
-                f"Number of columns must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[1]}",
-                response=True, ephemeral=True
-            )
-            return
+        if rows is None and columns is None:
+            scramble_shape = DEFAULT_SCRAMBLE_SHAPE
+        else:
+            if rows is not None and not 1 <= rows <= MAXIMUM_SCRAMBLE_SHAPE[0]:
+                await bot.discord.send(
+                    f"Number of rows must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[0]}",
+                    response=True, ephemeral=True
+                )
+                return
+            if columns is not None and not 1 <= columns <= MAXIMUM_SCRAMBLE_SHAPE[1]:
+                await bot.discord.send(
+                    f"Number of columns must be between 1 and {MAXIMUM_SCRAMBLE_SHAPE[1]}",
+                    response=True, ephemeral=True
+                )
+                return
+            scramble_shape = (rows or 1, columns or 1)
         await interaction.response.defer()
         attachments = [
             attachment
@@ -890,7 +894,7 @@ async def setup(bot: "BotCore"):
                 interaction,
                 content=text,
                 attachments=attachments,
-                scramble_shape=(rows, columns)
+                scramble_shape=scramble_shape
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
