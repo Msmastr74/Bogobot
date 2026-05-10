@@ -68,35 +68,6 @@ class MilestoneTracker:
         self.bot.config["milestones"] = state
         await self.bot.save_config()
 
-    async def _get_subscriptions(self) -> dict[str, bool]:
-        subscriptions = self.bot.config.get("milestone_channels")
-
-        if not isinstance(subscriptions, dict):
-            subscriptions = {}
-            self.bot.config["milestone_channels"] = subscriptions
-            await self.bot.save_config()
-
-        normalized: dict[str, bool] = {}
-
-        for channel_id_str, enabled in subscriptions.items():
-            try:
-                channel_id_str = str(int(channel_id_str))
-            except (TypeError, ValueError):
-                continue
-
-            if enabled:
-                normalized[channel_id_str] = True
-
-        if normalized != subscriptions:
-            self.bot.config["milestone_channels"] = normalized
-            await self.bot.save_config()
-
-        return normalized
-
-    async def _save_subscriptions(self, subscriptions: dict[str, bool]) -> None:
-        self.bot.config["milestone_channels"] = subscriptions
-        await self.bot.save_config()
-
     def _format_message(
         self,
         template_key: str,
@@ -123,81 +94,17 @@ class MilestoneTracker:
             self.bot.logger.warning(f"Invalid milestone format in config key {template_key!r}")
             return Template(default_template).substitute(values)
 
-    async def reconcile_channels(self) -> None:
-        """
-        Ensure every subscribed milestone channel has a ChannelProxy.
-
-        Removes stale subscriptions if the channel is unavailable.
-        """
-
-        subscriptions = await self._get_subscriptions()
-        stale_channel_ids: list[str] = []
-
-        for channel_id_str in subscriptions:
-            try:
-                channel_id = int(channel_id_str)
-            except ValueError:
-                stale_channel_ids.append(channel_id_str)
-                continue
-
-            proxy = self.bot.channels.get(channel_id)
-
-            if proxy is None:
-                proxy = await self.bot.channels.add_channel(
-                    MILESTONE_USAGE_TYPE,
-                    channel_id,
-                )
-
-            if proxy is None:
-                stale_channel_ids.append(channel_id_str)
-
-        if stale_channel_ids:
-            subscriptions = await self._get_subscriptions()
-
-            for channel_id_str in stale_channel_ids:
-                subscriptions.pop(channel_id_str, None)
-
-                try:
-                    await self.bot.channels.remove_channel(
-                        MILESTONE_USAGE_TYPE,
-                        int(channel_id_str),
-                    )
-                except ValueError:
-                    pass
-
-            await self._save_subscriptions(subscriptions)
-
     async def subscribe(self, channel_id: int) -> bool:
-        proxy = await self.bot.channels.add_channel(
+        return await self.bot.notifications.subscribe(
             MILESTONE_USAGE_TYPE,
             channel_id,
         )
-
-        if proxy is None:
-            return False
-
-        subscriptions = await self._get_subscriptions()
-        subscriptions[str(channel_id)] = True
-        await self._save_subscriptions(subscriptions)
-
-        return True
 
     async def unsubscribe(self, channel_id: int) -> bool:
-        subscriptions = await self._get_subscriptions()
-        channel_id_str = str(channel_id)
-
-        if channel_id_str not in subscriptions:
-            return False
-
-        subscriptions.pop(channel_id_str, None)
-        await self._save_subscriptions(subscriptions)
-
-        await self.bot.channels.remove_channel(
+        return await self.bot.notifications.unsubscribe(
             MILESTONE_USAGE_TYPE,
             channel_id,
         )
-
-        return True
 
     def _get_stable_value(self, milestone_name: str) -> str | None:
         """
@@ -278,9 +185,6 @@ class MilestoneTracker:
         old_value: str | None,
         new_value: str,
     ) -> None:
-        subscriptions = await self._get_subscriptions()
-        stale_channel_ids: list[str] = []
-
         if old_value is None:
             content = self._format_message(
                 "milestone_initialize_format",
@@ -298,45 +202,10 @@ class MilestoneTracker:
                 new_value=new_value,
             )
 
-        for channel_id_str in list(subscriptions.keys()):
-            try:
-                channel_id = int(channel_id_str)
-            except ValueError:
-                stale_channel_ids.append(channel_id_str)
-                continue
-
-            proxy = self.bot.channels.get(channel_id)
-
-            if proxy is None:
-                proxy = await self.bot.channels.add_channel(
-                    MILESTONE_USAGE_TYPE,
-                    channel_id,
-                )
-
-            if proxy is None:
-                stale_channel_ids.append(channel_id_str)
-                continue
-
-            await proxy.send(
-                content=content,
-                wait=False,
-            )
-
-        if stale_channel_ids:
-            subscriptions = await self._get_subscriptions()
-
-            for channel_id_str in stale_channel_ids:
-                subscriptions.pop(channel_id_str, None)
-
-                try:
-                    await self.bot.channels.remove_channel(
-                        MILESTONE_USAGE_TYPE,
-                        int(channel_id_str),
-                    )
-                except ValueError:
-                    pass
-
-            await self._save_subscriptions(subscriptions)
+        await self.bot.notifications.notify(
+            MILESTONE_USAGE_TYPE,
+            content=content,
+        )
 
 
 async def setup(bot: "BotCore"):
@@ -483,5 +352,4 @@ async def setup(bot: "BotCore"):
 
     @bot.init_callback
     async def init():
-        await bot.channels.wait_until_ready()
-        await milestones.reconcile_channels()
+        await bot.notifications.wait_until_ready()

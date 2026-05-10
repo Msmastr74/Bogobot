@@ -58,12 +58,14 @@ The monitor does not rely only on OCR to decide whether the sort changed. The bo
 
 `sort_change_threshold` controls how much of that signature must change before the latest cell OCR is treated as new monitor data. A higher value ignores small effects like confetti or compression noise.
 
-## Channel Proxies
-`ChannelProxy` is used for persistent bot-managed messages such as monitor embeds.
+## Bot Message Helpers
+`EditCoalescer` is used for persistent bot-managed messages such as monitor embeds.
 
-Each proxy serializes operations for one Discord channel. Its main useful behavior is edit coalescing: if several edits for the same message are queued before Discord receives them, only the newest pending edit is sent.
+Each coalescer belongs to one message. If several edits are queued before Discord receives them, only the newest pending edit is sent.
 
-`ChannelProxyManager` tracks which channels are used for which feature and stores that in `channels.json` by default.
+`NotificationBroadcaster` handles topic subscriptions and sends notifications to every channel subscribed to a topic. It stores subscriptions in `channels.json` by default.
+
+`Tracker` is the small shared helper underneath this kind of stored Discord state. It loads raw stored IDs, normalizes them, validates live Discord access, and prunes stale entries.
 
 ## Milestones
 `MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. Values are confirmed using a rolling window, so noisy OCR does not immediately publish a milestone.

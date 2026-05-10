@@ -1,8 +1,9 @@
 import time
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 import discord
 from discord.ext import tasks
+from utils.tracker import Tracker
 
 if TYPE_CHECKING:
     from main import BotCore
@@ -10,15 +11,13 @@ if TYPE_CHECKING:
 
 num_matrix: list[list[tuple[str, float]]] = [[] for _ in range(30)]
 
-MONITOR_USAGE_TYPE = "monitor"
-
 
 async def setup(bot: "BotCore"):
     import groups
 
     manage = groups.manage(bot)
 
-    async def get_monitor_messages() -> dict[str, int]:
+    async def load_monitor_messages() -> dict[str, Any]:
         """
         Stored in config as:
 
@@ -32,31 +31,15 @@ async def setup(bot: "BotCore"):
                 "channel_id": message_id
             }
 
-        Channel/proxy tracking itself is handled separately by:
+        Edits are coalesced by:
 
-            bot.channels
+            bot.edits
         """
 
         messages = bot.config.get("monitor_messages")
 
         if not isinstance(messages, dict):
-            messages = {}
-            bot.config["monitor_messages"] = messages
-            await bot.save_config()
-            return messages
-
-        normalized: dict[str, int] = {}
-
-        for channel_id_str, message_id in messages.items():
-            try:
-                normalized[str(int(channel_id_str))] = int(message_id)
-            except (TypeError, ValueError):
-                continue
-
-        if normalized != messages:
-            bot.config["monitor_messages"] = normalized
-            await bot.save_config()
-            return normalized
+            return {}
 
         return messages
 
@@ -64,73 +47,79 @@ async def setup(bot: "BotCore"):
         bot.config["monitor_messages"] = monitor_messages
         await bot.save_config()
 
-    async def ensure_monitor_proxy(channel_id: int):
+    async def normalize_monitor_message(channel_id_str: str, message_id: Any) -> tuple[int, int] | None:
+        try:
+            return int(channel_id_str), int(message_id)
+        except (TypeError, ValueError):
+            return None
+
+    async def validate_monitor_message(channel_id: int, message_id: int) -> bool:
+        return (await ensure_monitor_message(channel_id, message_id)) is not None
+
+    monitor_messages = Tracker[int, int](
+        load=load_monitor_messages,
+        save=save_monitor_messages,
+        normalize=normalize_monitor_message,
+        validate=validate_monitor_message,
+    )
+
+    async def ensure_monitor_message(channel_id: int, message_id: int):
         """
-        Return an existing ChannelProxy if present.
-
-        If missing, try to register this channel for monitor usage. This helps
-        after restarts or config migrations where monitor_messages exists but
-        the reusable channel system has not yet recorded monitor usage.
+        Return a coalescer for this monitor message if the channel is available.
         """
 
-        proxy = bot.channels.get(channel_id)
+        existing = bot.edits.get(message_id)
+        if existing is not None:
+            return existing
 
-        if proxy is not None:
-            return proxy
+        message = partial_message(channel_id, message_id)
+        if message is None:
+            return None
 
-        return await bot.channels.add_channel(
-            MONITOR_USAGE_TYPE,
-            channel_id,
-        )
+        return bot.edits.register(message)
 
-    async def remove_monitor_channel(channel_id: int) -> None:
-        await bot.channels.remove_channel(
-            MONITOR_USAGE_TYPE,
-            channel_id,
-        )
+    def partial_message(
+        channel_id: int,
+        message_id: int,
+    ) -> discord.PartialMessage | None:
+        channel = bot.get_channel(channel_id)
+
+        if channel is None or not hasattr(channel, "get_partial_message"):
+            return None
+
+        return cast(Any, channel).get_partial_message(message_id)
+
+    async def delete_monitor_message(channel_id: int, message_id: int) -> None:
+        if await bot.edits.delete(message_id):
+            return
+
+        message = partial_message(channel_id, message_id)
+        if message is None:
+            return
+
+        try:
+            await message.delete()
+        except (discord.NotFound, discord.Forbidden):
+            pass
 
     async def reconcile_monitor_channels() -> None:
         """
-        Ensure every channel in monitor_messages has a ChannelProxy.
+        Ensure every channel in monitor_messages can still be edited.
 
         Removes stale monitor entries when the channel is not available.
         """
 
-        monitor_messages = await get_monitor_messages()
-        stale_channel_ids: list[str] = []
-
-        for channel_id_str in list(monitor_messages.keys()):
-            try:
-                channel_id = int(channel_id_str)
-            except ValueError:
-                stale_channel_ids.append(channel_id_str)
-                continue
-
-            proxy = await ensure_monitor_proxy(channel_id)
-
-            if proxy is None:
-                stale_channel_ids.append(channel_id_str)
-
-        if stale_channel_ids:
-            monitor_messages = await get_monitor_messages()
-
-            for channel_id_str in stale_channel_ids:
-                monitor_messages.pop(channel_id_str, None)
-
-                try:
-                    await remove_monitor_channel(int(channel_id_str))
-                except ValueError:
-                    pass
-
-            await save_monitor_messages(monitor_messages)
+        await monitor_messages.load()
+        await monitor_messages.prune_stale()
 
     @tasks.loop(seconds=1)
     async def monitor_loop():
         global num_matrix
 
-        monitor_messages = await get_monitor_messages()
+        await monitor_messages.prune_stale()
+        stored_messages = await monitor_messages.items()
 
-        if not monitor_messages:
+        if not stored_messages:
             return
 
         new_vars, is_new = await bot.info.get_best_shuffles()
@@ -174,20 +163,10 @@ async def setup(bot: "BotCore"):
         joined_nums = ".".join(num_array)
         contents = f"```\n{joined_nums}\n```"
 
-        stale_channel_ids: list[str] = []
+        for channel_id, message_id in list(stored_messages.items()):
+            coalescer = await ensure_monitor_message(channel_id, message_id)
 
-        for channel_id_str, message_id in list(monitor_messages.items()):
-            try:
-                channel_id = int(channel_id_str)
-                message_id = int(message_id)
-            except (TypeError, ValueError):
-                stale_channel_ids.append(channel_id_str)
-                continue
-
-            proxy = await ensure_monitor_proxy(channel_id)
-
-            if proxy is None:
-                stale_channel_ids.append(channel_id_str)
+            if coalescer is None:
                 continue
 
             embed = discord.Embed(
@@ -196,32 +175,16 @@ async def setup(bot: "BotCore"):
             )
             embed.set_footer(text="Oldest → Newest [?? = Unknown]")
 
-            await proxy.edit(
-                message_id,
+            await coalescer.edit(
                 embed=embed,
                 wait=False,
             )
-
-        if stale_channel_ids:
-            monitor_messages = await get_monitor_messages()
-
-            for channel_id_str in stale_channel_ids:
-                monitor_messages.pop(channel_id_str, None)
-
-                try:
-                    await remove_monitor_channel(int(channel_id_str))
-                except ValueError:
-                    pass
-
-            await save_monitor_messages(monitor_messages)
 
     @manage.command(
         name="monitor",
         description="Begins monitoring sorted number counts from the stream in this channel",
     )
     async def monitor(interaction: discord.Interaction):
-        monitor_messages = await get_monitor_messages()
-
         channel_id = interaction.channel_id
 
         if channel_id is None:
@@ -231,54 +194,39 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        channel_id_str = str(channel_id)
-
-        proxy = await bot.channels.add_channel(
-            MONITOR_USAGE_TYPE,
-            channel_id,
-        )
-
-        if proxy is None:
-            await bot.discord.send(
-                "I cannot access this channel.",
-                response=True,
-            )
-            return
-
-        existing_message_id = monitor_messages.get(channel_id_str)
-
-        # Replace any existing monitor message in this channel.
-        if existing_message_id is not None:
-            await proxy.delete(
-                int(existing_message_id),
-                wait=False,
-            )
-
-            monitor_messages.pop(channel_id_str, None)
-            await save_monitor_messages(monitor_messages)
-
         embed = discord.Embed(
             title="Monitor",
             description="Initializing...",
         )
         embed.set_footer(text="Oldest → Newest [?? = Unknown]")
 
-        message = await proxy.send(
-            embed=embed,
-            wait=True,
-        )
+        channel = interaction.channel or bot.get_channel(channel_id)
+
+        if channel is None or not hasattr(channel, "send"):
+            message = None
+        else:
+            try:
+                message = await cast(Any, channel).send(embed=embed)
+            except (discord.NotFound, discord.Forbidden):
+                message = None
 
         if message is None:
-            await remove_monitor_channel(channel_id)
-
             await bot.discord.send(
-                "Failed to create monitor message.",
+                "I cannot access this channel.",
                 response=True,
             )
             return
 
-        monitor_messages[channel_id_str] = message.id
-        await save_monitor_messages(monitor_messages)
+        existing_message_id = await monitor_messages.get(channel_id)
+
+        # Replace any existing monitor message in this channel.
+        if existing_message_id is not None:
+            await delete_monitor_message(channel_id, int(existing_message_id))
+
+            await monitor_messages.remove(channel_id)
+
+        bot.edits.register(message)
+        await monitor_messages.set(channel_id, message.id)
 
         await bot.discord.send(
             "Monitor system online in this channel.",
@@ -290,8 +238,6 @@ async def setup(bot: "BotCore"):
         description="Stops the stream monitor in this channel",
     )
     async def stop_monitor(interaction: discord.Interaction):
-        monitor_messages = await get_monitor_messages()
-
         channel_id = interaction.channel_id
 
         if channel_id is None:
@@ -301,8 +247,7 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        channel_id_str = str(channel_id)
-        message_id = monitor_messages.pop(channel_id_str, None)
+        message_id = await monitor_messages.get(channel_id)
 
         if message_id is None:
             await bot.discord.send(
@@ -311,18 +256,9 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        await save_monitor_messages(monitor_messages)
+        await monitor_messages.remove(channel_id)
 
-        proxy = bot.channels.get(channel_id)
-
-        if proxy is not None:
-            await proxy.delete(
-                int(message_id),
-                wait=False,
-            )
-
-        # Remove channel usage after delete is queued.
-        await remove_monitor_channel(channel_id)
+        await delete_monitor_message(channel_id, int(message_id))
 
         await bot.discord.send(
             "Monitor stopped in this channel.",
@@ -331,7 +267,6 @@ async def setup(bot: "BotCore"):
 
     @bot.init_callback
     async def init():
-        await bot.channels.wait_until_ready()
         await reconcile_monitor_channels()
 
         if not monitor_loop.is_running():

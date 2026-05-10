@@ -16,7 +16,8 @@ import aiohttp
 import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
-from channel_proxy import ChannelProxyManager
+from utils.edit_coalescer import EditCoalescer
+from utils.notifications import NotificationBroadcaster
 import logging
 from plugins.healthcheck import MEMORY_LOG_HANDLER
 
@@ -115,13 +116,16 @@ class BotCore(discord.Client):
         
         with open(self.channels_path, 'r') as f:
             channel_data: dict[str, Any] = json.load(f)
-        def save_channels(data: dict[str, Any]):
+        async def save_channels(data: dict[str, Any]):
             with open(self.channels_path, 'w') as f:
                 json.dump(data, f, indent=4)
-        self.channels = ChannelProxyManager(
-            self, channel_data=channel_data,
-            save_channels=save_channels,
-            logger=self.logger.getChild("ChannelProxy")
+        self.edits = EditCoalescer(
+            logger=self.logger.getChild("EditCoalescer"),
+        )
+        self.notifications = NotificationBroadcaster(
+            self, subscriptions=channel_data,
+            save_subscriptions=save_channels,
+            logger=self.logger.getChild("Notifications"),
         )
         self._connected = False
         
@@ -641,9 +645,9 @@ class BotCore(discord.Client):
         self._connected = True
 
         try:
-            await self.channels.initialize_channels()
+            await self.notifications.initialize()
         except Exception as e:
-            self.logger.warning(f"Failed initializing channel proxies: {e}")
+            self.logger.warning(f"Failed initializing notifications: {e}")
         
         for callback in self.on_ready_callbacks:
             try:
@@ -677,7 +681,8 @@ class BotCore(discord.Client):
     async def close(self):
         self.logger.info("Shutting down bot...")
         self.stream_handler.stop()
-        await self.channels.close()
+        await self.edits.close()
+        await self.notifications.close()
         await super().close() 
 
     def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15):
@@ -1071,4 +1076,3 @@ class BotCore(discord.Client):
                     "error": error,
                 })
                 current_interaction.reset(token)
-

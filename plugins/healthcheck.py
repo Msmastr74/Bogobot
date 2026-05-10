@@ -179,7 +179,7 @@ def chunk_log_entries(entries: list[LogEntry], limit: int) -> list[LogChunk]:
 
         if current:
             chunks.append(LogChunk(
-                text="\n\n".join(current),
+                text="\n".join(current),
                 levelno=current_levelno,
             ))
             current = []
