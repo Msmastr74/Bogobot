@@ -25,6 +25,7 @@ MEMORY_LOG_HANDLER = MemoryLogHandler(500)
 MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
 LOG_EMBED_TEXT_LIMIT = 4000
 MAX_LOG_MESSAGES = 5
+DEFAULT_LOG_LENGTH = 30
 
 @dataclass(frozen=True)
 class LogRange:
@@ -237,7 +238,7 @@ def validate_log_range(
         and end_at_first is None
         and end_at_last is None
     ):
-        start = max(0, total - 30)
+        start = max(0, total - DEFAULT_LOG_LENGTH)
         end = total
         truncate_mode = "last"
     else:
@@ -255,21 +256,21 @@ def validate_log_range(
             end = clamp(end_at_first)
             if start is None:
                 start = end
-                end = clamp(start + 30)
+                end = clamp(start + DEFAULT_LOG_LENGTH)
                 truncate_mode = "first"
         elif end_at_last is not None:
             end = clamp(total - end_at_last)
             if start is None:
-                start = clamp(end - 30)
+                start = clamp(end - DEFAULT_LOG_LENGTH)
 
         if start is None:
-            start = max(0, total - 30)
+            start = max(0, total - DEFAULT_LOG_LENGTH)
         if end is None:
             if start_from_last is not None:
                 end = start
-                start = clamp(end - 30)
+                start = clamp(end - DEFAULT_LOG_LENGTH)
             else:
-                end = clamp(start + 30)
+                end = clamp(start + DEFAULT_LOG_LENGTH)
 
         if start > end:
             start, end = end, start
