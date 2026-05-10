@@ -26,13 +26,13 @@ class BogoUserError(Exception):
 
 async def setup(bot: "BotCore"):
     async def send_bogoscramble(
-        ctx,
+        interaction: discord.Interaction,
         *,
         content: str | None = None,
         embeds: list[discord.Embed] | None = None,
         attachments: list[Any] | None = None,
     ):
-        upload_limit = getattr(ctx, "filesize_limit", discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES)
+        upload_limit = interaction.filesize_limit
 
         @overload
         def bogo_scramble(text: str) -> str: ...
@@ -754,7 +754,7 @@ async def setup(bot: "BotCore"):
                 await bot.discord.send(**send_kwargs)
             except discord.HTTPException as e:
                 raise BogoUserError(
-                    "Could not send the scrambled result. One of the files may be too large."
+                    f"Sending the scrambled result failed with error: {e}"
                 ) from e
         finally:
             try:
@@ -763,9 +763,9 @@ async def setup(bot: "BotCore"):
             except Exception:
                 pass
 
-    async def send_bogo_error(ctx: discord.Interaction, error: BogoUserError):
+    async def send_bogo_error(interaction: discord.Interaction, error: BogoUserError):
         with contextlib.suppress(discord.NotFound, discord.HTTPException):
-            await ctx.delete_original_response()
+            await interaction.delete_original_response()
 
         await bot.discord.send(
             str(error),
@@ -779,7 +779,7 @@ async def setup(bot: "BotCore"):
         perm_requirement=0,
         eph=False,
     )
-    async def Bogoscramble(ctx, message: discord.Message):
+    async def Bogoscramble(interaction: discord.Interaction, message: discord.Message):
         sources: list[discord.Message | discord.MessageSnapshot] = [
             message,
             *message.message_snapshots
@@ -803,13 +803,13 @@ async def setup(bot: "BotCore"):
 
         try:
             await send_bogoscramble(
-                ctx,
+                interaction,
                 content="\n\n".join(content_parts),
                 embeds=embeds,
                 attachments=attachments,
             )
         except BogoUserError as e:
-            await send_bogo_error(ctx, e)
+            await send_bogo_error(interaction, e)
 
     @bot.setup.command(
         name="bogoscramble",
