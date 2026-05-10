@@ -20,8 +20,8 @@ from channel_proxy import ChannelProxyManager
 import logging
 from plugins.healthcheck import MEMORY_LOG_HANDLER
 
-LOG_FORMAT = '[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s'
-LOG_DATE_FORMAT = '%d %H:%M:%S'
+CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)02d %(levelname)-8s | %(name)-15s ] %(message)s'
+LOG_DATE_FORMAT = '%b %d %H:%M:%S'
 
 class ColorFormatter(logging.Formatter):
     LEVEL_COLORS = {
@@ -41,11 +41,9 @@ class ColorFormatter(logging.Formatter):
         return f"{color}{message}{self.RESET}"
 
 CONSOLE_LOG_HANDLER = logging.StreamHandler()
-CONSOLE_LOG_HANDLER.setFormatter(ColorFormatter(LOG_FORMAT, LOG_DATE_FORMAT))
+CONSOLE_LOG_HANDLER.setFormatter(ColorFormatter(CONSOLE_LOG_FORMAT, LOG_DATE_FORMAT))
 logging.basicConfig(
     level=logging.INFO,
-    format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT,
     handlers=[CONSOLE_LOG_HANDLER, MEMORY_LOG_HANDLER],
 )
 logging.captureWarnings(True)
