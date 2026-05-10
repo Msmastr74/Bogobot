@@ -858,8 +858,7 @@ async def setup(bot: "BotCore"):
                 pass
 
     async def send_bogo_error(interaction: discord.Interaction, error: BogoUserError):
-        with contextlib.suppress(discord.NotFound, discord.HTTPException):
-            await interaction.delete_original_response()
+        await bot.discord.cleanup_defer_status(interaction)
 
         await bot.discord.send(
             str(error),

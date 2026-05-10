@@ -598,6 +598,20 @@ class BotCore(discord.Client):
                     self.message = None
                 except discord.Forbidden:
                     pass
+        
+        async def cleanup_defer_status(self, interaction: discord.Interaction):
+            deferred_types = [
+                discord.InteractionResponseType.deferred_channel_message,
+                discord.InteractionResponseType.deferred_message_update
+            ]
+            
+            if interaction.response.is_done() and interaction.response.type in deferred_types:
+                try:
+                    msg = await interaction.original_response()
+                    if not msg.flags.ephemeral:
+                        await interaction.delete_original_response()
+                except discord.HTTPException:
+                    pass
 
     async def setup_hook(self):
         command_tree_hash = self._command_tree_hash()
@@ -1045,6 +1059,7 @@ class BotCore(discord.Client):
                 status = "error"
                 error = str(e)
                 if interaction.response.is_done():
+                    await self.outer.discord.cleanup_defer_status(interaction)
                     await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
                 else:
                     await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
@@ -1058,3 +1073,4 @@ class BotCore(discord.Client):
                     "error": error,
                 })
                 current_interaction.reset(token)
+
