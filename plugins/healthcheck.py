@@ -20,28 +20,13 @@ class MemoryLogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-def ensure_memory_log_handler(
-    logger: logging.Logger,
-    *,
-    capacity: int = 500,
-) -> MemoryLogHandler:
-    for handler in logger.handlers:
-        if isinstance(handler, MemoryLogHandler):
-            capacity = max(100, capacity)
-            if handler.records.maxlen != capacity:
-                handler.records = deque(handler.records, maxlen=capacity)
-            return handler
+MEMORY_LOG_HANDLER = MemoryLogHandler(500)
+MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
 
-    handler = MemoryLogHandler(max(100, capacity))
-    handler.setFormatter(logging.Formatter(
-        "[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s",
-        "%d %H:%M:%S",
-    ))
-    handler.setLevel(logging.DEBUG)
-    logger.addHandler(handler)
-    return handler
-
-ROOT_LOG_HANDLER = ensure_memory_log_handler(logging.getLogger())
+def configure_memory_log_capacity(capacity: int) -> None:
+    capacity = max(100, capacity)
+    if MEMORY_LOG_HANDLER.records.maxlen != capacity:
+        MEMORY_LOG_HANDLER.records = deque(MEMORY_LOG_HANDLER.records, maxlen=capacity)
 
 def format_logs(
     handler: MemoryLogHandler,
@@ -141,7 +126,7 @@ async def start_fallback_healthcheck(bot: "BotCore") -> None:
     with contextlib.suppress(Exception):
         await bot.close()
 
-    fallback = FallbackHealthcheckClient(bot, ROOT_LOG_HANDLER)
+    fallback = FallbackHealthcheckClient(bot, MEMORY_LOG_HANDLER)
     async with fallback:
         await fallback.start(bot.config["bot_token"])
 
@@ -173,8 +158,8 @@ async def setup(bot: "BotCore"):
     import groups
 
     manage = groups.manage(bot)
-    capacity = max(100, int(bot.config.get("healthcheck_log_capacity", 500)))
-    handler = ensure_memory_log_handler(logging.getLogger(), capacity=capacity)
+    configure_memory_log_capacity(int(bot.config.get("healthcheck_log_capacity", 500)))
+    handler = MEMORY_LOG_HANDLER
 
     @manage.command(
         name="logs",

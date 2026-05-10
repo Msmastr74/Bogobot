@@ -18,13 +18,35 @@ from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Corouti
 from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
 import logging
+from plugins.healthcheck import MEMORY_LOG_HANDLER
 
-LOG_FORMAT = '[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s\x1b[K'
+LOG_FORMAT = '[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s'
 LOG_DATE_FORMAT = '%d %H:%M:%S'
+
+class ColorFormatter(logging.Formatter):
+    LEVEL_COLORS = {
+        logging.DEBUG: "\x1b[90m",
+        logging.INFO: "\x1b[36m",
+        logging.WARNING: "\x1b[33m",
+        logging.ERROR: "\x1b[31m",
+        logging.CRITICAL: "\x1b[1;31m",
+    }
+    RESET = "\x1b[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        color = self.LEVEL_COLORS.get(record.levelno)
+        if not color:
+            return message
+        return f"{color}{message}{self.RESET}"
+
+CONSOLE_LOG_HANDLER = logging.StreamHandler()
+CONSOLE_LOG_HANDLER.setFormatter(ColorFormatter())
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT
+    datefmt=LOG_DATE_FORMAT,
+    handlers=[CONSOLE_LOG_HANDLER, MEMORY_LOG_HANDLER],
 )
 logging.captureWarnings(True)
 
