@@ -6,22 +6,31 @@ Bogobot is built on a modular architecture that separates core logic from comman
 The `BotCore` class is the central manager for the bot, handling configuration, command tree synchronization, and plugin loading. It inherits from `discord.Client`.
 
 ### Configuration
-Configuration is managed via `config.json`. Key fields include:
+Configuration is managed via `config.json`.
+
+User-edited settings:
 - `bot_token`: The Discord bot token.
-- `authorized_users`: A list of user IDs with elevated permissions.
-- `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes.
-- `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
-- `save_ocr_debug`: Enable/disable saving OCR debug images.
-- `debug`: Enable/disable debug logging (loglevel).
-- `silence_stream`: Suppress Streamlink/FFmpeg output.
-- `channels_path`: Path to the channel usage store. Defaults to `channels.json`.
-- `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame.
+- `owner_uid`: Discord user ID for the bot owner. Permission level 2 commands require this ID.
+- `authorized_users`: Discord user IDs with permission level 1. This can also be changed with `/manage authorize` and `/manage deauthorize`.
+- `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes, then writes this back to false.
+- `debug`: Enable debug logging for Bogobot.
+- `silence_stream`: Suppress Streamlink/FFmpeg subprocess output. Defaults to false, but stream output is also quiet unless `debug` is true.
+- `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
+- `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
+- `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
 - `ocr_concurrency`: Maximum number of Tesseract processes to run at once. Defaults to 2.
-- `milestones`: Stores the latest confirmed value for each milestone name.
+- `fallback_healthcheck`: Start the fallback healthcheck client after a fatal main-bot failure. Defaults to true.
+- `healthcheck_log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
+
+Bot-managed storage:
+- `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
+- `channels`: Notification topic subscriptions by Discord channel ID. Older `channels.json` data is imported into this field when `channels` is missing.
+- `monitor_messages`: Persistent monitor message IDs by Discord channel ID.
+- `milestones`: Latest confirmed value for each milestone name.
 
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
 
@@ -51,7 +60,7 @@ Bogobot utilizes Tesseract OCR for visual data extraction.
 - **Processing**: Frames are pre-processed using the Pillow (PIL) library, including grayscale conversion and thresholding, to improve recognition accuracy.
 - **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
 - **Parallelism**: OCR calls are limited by `ocr_concurrency`, so multiple crops can be parsed without starting too many Tesseract processes.
-- **Debug frame**: `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state.
+- **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
 ## Stream Change Detection
 The monitor does not rely only on OCR to decide whether the sort changed. The bot also crops the bar chart area, reduces it to approximate red/green/other pixels, and compares that signature with the previous frame.
@@ -63,7 +72,7 @@ The monitor does not rely only on OCR to decide whether the sort changed. The bo
 
 Each coalescer belongs to one message. If several edits are queued before Discord receives them, only the newest pending edit is sent.
 
-`NotificationBroadcaster` handles topic subscriptions and sends notifications to every channel subscribed to a topic. It stores subscriptions in `channels.json` by default.
+`NotificationBroadcaster` handles topic subscriptions and sends notifications to every channel subscribed to a topic. It stores subscriptions in the `channels` section of `config.json`.
 
 `Tracker` is the small shared helper underneath this kind of stored Discord state. It loads raw stored IDs, normalizes them, validates live Discord access, and prunes stale entries.
 
@@ -100,6 +109,18 @@ The plugin keeps a small recent-action buffer for `/manage telemetry` and builds
 
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.
+
+## Healthcheck Commands
+The healthcheck plugin adds `/manage restart` and `/manage logs`.
+
+`/manage restart` has different permission behavior depending on which client is running:
+
+- **Normal bot**: registered through the plugin command wrapper with permission level 2, so only `owner_uid` can run it. This is stricter than most `/manage` commands, which default to the authorized-user level.
+- **Fallback healthcheck client**: registered directly on the fallback command tree and checks permission level 1, so `owner_uid` and users in `authorized_users` can run it.
+
+In both modes, it replies with `Restarting...`, waits briefly, closes the Discord client, and then replaces the current process with a fresh invocation of the same Python executable and command-line arguments.
+
+If the main bot fails and `fallback_healthcheck` is enabled, `main.py` starts a fallback healthcheck client using the same bot token. In fallback mode, `/manage restart` is available to authorized users and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
 
 ### Creating a Plugin
 Each plugin must include a `setup` function to register commands with the `BotCore` instance:

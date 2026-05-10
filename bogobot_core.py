@@ -64,11 +64,6 @@ class BotCore(discord.Client):
             self.config: dict[str, Any] = json.load(f)
         self._config_lock = asyncio.Lock()
         
-        self.channels_path: str = self.config.get("channels_path", "channels.json")
-        if not os.path.exists(self.channels_path):
-            with open(self.channels_path, 'w') as f:
-                json.dump({}, f)
-        
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
         
@@ -114,11 +109,10 @@ class BotCore(discord.Client):
         self._last_ocr_refresh: float = 0.0
         self._last_frame_ms = time.monotonic()
         
-        with open(self.channels_path, 'r') as f:
-            channel_data: dict[str, Any] = json.load(f)
+        channel_data = self._load_channels_config()
         async def save_channels(data: dict[str, Any]):
-            with open(self.channels_path, 'w') as f:
-                json.dump(data, f, indent=4)
+            self.config["channels"] = data
+            await self.save_config()
         self.edits = EditCoalescer(
             logger=self.logger.getChild("EditCoalescer"),
         )
@@ -133,6 +127,36 @@ class BotCore(discord.Client):
         self.on_ready_callbacks = []
         
         self.milestones: 'MilestoneTracker | None' = None
+
+    def _save_config_sync(self):
+        tmp_path = f"{self.config_path}.tmp"
+
+        with open(tmp_path, 'w') as f:
+            json.dump(self.config, f, indent=4)
+
+        os.replace(tmp_path, self.config_path)
+
+    def _load_channels_config(self) -> dict[str, Any]:
+        channel_data = self.config.get("channels")
+
+        if isinstance(channel_data, dict):
+            return channel_data
+
+        channel_data = {}
+        legacy_path = "channels.json"
+
+        if os.path.exists(legacy_path):
+            try:
+                with open(legacy_path, 'r') as f:
+                    legacy_data = json.load(f)
+                if isinstance(legacy_data, dict):
+                    channel_data = legacy_data
+            except (OSError, json.JSONDecodeError):
+                channel_data = {}
+
+        self.config["channels"] = channel_data
+        self._save_config_sync()
+        return channel_data
 
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
         owner_id = self.config.get("owner_uid")
@@ -222,7 +246,8 @@ class BotCore(discord.Client):
         self._last_frame_ms = time.monotonic()
         self.logger.debug(f"New frame received (dt={dt:.2f}s)")
         
-        img.save("live_720p.png", format="PNG")
+        if self.config.get("save_live_frame", False):
+            img.save("live_720p.png", format="PNG")
         sort_changed = self._sort_visual_changed(img)
         await self.update_ocr_data(img, sort_changed=sort_changed)
         dt = time.monotonic() - self._last_frame_ms
@@ -667,12 +692,7 @@ class BotCore(discord.Client):
     
     async def save_config(self):
         async with self._config_lock:
-            tmp_path = f"{self.config_path}.tmp"
-
-            with open(tmp_path, 'w') as f:
-                json.dump(self.config, f, indent=4)
-
-            os.replace(tmp_path, self.config_path)
+            self._save_config_sync()
 
     async def run_bot(self):
         self.stream_handler.start()
