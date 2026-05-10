@@ -209,7 +209,7 @@ class MilestoneTracker:
 
 
 async def setup(bot: "BotCore"):
-    import groups
+    from utils import groups
 
     manage = groups.manage(bot)
     milestones = MilestoneTracker(bot)

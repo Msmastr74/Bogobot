@@ -38,12 +38,10 @@ class MessageEditCoalescer:
     async def close(self) -> None:
         self._closed = True
         self._changed.set()
-
         if self._pending is not None and self._pending.future is not None:
             if not self._pending.future.done():
                 self._pending.future.set_result(None)
         self._pending = None
-
         if self._worker_task is not None:
             self._worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -57,32 +55,25 @@ class MessageEditCoalescer:
     ) -> discord.Message | None:
         if self._closed:
             raise RuntimeError(f"Edit coalescer for message {self.message.id} is closed")
-
         self.start()
-
         old_pending = self._pending
         if old_pending is not None and old_pending.future is not None:
             if not old_pending.future.done():
                 old_pending.future.set_result(None)
-
         future = asyncio.get_running_loop().create_future() if wait else None
         self._pending = PendingEdit(kwargs=kwargs, future=future)
         self._changed.set()
-
         if future is not None:
             return await future
-
         return None
 
     async def _worker(self) -> None:
         while not self._closed:
             await self._changed.wait()
             self._changed.clear()
-
             while self._pending is not None and not self._closed:
                 pending = self._pending
                 self._pending = None
-
                 try:
                     result = await self.message.edit(**pending.kwargs)
                 except (discord.NotFound, discord.Forbidden):
@@ -96,10 +87,8 @@ class MessageEditCoalescer:
                             exc_info=exc,
                         )
                     continue
-
                 if pending.future is not None and not pending.future.done():
                     pending.future.set_result(result)
-
                 if self.min_interval > 0:
                     await asyncio.sleep(self.min_interval)
 
@@ -120,10 +109,8 @@ class EditCoalescer:
         message: discord.Message | discord.PartialMessage,
     ) -> MessageEditCoalescer:
         coalescer = self._coalescers.get(message.id)
-
         if coalescer is not None:
             return coalescer
-
         coalescer = MessageEditCoalescer(
             message,
             logger=self.logger,
@@ -145,7 +132,6 @@ class EditCoalescer:
         coalescer = self.get(message_id)
         if coalescer is None:
             return None
-
         return await coalescer.edit(wait=wait, **kwargs)
 
     async def delete(
@@ -153,10 +139,8 @@ class EditCoalescer:
         message_id: int,
     ) -> bool:
         coalescer = self._coalescers.pop(message_id, None)
-
         if coalescer is None:
             return False
-
         try:
             await coalescer.message.delete()
         except (discord.NotFound, discord.Forbidden):

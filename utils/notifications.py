@@ -52,7 +52,6 @@ class NotificationBroadcaster:
             channel_id = int(channel_id_str)
         except ValueError:
             return None
-
         if isinstance(topics, list):
             normalized_topics = sorted({
                 topic for topic in topics if isinstance(topic, str)
@@ -61,10 +60,8 @@ class NotificationBroadcaster:
             normalized_topics = [topics]
         else:
             return None
-
         if not normalized_topics:
             return None
-
         return channel_id, normalized_topics
 
     async def _validate_subscription(self, channel_id: int, topics: list[str]) -> bool:
@@ -77,31 +74,24 @@ class NotificationBroadcaster:
     async def subscribe(self, topic: str, channel_id: int) -> bool:
         if not self._can_send_to(channel_id):
             return False
-
         store = await self.tracker.items()
         topics = store.setdefault(channel_id, [])
-
         if topic not in topics:
             topics.append(topic)
             topics.sort()
             await self.tracker.set(channel_id, topics)
-
         return True
 
     async def unsubscribe(self, topic: str, channel_id: int) -> bool:
         store = await self.tracker.items()
         topics = store.get(channel_id)
-
         if topics is None or topic not in topics:
             return False
-
         topics.remove(topic)
-
         if topics:
             await self.tracker.set(channel_id, topics)
         else:
             await self.tracker.remove(channel_id)
-
         return True
 
     async def has_subscription(self, topic: str, channel_id: int) -> bool:
@@ -111,13 +101,10 @@ class NotificationBroadcaster:
     async def channel_ids(self, topic: str) -> list[int]:
         store = await self.tracker.items()
         channel_ids: list[int] = []
-
         for channel_id, topics in store.items():
             if topic not in topics:
                 continue
-
             channel_ids.append(channel_id)
-
         return channel_ids
 
     async def notify(
@@ -127,14 +114,11 @@ class NotificationBroadcaster:
     ) -> int:
         sent = 0
         stale_channel_ids: list[int] = []
-
         for channel_id in await self.channel_ids(topic):
             channel = self.bot.get_channel(channel_id)
-
             if channel is None or not hasattr(channel, "send"):
                 stale_channel_ids.append(channel_id)
                 continue
-
             try:
                 await cast(Any, channel).send(**kwargs)
             except (discord.NotFound, discord.Forbidden):
@@ -147,10 +131,8 @@ class NotificationBroadcaster:
                     )
             else:
                 sent += 1
-
         for channel_id in stale_channel_ids:
             await self.unsubscribe(topic, channel_id)
-
         return sent
 
     async def close(self) -> None:

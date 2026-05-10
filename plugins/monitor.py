@@ -13,7 +13,7 @@ num_matrix: list[list[tuple[str, float]]] = [[] for _ in range(30)]
 
 
 async def setup(bot: "BotCore"):
-    import groups
+    from utils import groups
 
     manage = groups.manage(bot)
 

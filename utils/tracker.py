@@ -30,25 +30,20 @@ class Tracker(Generic[K, T]):
     async def load(self) -> dict[K, T]:
         raw_items = await self._load()
         normalized: dict[K, T] = {}
-
         for key, value in raw_items.items():
             item = await self._normalize(key, value)
             if item is None:
                 continue
-
             normalized_key, normalized_value = item
             normalized[normalized_key] = normalized_value
-
         if dict(raw_items) != self._raw_items(normalized):
             await self._save_items(normalized)
-
         self._items = normalized
         return dict(normalized)
 
     async def items(self) -> dict[K, T]:
         if self._items is None:
             return await self.load()
-
         return dict(self._items)
 
     async def get(self, key: K) -> T | None:
@@ -59,7 +54,6 @@ class Tracker(Generic[K, T]):
         item = await self._normalize(str(key), value)
         if item is None:
             return False
-
         normalized_key, normalized_value = item
         items = await self.items()
         items[normalized_key] = normalized_value
@@ -68,10 +62,8 @@ class Tracker(Generic[K, T]):
 
     async def remove(self, key: K) -> bool:
         items = await self.items()
-
         if key not in items:
             return False
-
         items.pop(key, None)
         await self._save_items(items)
         return True
@@ -79,29 +71,22 @@ class Tracker(Generic[K, T]):
     async def remove_many(self, keys: list[K]) -> bool:
         items = await self.items()
         changed = False
-
         for key in keys:
             if key in items:
                 items.pop(key, None)
                 changed = True
-
         if changed:
             await self._save_items(items)
-
         return changed
 
     async def prune_stale(self) -> list[K]:
         items = await self.items()
-
         if self._validate is None:
             return []
-
         stale_keys: list[K] = []
-
         for key, value in items.items():
             if not await self._validate(key, value):
                 stale_keys.append(key)
-
         await self.remove_many(stale_keys)
         return stale_keys
 
@@ -111,7 +96,6 @@ class Tracker(Generic[K, T]):
         loop = asyncio.get_running_loop()
         waiter = loop.create_future()
         should_save = False
-
         async with self._save_lock:
             if self._saving:
                 self._pending_save = raw_items
@@ -119,10 +103,8 @@ class Tracker(Generic[K, T]):
             else:
                 self._saving = True
                 should_save = True
-
         if should_save:
             await self._drain_save_queue(raw_items, [waiter])
-
         await waiter
 
     async def _drain_save_queue(
@@ -135,23 +117,18 @@ class Tracker(Generic[K, T]):
                 await self._save(raw_items)
             except Exception as exc:
                 self._finish_waiters(waiters, exc)
-
                 async with self._save_lock:
                     pending_waiters = self._pending_waiters
                     self._pending_save = None
                     self._pending_waiters = []
                     self._saving = False
-
                 self._finish_waiters(pending_waiters, exc)
                 raise
-
             self._finish_waiters(waiters)
-
             async with self._save_lock:
                 if self._pending_save is None:
                     self._saving = False
                     return
-
                 raw_items = self._pending_save
                 waiters = self._pending_waiters
                 self._pending_save = None
@@ -165,7 +142,6 @@ class Tracker(Generic[K, T]):
         for waiter in waiters:
             if waiter.done():
                 continue
-
             if exc is None:
                 waiter.set_result(None)
             else:

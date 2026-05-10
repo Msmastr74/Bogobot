@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
 
 async def setup(bot: "BotCore"):
-    import groups
+    from utils import groups
 
     manage = groups.manage(bot)
     telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.jsonl"))

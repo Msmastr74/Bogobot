@@ -1,18 +1,20 @@
 import io
+import asyncio
+import inspect
 import logging
 import os
 import subprocess
 import threading
 import time
-import asyncio
-import inspect
 from concurrent.futures import Future
-from typing import Callable, Coroutine, Any
+from typing import Any, Callable, Coroutine
+
 from PIL import Image
 
-from logger_pipe import PipeLogger, log_subprocess_pipe
+from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 
 FrameCallback = Callable[[Image.Image], None | Coroutine[Any, Any, None]]
+
 
 class StreamHandler:
     PNG_SIG = b"\x89PNG\r\n\x1a\n"
@@ -40,101 +42,79 @@ class StreamHandler:
         self.backoff_min_s = backoff_min_s
         self.backoff_max_s = backoff_max_s
         self.logger = logger or logging.getLogger(__name__)
-        
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_thread: threading.Thread | None = None
         self._frame_future = None
-
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._procs: list[subprocess.Popen[bytes]] = []
         self._stderr_loggers: list[PipeLogger] = []
-    
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
-
         self._stop.clear()
         self._ensure_async_loop_if_needed()
-
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float | None = 10) -> None:
         self._stop.set()
         self._kill_procs()
-
         if self._thread:
             self._thread.join(timeout)
-
         self._stop_async_loop()
-    
+
     def _callback_is_async(self) -> bool:
-      return inspect.iscoroutinefunction(self.on_new_frame)
+        return inspect.iscoroutinefunction(self.on_new_frame)
 
     def _ensure_async_loop_if_needed(self) -> None:
         if not self._callback_is_async():
             return
-
         if self._async_loop and self._async_loop.is_running():
             return
-
         ready = threading.Event()
-
         def run_loop() -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-
             self._async_loop = loop
             ready.set()
-
             loop.run_forever()
-
             pending = asyncio.all_tasks(loop)
             for task in pending:
                 task.cancel()
-
             if pending:
                 loop.run_until_complete(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
-
             loop.close()
-
         self._async_thread = threading.Thread(target=run_loop, daemon=True)
         self._async_thread.start()
         ready.wait()
-
 
     def _stop_async_loop(self) -> None:
         loop = self._async_loop
         if loop and loop.is_running():
             loop.call_soon_threadsafe(loop.stop)
-
         if self._async_thread:
             self._async_thread.join(timeout=5)
-
         self._async_loop = None
         self._async_thread = None
 
     def _loop(self) -> None:
         backoff = self.backoff_min_s
-
         while not self._stop.is_set():
             t0 = time.monotonic()
-
             try:
                 self._run_once()
             except Exception as e:
-              self.logger.warning(f"Stream failed with error: {e}")
-
+                self.logger.warning(f"Stream failed with error: {e}")
             lifetime = time.monotonic() - t0
             if lifetime < self.quick_fail_s:
                 self._sleep(backoff)
                 backoff = min(backoff * 2, self.backoff_max_s)
             else:
                 backoff = self.backoff_min_s
-
             self._kill_procs()
 
     def _run_once(self) -> None:
@@ -149,10 +129,8 @@ class StreamHandler:
             prefix="streamlink",
         ):
             self._stderr_loggers.append(streamlink_logger)
-
         if streamlink.stdout is None:
             raise RuntimeError("streamlink stdout was not piped")
-
         ffmpeg = subprocess.Popen(
             [
                 "ffmpeg",
@@ -169,60 +147,48 @@ class StreamHandler:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        
         if ffmpeg_logger := log_subprocess_pipe(
             ffmpeg.stderr,
             self.logger,
             prefix="ffmpeg",
         ):
             self._stderr_loggers.append(ffmpeg_logger)
-
         self._procs = [streamlink, ffmpeg]
         streamlink.stdout.close()
-
         if ffmpeg.stdout is None:
             raise RuntimeError("ffmpeg stdout was not piped")
-
         buf = bytearray()
-
         while not self._stop.is_set():
             chunk = os.read(ffmpeg.stdout.fileno(), 8192)
             if not chunk:
                 break
-
             buf.extend(chunk)
-
             for png in self._pop_pngs(buf):
                 img = Image.open(io.BytesIO(png))
                 img.load()
                 self._emit_frame(img)
-    
+
     def _emit_frame(self, img: Image.Image) -> None:
-      if self._callback_is_async():
-          loop = self._async_loop
-          if loop is None:
-              raise RuntimeError("Async frame callback was used, but no async loop exists")
-
-          if self._frame_future and not self._frame_future.done():
-              self.logger.warning("Previous frame is still being processed, dropping frame")
-              return
-
-          async def runner() -> None:
-              await self.on_new_frame(img)  # type: ignore[misc]
-
-          self._frame_future = asyncio.run_coroutine_threadsafe(runner(), loop)
-          self._frame_future.add_done_callback(self._log_frame_callback_error)
-      else:
-          self.on_new_frame(img)
+        if self._callback_is_async():
+            loop = self._async_loop
+            if loop is None:
+                raise RuntimeError("Async frame callback was used, but no async loop exists")
+            if self._frame_future and not self._frame_future.done():
+                self.logger.warning("Previous frame is still being processed, dropping frame")
+                return
+            async def runner() -> None:
+                await self.on_new_frame(img)  # type: ignore[misc]
+            self._frame_future = asyncio.run_coroutine_threadsafe(runner(), loop)
+            self._frame_future.add_done_callback(self._log_frame_callback_error)
+        else:
+            self.on_new_frame(img)
 
     def _log_frame_callback_error(self, future: Future):
         if future.cancelled():
             return
-
         exception = future.exception()
         if exception is None:
             return
-
         self.logger.critical(
             "Stream frame callback failed",
             exc_info=(type(exception), exception, exception.__traceback__),
@@ -230,27 +196,21 @@ class StreamHandler:
 
     def _pop_pngs(self, buf: bytearray) -> list[bytes]:
         out = []
-
         while True:
             start = buf.find(self.PNG_SIG)
             if start < 0:
                 buf.clear()
                 return out
-
             del buf[:start]
             pos = len(self.PNG_SIG)
-
             while True:
                 if len(buf) < pos + 8:
                     return out
-
                 n = int.from_bytes(buf[pos:pos + 4], "big")
                 typ = bytes(buf[pos + 4:pos + 8])
                 pos += 12 + n
-
                 if len(buf) < pos:
                     return out
-
                 if typ == self.IEND:
                     out.append(bytes(buf[:pos]))
                     del buf[:pos]

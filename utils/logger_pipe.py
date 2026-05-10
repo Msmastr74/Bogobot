@@ -29,7 +29,6 @@ class PipeLogger:
 
     def close(self, timeout: float | None = 1) -> None:
         self._thread.join(timeout)
-
         with contextlib.suppress(OSError, ValueError):
             self.pipe.close()
 
@@ -38,7 +37,6 @@ class PipeLogger:
             line = raw_line.decode(errors="replace").strip()
             if not line:
                 continue
-
             self._lines.append(line)
             message = f"{self.prefix}: {line}" if self.prefix else line
             self.logger.log(self.level, message)
@@ -54,7 +52,6 @@ def log_subprocess_pipe(
 ) -> PipeLogger | None:
     if pipe is None:
         return None
-
     return PipeLogger(
         pipe,
         logger,

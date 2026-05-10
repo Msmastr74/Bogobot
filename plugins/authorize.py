@@ -5,7 +5,7 @@ if TYPE_CHECKING:
     from main import BotCore
 
 async def setup(bot: 'BotCore'):
-    import groups
+    from utils import groups
 
     manage = groups.manage(bot)
 
