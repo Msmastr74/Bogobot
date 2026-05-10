@@ -131,6 +131,21 @@ class BotCore(discord.Client):
         self.on_ready_callbacks = []
         
         self.milestones: 'MilestoneTracker | None' = None
+
+    def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
+        owner_id = self.config.get("owner_uid")
+        auth_list = self.config.get("authorized_users", [])
+
+        if perm_requirement == 0:
+            return True
+
+        if perm_requirement == 2:
+            return user_id == owner_id
+
+        if perm_requirement == 1:
+            return user_id == owner_id or user_id in auth_list
+
+        return False
     
     def init_callback(self, callback: Callable[[], Awaitable[None]]):
         self.on_ready_callbacks.append(callback)
@@ -1003,17 +1018,7 @@ class BotCore(discord.Client):
             error: str | None = None
 
             token = current_interaction.set(interaction)
-            uid = interaction.user.id
-            owner_id = self.outer.config.get("owner_uid")
-            auth_list = self.outer.config.get("authorized_users", [])
-            
-            allowed = False
-            if perm_requirement == 0: 
-                allowed = True
-            elif perm_requirement == 2 and uid == owner_id: 
-                allowed = True
-            elif perm_requirement == 1 and (uid == owner_id or uid in auth_list): 
-                allowed = True
+            allowed = self.outer.is_authorized(interaction.user.id, perm_requirement)
 
             try:
                 await self.outer.emit_command_telemetry({

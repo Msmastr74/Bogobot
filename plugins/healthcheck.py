@@ -71,12 +71,6 @@ class FallbackHealthcheckClient(discord.Client):
         self.logger = bot.logger.getChild("Fallback")
         self._install_commands()
 
-    def _authorized(self, interaction: discord.Interaction) -> bool:
-        owner_id = self.source_bot.config.get("owner_uid")
-        auth_list = self.source_bot.config.get("authorized_users", [])
-        user_id = interaction.user.id
-        return user_id == owner_id or user_id in auth_list
-
     def _install_commands(self) -> None:
         manage = app_commands.Group(name="manage")
 
@@ -88,7 +82,7 @@ class FallbackHealthcheckClient(discord.Client):
             start_from_first: int | None = None,
             end_at_first: int | None = None,
         ):
-            if not self._authorized(interaction):
+            if not self.source_bot.is_authorized(interaction.user.id, 1):
                 await interaction.response.send_message("Unauthorized.", ephemeral=True)
                 return
 
