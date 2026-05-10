@@ -1,5 +1,6 @@
 from collections import deque
 import contextlib
+from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING
 
@@ -22,45 +23,117 @@ class MemoryLogHandler(logging.Handler):
 
 MEMORY_LOG_HANDLER = MemoryLogHandler(500)
 MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
+LOG_EMBED_TEXT_LIMIT = 4000
+MAX_LOG_MESSAGES = 5
+
+@dataclass(frozen=True)
+class LogRange:
+    start: int
+    end: int
+    label: str
+    truncate_mode: str
+    msgs: int
 
 def configure_memory_log_capacity(capacity: int) -> None:
     capacity = max(100, capacity)
     if MEMORY_LOG_HANDLER.records.maxlen != capacity:
         MEMORY_LOG_HANDLER.records = deque(MEMORY_LOG_HANDLER.records, maxlen=capacity)
 
-def format_logs(
+def selected_log_lines(
     handler: MemoryLogHandler,
     *,
-    start_from_last: int = 0,
-    end_at_last: int = 30,
-    start_from_first: int | None = None,
-    end_at_first: int | None = None,
-) -> str:
+    log_range: LogRange,
+) -> tuple[list[str], str, int, str]:
     records = list(handler.records)
+    return (
+        records[log_range.start:log_range.end],
+        log_range.label,
+        len(records),
+        log_range.truncate_mode,
+    )
 
-    if start_from_first is not None or end_at_first is not None:
-        start = start_from_first or 0
-        end = end_at_first if end_at_first is not None else len(records)
-        selected = records[start:end]
-        label = f"Showing offsets `{start}` to `{end}` from first"
-    else:
-        newest_first = list(reversed(records))
-        selected = list(reversed(newest_first[start_from_last:end_at_last]))
-        label = f"Showing offsets `{start_from_last}` to `{end_at_last}` from latest"
+def chunk_log_text(text: str, limit: int) -> list[str]:
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    split_threshold = limit // 3
+
+    def flush_current():
+        nonlocal current, current_len
+
+        if current:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+
+    for line in text.splitlines() or [""]:
+        while line:
+            separator_len = 1 if current else 0
+            remaining = limit - current_len - separator_len
+
+            if len(line) <= remaining:
+                current.append(line)
+                current_len += separator_len + len(line)
+                break
+
+            if len(line) > split_threshold and remaining > 0:
+                current.append(line[:remaining])
+                chunks.append("\n".join(current))
+                current = []
+                current_len = 0
+                line = line[remaining:]
+                continue
+
+            flush_current()
+
+            if len(line) > limit:
+                chunks.append(line[:limit])
+                line = line[limit:]
+
+        if line == "":
+            current.append("")
+
+    flush_current()
+
+    return chunks
+
+def logs_embeds(
+    handler: MemoryLogHandler,
+    *,
+    log_range: LogRange,
+) -> list[discord.Embed]:
+    selected, label, total, truncate_mode = selected_log_lines(
+        handler,
+        log_range=log_range,
+    )
 
     if selected:
         text = "\n".join(selected)
     else:
         text = "(no logs in that range)"
 
-    if len(text) > 1800:
-        text = "... truncated ...\n" + text[-1800:]
+    all_chunks = chunk_log_text(text, LOG_EMBED_TEXT_LIMIT)
+    truncated = len(all_chunks) > log_range.msgs
 
-    return (
-        f"Captured logs: `{len(records)}`\n"
-        f"{label}:\n"
-        f"```\n{text}\n```"
-    )
+    if truncated and truncate_mode == "last":
+        chunks = all_chunks[-log_range.msgs:]
+        chunks[0] = "... truncated ...\n" + chunks[0]
+    else:
+        chunks = all_chunks[:log_range.msgs]
+        if truncated:
+            chunks[-1] = chunks[-1] + "\n... truncated ..."
+
+    embeds = []
+
+    for index, chunk in enumerate(chunks):
+        title = "Logs" if len(chunks) == 1 else f"Logs {index + 1}/{len(chunks)}"
+        prefix = f"Captured logs: `{total}`\n{label}:\n" if index == 0 else ""
+        embeds.append(discord.Embed(
+            title=title,
+            description=f"{prefix}```\n{chunk}\n```",
+        ))
+
+    return embeds
 
 class FallbackHealthcheckClient(discord.Client):
     def __init__(self, bot: "BotCore", handler: MemoryLogHandler):
@@ -77,36 +150,41 @@ class FallbackHealthcheckClient(discord.Client):
         @manage.command(name="logs", description="Show recent bot logs")
         async def logs(
             interaction: discord.Interaction,
-            start_from_last: int = 0,
-            end_at_last: int = 30,
+            start_from_last: int | None = None,
+            end_at_last: int | None = None,
             start_from_first: int | None = None,
-            end_at_first: int | None = None,
+            end_from_first: int | None = None,
+            msgs: int = 1,
         ):
             if not self.source_bot.is_authorized(interaction.user.id, 1):
                 await interaction.response.send_message("Unauthorized.", ephemeral=True)
                 return
 
-            error = validate_log_range(
+            await interaction.response.defer(ephemeral=True)
+
+            log_range, error = validate_log_range(
+                len(self.handler.records),
                 start_from_last=start_from_last,
                 end_at_last=end_at_last,
                 start_from_first=start_from_first,
-                end_at_first=end_at_first,
+                end_from_first=end_from_first,
+                msgs=msgs,
             )
             if error:
-                await interaction.response.send_message(error, ephemeral=True)
+                await interaction.followup.send(error, ephemeral=True)
                 return
+            assert log_range is not None
 
-            await interaction.response.send_message(
-                format_logs(
-                    self.handler,
-                    start_from_last=start_from_last,
-                    end_at_last=end_at_last,
-                    start_from_first=start_from_first,
-                    end_at_first=end_at_first,
-                ),
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
+            embeds = logs_embeds(
+                self.handler,
+                log_range=log_range,
             )
+            for embed in embeds:
+                await interaction.followup.send(
+                    embed=embed,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
 
         self.tree.add_command(manage)
 
@@ -125,28 +203,64 @@ async def start_fallback_healthcheck(bot: "BotCore") -> None:
         await fallback.start(bot.config["bot_token"])
 
 def validate_log_range(
+    total: int,
     *,
-    start_from_last: int = 0,
-    end_at_last: int = 30,
+    start_from_last: int | None = None,
+    end_at_last: int | None = None,
     start_from_first: int | None = None,
-    end_at_first: int | None = None,
-) -> str | None:
+    end_from_first: int | None = None,
+    msgs: int = 1,
+) -> tuple[LogRange | None, str | None]:
+    if not 1 <= msgs <= MAX_LOG_MESSAGES:
+        return None, f"`msgs` must be between 1 and {MAX_LOG_MESSAGES}."
+
     if (
-        start_from_last < 0
-        or end_at_last < 0
+        (start_from_last is not None and start_from_last < 0)
+        or (end_at_last is not None and end_at_last < 0)
         or (start_from_first is not None and start_from_first < 0)
-        or (end_at_first is not None and end_at_first < 0)
+        or (end_from_first is not None and end_from_first < 0)
     ):
-        return "Log offsets must be non-negative."
+        return None, "Log offsets must be non-negative."
 
-    if start_from_first is not None or end_at_first is not None:
-        start = start_from_first or 0
-        if end_at_first is not None and end_at_first <= start:
-            return "`end_at_first` must be greater than `start_from_first`."
-    elif end_at_last <= start_from_last:
-        return "`end_at_last` must be greater than `start_from_last`."
+    if end_from_first is not None and start_from_first is not None and end_from_first <= start_from_first:
+        return None, "`end_from_first` must be greater than `start_from_first`."
 
-    return None
+    if end_at_last is not None and start_from_last is not None and end_at_last <= start_from_last:
+        return None, "`end_at_last` must be greater than `start_from_last`."
+
+    using_any = any(
+        value is not None
+        for value in (start_from_last, end_at_last, start_from_first, end_from_first)
+    )
+
+    start = 0
+    end = total
+
+    if not using_any:
+        start = max(0, total - 30)
+    else:
+        if start_from_first is not None:
+            start = max(start, start_from_first)
+        if end_at_last is not None:
+            start = max(start, total - end_at_last)
+        if end_from_first is not None:
+            end = min(end, end_from_first)
+        if start_from_last is not None:
+            end = min(end, total - start_from_last)
+
+    start = max(0, min(start, total))
+    end = max(0, min(end, total))
+
+    if end < start:
+        return None, "Log range is empty after converting offsets."
+
+    return LogRange(
+        start=start,
+        end=end,
+        label=f"Showing log indexes `{start}` to `{end}`",
+        truncate_mode="first" if start_from_first is not None else "last",
+        msgs=msgs,
+    ), None
 
 async def setup(bot: "BotCore"):
     import groups
@@ -161,16 +275,19 @@ async def setup(bot: "BotCore"):
     )
     async def logs(
         interaction: discord.Interaction,
-        start_from_last: int = 0,
-        end_at_last: int = 30,
+        start_from_last: int | None = None,
+        end_at_last: int | None = None,
         start_from_first: int | None = None,
-        end_at_first: int | None = None,
+        end_from_first: int | None = None,
+        msgs: int = 1,
     ):
-        error = validate_log_range(
+        log_range, error = validate_log_range(
+            len(handler.records),
             start_from_last=start_from_last,
             end_at_last=end_at_last,
             start_from_first=start_from_first,
-            end_at_first=end_at_first,
+            end_from_first=end_from_first,
+            msgs=msgs,
         )
         if error:
             await bot.discord.send(
@@ -178,15 +295,11 @@ async def setup(bot: "BotCore"):
                 response=True,
             )
             return
+        assert log_range is not None
 
-        await bot.discord.send(
-            format_logs(
-                handler,
-                start_from_last=start_from_last,
-                end_at_last=end_at_last,
-                start_from_first=start_from_first,
-                end_at_first=end_at_first,
-            ),
-            response=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        for embed in logs_embeds(handler, log_range=log_range):
+            await bot.discord.send(
+                embed=embed,
+                response=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
