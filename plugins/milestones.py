@@ -1,8 +1,10 @@
 from collections import Counter, defaultdict, deque
 from string import Template
 from typing import Literal, TYPE_CHECKING
+import io
 
 import discord
+from PIL import Image
 
 if TYPE_CHECKING:
     from main import BotCore
@@ -17,7 +19,7 @@ DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to 
 class MilestoneTracker:
     def __init__(self, bot: "BotCore"):
         self.bot = bot
-        self.history: defaultdict[str, deque[str]] = defaultdict(
+        self.history: defaultdict[str, deque[tuple[str, Image.Image | None]]] = defaultdict(
             lambda: deque(maxlen=MILESTONE_WINDOW_SIZE)
         )
 
@@ -132,7 +134,7 @@ class MilestoneTracker:
         if len(history) < MILESTONE_WINDOW_SIZE:
             return None
 
-        counts = Counter(history)
+        counts = Counter(val for val, img in history)
         most_common = counts.most_common()
 
         if not most_common:
@@ -143,7 +145,7 @@ class MilestoneTracker:
 
         return most_common[0][0]
 
-    async def update(self, milestone_name: str, milestone_value: str) -> str | None:
+    async def update(self, milestone_name: str, milestone_value: str, img: Image.Image | None = None) -> str | None:
         """
         Called by your update stats function.
 
@@ -167,7 +169,7 @@ class MilestoneTracker:
         if not milestone_name or not milestone_value:
             return None
 
-        self.history[milestone_name].append(milestone_value)
+        self.history[milestone_name].append((milestone_value, img))
 
         stable_value = self._get_stable_value(milestone_name)
 
@@ -213,9 +215,54 @@ class MilestoneTracker:
                 new_value=new_value,
             )
 
+        files: list[discord.File] = []
+        history = self.history.get(milestone_name)
+        if history:
+            target_val = new_value
+            cluster_idx = -1
+            history_list = list(history)
+            
+            for i in range(len(history_list) - 2):
+                if history_list[i][0] == target_val and history_list[i+1][0] == target_val and history_list[i+2][0] == target_val:
+                    cluster_idx = i
+                    break
+            
+            if cluster_idx == -1:
+                for i in range(len(history_list)):
+                    if history_list[i][0] == target_val:
+                        cluster_idx = i
+                        break
+
+            if cluster_idx == -1:
+                cluster_idx = max(0, len(history_list) - 10)
+
+            start_idx = max(0, cluster_idx - 3)
+            end_idx = min(len(history_list), start_idx + 10)
+            
+            if end_idx - start_idx < 10:
+                start_idx = max(0, end_idx - 10)
+                
+            selected_frames = history_list[start_idx:end_idx]
+            
+            for idx, (val, img) in enumerate(selected_frames):
+                if img:
+                    b = io.BytesIO()
+                    img.save(b, format="PNG")
+                    b.seek(0)
+                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
+                    files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
+
+        if files is not None:
+            await self.bot.notifications.notify(
+                MILESTONE_USAGE_TYPE,
+                content=content,
+                files=files
+            )
+            return
+
         await self.bot.notifications.notify(
             MILESTONE_USAGE_TYPE,
-            content=content,
+            content=content
         )
 
 
@@ -341,7 +388,9 @@ async def setup(bot: "BotCore"):
         description="Show recent in-memory history for a milestone",
         defer=False
     )
-    async def milestone_info(interaction: discord.Interaction, milestone_name: str, ephemeral: bool = True):
+    async def milestone_info(
+        interaction: discord.Interaction, milestone_name: str, ephemeral: bool = True
+    ):
         milestone_name = milestone_name.strip()
 
         if not milestone_name:
@@ -353,15 +402,32 @@ async def setup(bot: "BotCore"):
         await interaction.response.defer(ephemeral=ephemeral)
 
         history = milestones.history.get(milestone_name)
-        history_items = list(history or ())
+        history_items = [val for val, img in history] if history else []
         history_text = "\n".join(history_items) if history_items else "(empty)"
         current_value = await milestones.get(milestone_name)
-
+        
+        files: list[discord.File] = []
+        if history:
+            history_list = list(history)
+            start_idx = max(0, len(history_list) - 10)
+            selected_frames = history_list[start_idx:]
+            
+            for idx, (val, img) in enumerate(selected_frames):
+                if img:
+                    b = io.BytesIO()
+                    img.save(b, format="PNG")
+                    b.seek(0)
+                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
+                    files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
+        
+        kwargs = { 'files': files } if files else {}
         await bot.discord.send(
             f"{milestone_name} current value: `{current_value or 'None'}`\n"
             f"History items: `{len(history_items)}`\n"
             f"```\n{history_text}\n```",
-            response=True
+            response=True,
+            ephemeral=ephemeral,
+            **kwargs
         )
 
     @milestone_info.autocomplete("milestone_name")

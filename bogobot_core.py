@@ -256,7 +256,7 @@ class BotCore(discord.Client):
         if self.milestones:
             best_run = self.stats_cache.get("best_run")
             if best_run:
-                await self.milestones.update("Best run", best_run)
+                await self.milestones.update("Best run", best_run, img=img)
 
             for milestone_name, stat_name in (
                 ("Shuffles record", "shuffles"),
@@ -264,11 +264,11 @@ class BotCore(discord.Client):
             ):
                 stat_value = self._round_stat_down_to_power(self.stats_cache.get(stat_name))
                 if stat_value:
-                    await self.milestones.update(milestone_name, stat_value)
+                    await self.milestones.update(milestone_name, stat_value, img=img)
 
             shuffles_sec = self._round_stat_down_to_power(self.stats_cache.get("shuffles_min"))
             if shuffles_sec:
-                await self._update_non_decreasing_milestone("Shuffles each second record", shuffles_sec)
+                await self._update_non_decreasing_milestone("Shuffles each second record", shuffles_sec, img=img)
 
             average_best_shuffle = self._round_stat_down_to_int(
                 self.stats_cache.get("average_best_shuffle")
@@ -277,12 +277,14 @@ class BotCore(discord.Client):
                 await self._update_non_decreasing_milestone(
                     "Average best shuffle record",
                     average_best_shuffle,
+                    img=img
                 )
 
     async def _update_non_decreasing_milestone(
         self,
         milestone_name: str,
         milestone_value: str,
+        img: Image.Image | None = None,
     ) -> str | None:
         if self.milestones is None:
             return None
@@ -298,7 +300,7 @@ class BotCore(discord.Client):
         ):
             return None
 
-        return await self.milestones.update(milestone_name, milestone_value)
+        return await self.milestones.update(milestone_name, milestone_value, img=img)
 
     def _parse_stat_value(self, value: str | None) -> float | None:
         if not value:
