@@ -3,7 +3,7 @@ import subprocess
 import cv2
 import numpy as np
 
-def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=5):
+def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15):
     # 1. Scaling + Early Erosion to separate touching pixels
     img = np.array(pil_cell.convert("L"))
     upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
@@ -18,6 +18,15 @@ def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=
     img_h, img_w = mask.shape
     image_area = img_h * img_w
     shells = [] 
+
+    def draw_inward_stroke(cnt: np.ndarray):
+        contour_mask = np.zeros_like(mask)
+        cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=-1)
+
+        kernel = np.ones((stroke_thickness, stroke_thickness), np.uint8)
+        inner = cv2.erode(contour_mask, kernel, iterations=1)
+        stroke = cv2.subtract(contour_mask, inner)
+        bw[stroke > 0] = 0
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
@@ -61,7 +70,7 @@ def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=
         else:
             # New Shell -> Determine if it's a 0 or a normal digit
             if ellipse_score > 0.88 and solidity > 0.94:
-                cv2.drawContours(bw, [cnt], -1, 0, stroke_thickness)
+                draw_inward_stroke(cnt)
                 shells.append({'box': (x, y, w, h), 'type': 'zero'})
             else:
                 cv2.drawContours(bw, [cnt], -1, 0, thickness=-1)
