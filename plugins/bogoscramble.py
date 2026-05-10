@@ -771,6 +771,7 @@ async def setup(bot: "BotCore"):
             str(error),
             response=True,
             allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=True
         )
 
     @bot.setup.context_menu(
