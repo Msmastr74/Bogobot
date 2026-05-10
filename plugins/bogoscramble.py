@@ -812,17 +812,7 @@ async def setup(bot: "BotCore"):
         attachment7: discord.Attachment | None = None,
         attachment8: discord.Attachment | None = None,
         attachment9: discord.Attachment | None = None,
-        attachment10: discord.Attachment | None = None,
-        attachment11: discord.Attachment | None = None,
-        attachment12: discord.Attachment | None = None,
-        attachment13: discord.Attachment | None = None,
-        attachment14: discord.Attachment | None = None,
-        attachment15: discord.Attachment | None = None,
-        attachment16: discord.Attachment | None = None,
-        attachment17: discord.Attachment | None = None,
-        attachment18: discord.Attachment | None = None,
-        attachment19: discord.Attachment | None = None,
-        attachment20: discord.Attachment | None = None
+        attachment10: discord.Attachment | None = None
     ):
         try:
             scramble_shape = get_scramble_shape(rows, columns)
@@ -846,17 +836,7 @@ async def setup(bot: "BotCore"):
                 attachment7,
                 attachment8,
                 attachment9,
-                attachment10,
-                attachment11,
-                attachment12,
-                attachment13,
-                attachment14,
-                attachment15,
-                attachment16,
-                attachment17,
-                attachment18,
-                attachment19,
-                attachment20
+                attachment10
             )
             if attachment is not None
         ]
