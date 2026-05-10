@@ -437,16 +437,18 @@ async def setup(bot: "BotCore"):
     @bot.setup.command(
         name="milestone_info",
         description="Show recent in-memory history for a milestone",
+        defer=False
     )
-    async def milestone_info(interaction: discord.Interaction, milestone_name: str):
+    async def milestone_info(interaction: discord.Interaction, milestone_name: str, ephemeral: bool = True):
         milestone_name = milestone_name.strip()
 
         if not milestone_name:
             await bot.discord.send(
                 "Milestone name is required.",
-                response=True,
+                response=True, ephemeral=True
             )
             return
+        await interaction.response.defer(ephemeral=ephemeral)
 
         history = milestones.history.get(milestone_name)
         history_items = list(history or ())
@@ -457,7 +459,7 @@ async def setup(bot: "BotCore"):
             f"{milestone_name} current value: `{current_value or 'None'}`\n"
             f"History items: `{len(history_items)}`\n"
             f"```\n{history_text}\n```",
-            response=True,
+            response=True
         )
 
     @milestone_info.autocomplete("milestone_name")
