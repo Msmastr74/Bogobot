@@ -195,6 +195,7 @@ async def setup(bot: 'BotCore'):
             counter -= 1
             if should_succeed and counter <= succeed_count:
                 arr = sorted_arr.copy()
+                break
             elif should_succeed:
                 random.shuffle(arr)
             else:
