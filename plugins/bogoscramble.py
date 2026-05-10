@@ -564,7 +564,9 @@ async def setup(bot: "BotCore"):
             name = os.path.basename(path)
             return name or fallback
 
-        def embed_proxy_url(proxy) -> str | None:
+        def embed_proxy_url(proxy: discord.embeds._EmbedMediaProxy) -> str | None:
+            if proxy.url and proxy.url.startswith("https://cdn.discordapp.com/"):
+                return proxy.url
             return proxy.proxy_url or proxy.url
 
         def embed_media_jobs(embed: discord.Embed) -> list[tuple[str, str]]:
