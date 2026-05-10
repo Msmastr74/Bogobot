@@ -695,6 +695,7 @@ class BotCore(discord.Client):
             self._save_config_sync()
 
     async def run_bot(self):
+        self.stream_handler.async_loop = self.loop
         self.stream_handler.start()
         await self.start(self.config['bot_token'])
 

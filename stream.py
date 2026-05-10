@@ -32,6 +32,7 @@ class StreamHandler:
         backoff_min_s: float = 2,
         backoff_max_s: float = 120,
         logger: logging.Logger | None = None,
+        loop: asyncio.AbstractEventLoop | None = None
     ):
         self.url = url
         self.quality = quality
@@ -42,8 +43,7 @@ class StreamHandler:
         self.backoff_min_s = backoff_min_s
         self.backoff_max_s = backoff_max_s
         self.logger = logger or logging.getLogger(__name__)
-        self._async_loop: asyncio.AbstractEventLoop | None = None
-        self._async_thread: threading.Thread | None = None
+        self.async_loop: asyncio.AbstractEventLoop | None = loop
         self._frame_future = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -54,7 +54,6 @@ class StreamHandler:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._ensure_async_loop_if_needed()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -63,43 +62,9 @@ class StreamHandler:
         self._kill_procs()
         if self._thread:
             self._thread.join(timeout)
-        self._stop_async_loop()
 
     def _callback_is_async(self) -> bool:
         return inspect.iscoroutinefunction(self.on_new_frame)
-
-    def _ensure_async_loop_if_needed(self) -> None:
-        if not self._callback_is_async():
-            return
-        if self._async_loop and self._async_loop.is_running():
-            return
-        ready = threading.Event()
-        def run_loop() -> None:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self._async_loop = loop
-            ready.set()
-            loop.run_forever()
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
-            loop.close()
-        self._async_thread = threading.Thread(target=run_loop, daemon=True)
-        self._async_thread.start()
-        ready.wait()
-
-    def _stop_async_loop(self) -> None:
-        loop = self._async_loop
-        if loop and loop.is_running():
-            loop.call_soon_threadsafe(loop.stop)
-        if self._async_thread:
-            self._async_thread.join(timeout=5)
-        self._async_loop = None
-        self._async_thread = None
 
     def _loop(self) -> None:
         backoff = self.backoff_min_s
@@ -170,7 +135,7 @@ class StreamHandler:
 
     def _emit_frame(self, img: Image.Image) -> None:
         if self._callback_is_async():
-            loop = self._async_loop
+            loop = self.async_loop
             if loop is None:
                 raise RuntimeError("Async frame callback was used, but no async loop exists")
             if self._frame_future and not self._frame_future.done():

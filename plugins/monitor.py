@@ -223,31 +223,25 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        embed = discord.Embed(
-            title="Monitor",
-            description="Initializing...",
-        )
-        embed.set_footer(text="Oldest → Newest [?? = Unknown]")
-
-        channel = interaction.channel or bot.get_channel(channel_id)
-
-        if channel is None or not hasattr(channel, "send"):
+        try:
+            message = await bot.discord.send_embed(
+                title="Monitor",
+                contents="Initializing...",
+                footer="Oldest → Newest [?? = Unknown]",
+                response=False
+            )
+        except (discord.NotFound, discord.Forbidden):
             message = None
-        else:
-            try:
-                message = await cast(Any, channel).send(embed=embed)
-            except (discord.NotFound, discord.Forbidden):
-                message = None
 
-        if message is None:
+        if message is None or message.message is None:
             await bot.discord.send(
-                "I cannot access this channel.",
+                "Failed to send message to this channel.",
                 response=True,
             )
             return
 
-        bot.edits.register(message)
-        await monitor_messages.set(channel_id, message.id)
+        bot.edits.register(message.message)
+        await monitor_messages.set(channel_id, message.message.id)
 
         await bot.discord.send(
             "Monitor system online in this channel.",
