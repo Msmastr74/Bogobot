@@ -1,13 +1,17 @@
 import io
+import logging
 import os
 import subprocess
 import threading
 import time
 import asyncio
 import inspect
-import warnings
+from concurrent.futures import Future
 from typing import Callable, Coroutine, Any
 from PIL import Image
+
+from logger_pipe import PipeLogger, log_subprocess_pipe
+
 FrameCallback = Callable[[Image.Image], None | Coroutine[Any, Any, None]]
 
 class StreamHandler:
@@ -25,6 +29,7 @@ class StreamHandler:
         quick_fail_s: float = 120,
         backoff_min_s: float = 2,
         backoff_max_s: float = 120,
+        logger: logging.Logger | None = None,
     ):
         self.url = url
         self.quality = quality
@@ -34,6 +39,7 @@ class StreamHandler:
         self.quick_fail_s = quick_fail_s
         self.backoff_min_s = backoff_min_s
         self.backoff_max_s = backoff_max_s
+        self.logger = logger or logging.getLogger(__name__)
         
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_thread: threading.Thread | None = None
@@ -42,6 +48,7 @@ class StreamHandler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._procs: list[subprocess.Popen[bytes]] = []
+        self._stderr_loggers: list[PipeLogger] = []
     
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -119,7 +126,7 @@ class StreamHandler:
             try:
                 self._run_once()
             except Exception as e:
-              warnings.warn(f"Stream failed with error: {e}", RuntimeWarning)
+              self.logger.warning(f"Stream failed with error: {e}")
 
             lifetime = time.monotonic() - t0
             if lifetime < self.quick_fail_s:
@@ -133,8 +140,15 @@ class StreamHandler:
     def _run_once(self) -> None:
         streamlink = subprocess.Popen(
             ["streamlink", self.url, self.quality, "--stdout", "--loglevel", "error" if self.quiet else "info"],
-            stdout=subprocess.PIPE
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+        if streamlink_logger := log_subprocess_pipe(
+            streamlink.stderr,
+            self.logger,
+            prefix="streamlink",
+        ):
+            self._stderr_loggers.append(streamlink_logger)
 
         if streamlink.stdout is None:
             raise RuntimeError("streamlink stdout was not piped")
@@ -152,8 +166,16 @@ class StreamHandler:
                 "pipe:1",
             ],
             stdin=streamlink.stdout,
-            stdout=subprocess.PIPE
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+        
+        if ffmpeg_logger := log_subprocess_pipe(
+            ffmpeg.stderr,
+            self.logger,
+            prefix="ffmpeg",
+        ):
+            self._stderr_loggers.append(ffmpeg_logger)
 
         self._procs = [streamlink, ffmpeg]
         streamlink.stdout.close()
@@ -182,18 +204,29 @@ class StreamHandler:
               raise RuntimeError("Async frame callback was used, but no async loop exists")
 
           if self._frame_future and not self._frame_future.done():
-              warnings.warn(
-                  "Previous frame is still being processed, dropping frame",
-                  RuntimeWarning
-              )
+              self.logger.warning("Previous frame is still being processed, dropping frame")
               return
 
           async def runner() -> None:
               await self.on_new_frame(img)  # type: ignore[misc]
 
           self._frame_future = asyncio.run_coroutine_threadsafe(runner(), loop)
+          self._frame_future.add_done_callback(self._log_frame_callback_error)
       else:
           self.on_new_frame(img)
+
+    def _log_frame_callback_error(self, future: Future):
+        if future.cancelled():
+            return
+
+        exception = future.exception()
+        if exception is None:
+            return
+
+        self.logger.critical(
+            "Stream frame callback failed",
+            exc_info=(type(exception), exception, exception.__traceback__),
+        )
 
     def _pop_pngs(self, buf: bytearray) -> list[bytes]:
         out = []
@@ -232,6 +265,9 @@ class StreamHandler:
                 except Exception:
                     p.kill()
         self._procs = []
+        for pipe_logger in self._stderr_loggers:
+            pipe_logger.close()
+        self._stderr_loggers = []
 
     def _sleep(self, seconds: float) -> None:
         end = time.monotonic() + seconds

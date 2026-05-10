@@ -15,6 +15,7 @@ from PIL import Image, ImageSequence
 from typing import Any, Optional, overload
 from types import CoroutineType
 from bogobot_core import current_interaction
+from logger_pipe import log_subprocess_pipe
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
@@ -365,81 +366,91 @@ async def setup(bot: "BotCore"):
                     cap.release()
                     raise BogoUserError(f"Could not read video size for `{filename}`.")
 
-                process = subprocess.Popen(
-                    [
-                        "ffmpeg",
-                        "-hide_banner",
-                        "-loglevel", "error",
-                        "-y",
-                        "-f", "rawvideo",
-                        "-pix_fmt", "bgr24",
-                        "-s", f"{width}x{height}",
-                        "-r", str(fps),
-                        "-i", "pipe:0",
-                        "-i", input_path,
-                        "-map", "0:v:0",
-                        "-map", "1:a?",
-                        *video_args,
-                        "-shortest",
-                        *(
-                            ["-movflags", "+faststart"]
-                            if output_extension in ("mp4", "m4v", "mov")
-                            else []
-                        ),
-                        output_path,
-                    ],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
-                if process.stdin is None:
-                    cap.release()
-                    process.kill()
-                    raise BogoUserError(f"Could not start video encoder for `{filename}`.")
-
-                plans: dict[tuple[int, int], object] = {}
-                processed = 0
-
+                ffmpeg_logger = None
                 try:
-                    while True:
-                        ok, frame = cap.read()
-                        if not ok:
-                            break
+                    process = subprocess.Popen(
+                        [
+                            "ffmpeg",
+                            "-hide_banner",
+                            "-loglevel", "error",
+                            "-y",
+                            "-f", "rawvideo",
+                            "-pix_fmt", "bgr24",
+                            "-s", f"{width}x{height}",
+                            "-r", str(fps),
+                            "-i", "pipe:0",
+                            "-i", input_path,
+                            "-map", "0:v:0",
+                            "-map", "1:a?",
+                            *video_args,
+                            "-shortest",
+                            *(
+                                ["-movflags", "+faststart"]
+                                if output_extension in ("mp4", "m4v", "mov")
+                                else []
+                            ),
+                            output_path,
+                        ],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                    )
+                    ffmpeg_logger = log_subprocess_pipe(
+                        process.stderr,
+                        bot.logger.getChild("Bogoscramble"),
+                        prefix="ffmpeg",
+                    )
+                    if process.stdin is None:
+                        cap.release()
+                        process.kill()
+                        raise BogoUserError(f"Could not start video encoder for `{filename}`.")
 
-                        processed += 1
-                        if processed > MAXIMUM_FRAMES:
-                            process.kill()
-                            cap.release()
-                            raise BogoUserError(
-                                f"{filename} has too many frames (more than {MAXIMUM_FRAMES})."
-                            )
+                    plans: dict[tuple[int, int], object] = {}
+                    processed = 0
 
-                        h, w = frame.shape[:2]
-                        plan = plans.get((w, h))
-                        scrambled, plan = scramble_array(frame, plan)
-                        plans[(w, h)] = plan
-                        scrambled = fit_frame(scrambled, width, height)
-                        process.stdin.write(scrambled.tobytes())
-                except BrokenPipeError:
-                    raise BogoUserError(f"Could not encode video `{filename}`.")
+                    try:
+                        while True:
+                            ok, frame = cap.read()
+                            if not ok:
+                                break
+
+                            processed += 1
+                            if processed > MAXIMUM_FRAMES:
+                                process.kill()
+                                cap.release()
+                                raise BogoUserError(
+                                    f"{filename} has too many frames (more than {MAXIMUM_FRAMES})."
+                                )
+
+                            h, w = frame.shape[:2]
+                            plan = plans.get((w, h))
+                            scrambled, plan = scramble_array(frame, plan)
+                            plans[(w, h)] = plan
+                            scrambled = fit_frame(scrambled, width, height)
+                            process.stdin.write(scrambled.tobytes())
+                    except BrokenPipeError:
+                        raise BogoUserError(f"Could not encode video `{filename}`.")
+                    finally:
+                        cap.release()
+                        with contextlib.suppress(BrokenPipeError, OSError):
+                            process.stdin.close()
+
+                    if processed == 0:
+                        process.kill()
+                        raise BogoUserError(f"Could not read any frames from `{filename}`.")
+
+                    if process.wait(timeout=30) != 0:
+                        if ffmpeg_logger is not None:
+                            ffmpeg_logger.close()
+
+                        stderr = ffmpeg_logger.text if ffmpeg_logger is not None else ""
+                        message = f"Could not encode video `{filename}`."
+                        if stderr:
+                            message += f"\n```{stderr[:1500]}```"
+                        raise BogoUserError(message)
                 finally:
-                    cap.release()
-                    with contextlib.suppress(BrokenPipeError, OSError):
-                        process.stdin.close()
-
-                if processed == 0:
-                    process.kill()
-                    raise BogoUserError(f"Could not read any frames from `{filename}`.")
-
-                if process.wait(timeout=30) != 0:
-                    stderr = ""
-                    if process.stderr is not None:
-                        with contextlib.suppress(OSError):
-                            stderr = process.stderr.read().decode("utf-8", errors="replace").strip()
-                    message = f"Could not encode video `{filename}`."
-                    if stderr:
-                        message += f"\n```{stderr[:1500]}```"
-                    raise BogoUserError(message)
+                    if ffmpeg_logger is not None:
+                        ffmpeg_logger.close()
 
                 with open(output_path, "rb") as f:
                     buffer = io.BytesIO(f.read())

@@ -19,10 +19,12 @@ from stream import StreamHandler
 from channel_proxy import ChannelProxyManager
 import logging
 
+LOG_FORMAT = '[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s\x1b[K'
+LOG_DATE_FORMAT = '%d %H:%M:%S'
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s\x1b[K',
-    datefmt='%d %H:%M:%S'
+    format=LOG_FORMAT,
+    datefmt=LOG_DATE_FORMAT
 )
 logging.captureWarnings(True)
 
@@ -70,18 +72,19 @@ class BotCore(discord.Client):
         self.monitor_message = None
         
         self.debug: bool = self.config.get("debug", False)
+        self.logger = logging.getLogger("Bogobot")
+        loglevel = logging.DEBUG if self.debug else logging.INFO
+        self.logger.setLevel(loglevel)
+
         self.stream_handler = StreamHandler(
             url="https://www.youtube.com/live/DgfiqGPmGWY",
             quality="720p",
             on_new_frame=self.on_new_frame,
             fps=1.1,
             quiet=self.config.get(
-                "silence_stream", False) or not self.debug
+                "silence_stream", False) or not self.debug,
+            logger=self.logger.getChild("Stream"),
         )
-        
-        self.logger = logging.getLogger("Bogobot")
-        loglevel = logging.DEBUG if self.debug else logging.INFO
-        self.logger.setLevel(loglevel)
         
         self.info = self._Info(self)
         self.discord = self._Discord(self)
@@ -726,12 +729,18 @@ class BotCore(discord.Client):
             stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate(input=image_bytes)
+        stderr_text = stderr.decode(errors="ignore").strip()
         
         if process.returncode != 0:
+            if stderr_text:
+                self.logger.error(f"tesseract: {stderr_text}")
             # Manually raise an error so the loop/bot knows it failed
             raise RuntimeError(
-                f"Tesseract failed with code {process.returncode}: {stderr.decode(errors="ignore")}"
+                f"Tesseract failed with code {process.returncode}: {stderr_text}"
             )
+
+        if stderr_text:
+            self.logger.debug(f"tesseract: {stderr_text}")
 
         out, conf = self._parse_tesseract_tsv_stdout(stdout.decode(errors="ignore"))
 
