@@ -225,7 +225,14 @@ def validate_log_range(
     if end_from_first is not None and start_from_first is not None and end_from_first <= start_from_first:
         return None, "`end_from_first` must be greater than `start_from_first`."
 
-    if end_at_last is not None and start_from_last is not None and end_at_last <= start_from_last:
+    using_first = start_from_first is not None or end_from_first is not None
+
+    if (
+        not using_first
+        and end_at_last is not None
+        and start_from_last is not None
+        and end_at_last <= start_from_last
+    ):
         return None, "`end_at_last` must be greater than `start_from_last`."
 
     using_any = any(
@@ -238,13 +245,18 @@ def validate_log_range(
 
     if not using_any:
         start = max(0, total - 30)
-    else:
+    elif using_first:
         if start_from_first is not None:
             start = max(start, start_from_first)
-        if end_at_last is not None:
-            start = max(start, total - end_at_last)
+        if start_from_last is not None:
+            start = max(start, total - start_from_last)
         if end_from_first is not None:
             end = min(end, end_from_first)
+        if end_at_last is not None:
+            end = min(end, total - end_at_last)
+    else:
+        if end_at_last is not None:
+            start = max(start, total - end_at_last)
         if start_from_last is not None:
             end = min(end, total - start_from_last)
 
