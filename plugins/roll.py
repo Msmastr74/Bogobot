@@ -115,7 +115,7 @@ async def setup(bot: 'BotCore'):
             await message.edit(contents=f"Sorting: `{text()}`")
             random.shuffle(arr)
             counter -= 1
-            if counter <= 0:
+            if counter <= 0 and arr != sorted(arr):
                 await asyncio.sleep(1.5)
                 await message.edit(contents=f"Sort failed: `{text()}`")
                 await message.add_reaction(UNSORTED_EMOJI_ID)
