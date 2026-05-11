@@ -28,7 +28,7 @@ Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
 Go into `config.json` and provide the main credentials:
  * `bot_token`: Discord bot token.
  * `owner_uid`: Your Discord user ID.
- * `authorized_users`: User IDs allowed to run authorized commands.
+ * `authorized_users`: User IDs mapped to authorization levels.
  * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
  * `fallback_client`: Optional fallback client after fatal startup/runtime errors. Defaults to true.
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.

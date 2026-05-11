@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import Literal, TYPE_CHECKING
 
 import discord
 from discord import app_commands
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 
 RESTART_DELAY_SECONDS = 1.0
+FALLBACK_CLIENT_REQUESTED = False
 
 
 @dataclass(frozen=True)
@@ -355,6 +356,24 @@ class FallbackClient(discord.Client):
 async def start_fallback_client(bot: "BotCore") -> None:
     await FallbackClient.start_for(bot)
 
+
+def fallback_client_requested() -> bool:
+    return FALLBACK_CLIENT_REQUESTED
+
+
+def schedule_fallback_client(bot: "BotCore") -> None:
+    global FALLBACK_CLIENT_REQUESTED
+
+    FALLBACK_CLIENT_REQUESTED = True
+
+    async def stop_for_fallback() -> None:
+        await asyncio.sleep(RESTART_DELAY_SECONDS)
+        bot.logger.critical("Stopping main bot for fallback client by command request.")
+        with contextlib.suppress(Exception):
+            await bot.close()
+
+    asyncio.create_task(stop_for_fallback())
+
 def schedule_restart(client: discord.Client, logger: logging.Logger) -> None:
     async def restart_process(client: discord.Client, logger: logging.Logger) -> None:
         await asyncio.sleep(RESTART_DELAY_SECONDS)
@@ -373,13 +392,31 @@ async def setup(bot: "BotCore"):
     handler = MEMORY_LOG_HANDLER
 
     @manage.command(
-        name="restart",
-        description="Restart the bot process",
+        name="state",
+        description="Show or change bot process state",
         perm_requirement=2,
     )
-    async def restart(interaction: discord.Interaction):
-        await bot.discord.send("Restarting...", response=True)
-        schedule_restart(bot, bot.logger)
+    async def state(
+        interaction: discord.Interaction,
+        action: Literal["stop", "restart", "info"],
+    ):
+        if action == "restart":
+            await bot.discord.send("Restarting...", response=True)
+            schedule_restart(bot, bot.logger)
+            return
+
+        if action == "stop":
+            if not bot.config.get("fallback_client", True):
+                await bot.discord.send("Fallback client is disabled.", response=True)
+                return
+            await bot.discord.send("Stopping main bot and starting fallback client...", response=True)
+            schedule_fallback_client(bot)
+            return
+
+        await bot.discord.send(
+            "State: main bot is up; fallback client is not active.",
+            response=True,
+        )
 
     @manage.command(name="logs", description="Show recent bot logs")
     async def logs(
@@ -409,15 +446,35 @@ async def setup(bot: "BotCore"):
             )
 
 async def setup_fallback(client: FallbackClient):
-    manage = app_commands.Group(name="manage")
+    manage = app_commands.Group(
+        name="manage", description="Bot management commands"
+    )
 
-    @manage.command(name="restart", description="Restart the bot process")
-    async def restart(interaction: discord.Interaction):
+    @manage.command(name="state", description="Show or change bot process state")
+    async def state(
+        interaction: discord.Interaction,
+        action: Literal["stop", "restart", "info"],
+    ):
         if not client.source_bot.is_authorized(interaction.user.id, 1):
             await interaction.response.send_message("Unauthorized.", ephemeral=True)
             return
-        await interaction.response.send_message("Restarting...", ephemeral=True)
-        schedule_restart(client, client.logger)
+
+        if action == "restart":
+            await interaction.response.send_message("Restarting...", ephemeral=True)
+            schedule_restart(client, client.logger)
+            return
+
+        if action == "stop":
+            await interaction.response.send_message(
+                "Fallback client is already active.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "State: fallback client is active; main bot is not up.",
+            ephemeral=True,
+        )
 
     @manage.command(name="logs", description="Show recent bot logs")
     async def logs(

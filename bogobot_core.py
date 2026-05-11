@@ -63,6 +63,7 @@ class BotCore(discord.Client):
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
         self._config_lock = asyncio.Lock()
+        self._migrate_authorized_users()
         
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
@@ -160,20 +161,45 @@ class BotCore(discord.Client):
         self._save_config_sync()
         return channel_data
 
+    def _migrate_authorized_users(self) -> None:
+        authorized_users = self.config.get("authorized_users", {})
+        migrated: dict[str, int] = {}
+
+        if isinstance(authorized_users, list):
+            for user_id in authorized_users:
+                try:
+                    migrated[str(int(user_id))] = 1
+                except (TypeError, ValueError):
+                    continue
+        elif isinstance(authorized_users, dict):
+            for user_id, level in authorized_users.items():
+                try:
+                    normalized_user_id = str(int(user_id))
+                    normalized_level = int(level)
+                except (TypeError, ValueError):
+                    continue
+                if normalized_level > 0:
+                    migrated[normalized_user_id] = min(normalized_level, 2)
+
+        if authorized_users != migrated:
+            self.config["authorized_users"] = migrated
+            self._save_config_sync()
+
+    def authorization_level(self, user_id: int) -> int:
+        if user_id == self.config.get("owner_uid"):
+            return 3
+
+        authorized_users = self.config.get("authorized_users", {})
+        if not isinstance(authorized_users, dict):
+            return 0
+
+        try:
+            return max(0, int(authorized_users.get(str(user_id), 0)))
+        except (TypeError, ValueError):
+            return 0
+
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
-        owner_id = self.config.get("owner_uid")
-        auth_list = self.config.get("authorized_users", [])
-
-        if perm_requirement == 0:
-            return True
-
-        if perm_requirement == 2:
-            return user_id == owner_id
-
-        if perm_requirement == 1:
-            return user_id == owner_id or user_id in auth_list
-
-        return False
+        return self.authorization_level(user_id) >= perm_requirement
     
     def init_callback(self, callback: Callable[[], Awaitable[None]]):
         self.on_ready_callbacks.append(callback)

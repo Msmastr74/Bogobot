@@ -4,7 +4,7 @@ import contextlib
 import os
 import sys
 
-from plugins.admin import start_fallback_client
+from plugins.admin import fallback_client_requested, start_fallback_client
 
 if os.path.exists('local_config.json'):
     bot = BotCore('local_config.json')
@@ -65,6 +65,6 @@ if __name__ == "__main__":
         )
         asyncio.run(start_fallback_client(bot))
     else:
-        if fallback_requested:
+        if fallback_requested or fallback_client_requested():
             bot.logger.critical("Starting fallback client.")
             asyncio.run(start_fallback_client(bot))
