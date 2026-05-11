@@ -72,3 +72,16 @@ async def setup(bot: 'BotCore'):
             await embed.edit_embed(contents="No data available")
         else:
             await embed.edit_embed(contents=f"{rows}")
+    
+    @bot.setup.command(name="bottom", description="Gets the bottom 10 players in sortoffs!", eph=False, perm_requirement=0)
+    async def bottom(interaction: discord.Interaction):
+        raw_lb = await fetch_leaderboard()
+        rows = format_leaderboard(rows=raw_lb[-10:], limit=10)
+        
+        embed = await bot.discord.send_embed(contents="Bottom players ranked by elo", title="Leaderboard", footer="Data from swapjs.dev", color=discord.Color.gold(), response=True)
+        assert embed is not None
+
+        if not rows:
+            await embed.edit_embed(contents="No data available")
+        else:
+            await embed.edit_embed(contents=f"{rows}")
