@@ -242,8 +242,11 @@ class BotCore(discord.Client):
             return self.outer.stats_cache
     
     async def on_new_frame(self, img: Image.Image):
-        dt = time.monotonic() - self._last_frame_ms
-        self._last_frame_ms = time.monotonic()
+        frame_received_at = time.time()
+        
+        frame_received_monotonic = time.monotonic()
+        dt = frame_received_monotonic - self._last_frame_ms
+        self._last_frame_ms = frame_received_monotonic
         self.logger.debug(f"New frame received (dt={dt:.2f}s)")
         
         if self.config.get("save_live_frame", False):
@@ -254,9 +257,10 @@ class BotCore(discord.Client):
         self.logger.debug(f"OCR data updated (dt={dt:.2f}s)")
         
         if self.milestones:
+            frame_timestamp = int(frame_received_at)
             best_run = self.stats_cache.get("best_run")
             if best_run:
-                await self.milestones.update("Best run", best_run, img=img)
+                await self.milestones.update("Best run", best_run, timestamp=frame_timestamp, img=img)
 
             for milestone_name, stat_name in (
                 ("Shuffles record", "shuffles"),
@@ -264,11 +268,16 @@ class BotCore(discord.Client):
             ):
                 stat_value = self._round_stat_down_to_power(self.stats_cache.get(stat_name))
                 if stat_value:
-                    await self.milestones.update(milestone_name, stat_value, img=img)
+                    await self.milestones.update(milestone_name, stat_value, timestamp=frame_timestamp, img=img)
 
             shuffles_sec = self._round_stat_down_to_power(self.stats_cache.get("shuffles_min"))
             if shuffles_sec:
-                await self._update_non_decreasing_milestone("Shuffles each second record", shuffles_sec, img=img)
+                await self._update_non_decreasing_milestone(
+                    "Shuffles each second record",
+                    shuffles_sec,
+                    timestamp=frame_timestamp,
+                    img=img,
+                )
 
             average_best_shuffle = self._round_stat_down_to_int(
                 self.stats_cache.get("average_best_shuffle")
@@ -277,6 +286,7 @@ class BotCore(discord.Client):
                 await self._update_non_decreasing_milestone(
                     "Average best shuffle record",
                     average_best_shuffle,
+                    timestamp=frame_timestamp,
                     img=img
                 )
 
@@ -284,6 +294,7 @@ class BotCore(discord.Client):
         self,
         milestone_name: str,
         milestone_value: str,
+        timestamp: int,
         img: Image.Image | None = None,
     ) -> str | None:
         if self.milestones is None:
@@ -300,7 +311,7 @@ class BotCore(discord.Client):
         ):
             return None
 
-        return await self.milestones.update(milestone_name, milestone_value, img=img)
+        return await self.milestones.update(milestone_name, milestone_value, timestamp=timestamp, img=img)
 
     def _parse_stat_value(self, value: str | None) -> float | None:
         if not value:
