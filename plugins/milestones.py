@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 
 MILESTONE_USAGE_TYPE = "milestones"
 MILESTONE_WINDOW_SIZE = 40
+MILESTONE_NOTIFY_LIMIT = 5
+MILESTONE_NOTIFY_WINDOW_SECONDS = 10 * 60
+MILESTONE_RATELIMIT_MESSAGE = "Rate limit exceeded! Notify the owner or use `/manage milestones ratelimit_reset`."
 DEFAULT_MILESTONE_INITIALIZE_FORMAT = "$milestone_name initialized to `$new_value`."
 DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to `$new_value`."
 
@@ -23,6 +26,9 @@ class MilestoneTracker:
         self.history: defaultdict[str, deque[tuple[str, int, Image.Image | None]]] = defaultdict(
             lambda: deque(maxlen=MILESTONE_WINDOW_SIZE)
         )
+        self._notify_timestamps: deque[float] = deque()
+        self._ratelimited = False
+        self._ratelimit_warning_sent = False
 
     async def _get_state(self) -> dict[str, str]:
         state = self.bot.config.get("milestones")
@@ -118,6 +124,36 @@ class MilestoneTracker:
         return await self.bot.notifications.unsubscribe(
             MILESTONE_USAGE_TYPE,
             channel_id,
+        )
+
+    def reset_ratelimit(self) -> None:
+        self._notify_timestamps.clear()
+        self._ratelimited = False
+        self._ratelimit_warning_sent = False
+
+    def _consume_notify_slot(self) -> bool:
+        if self._ratelimited:
+            return False
+
+        now = time.monotonic()
+        while self._notify_timestamps and now - self._notify_timestamps[0] >= MILESTONE_NOTIFY_WINDOW_SECONDS:
+            self._notify_timestamps.popleft()
+
+        if len(self._notify_timestamps) >= MILESTONE_NOTIFY_LIMIT:
+            self._ratelimited = True
+            return False
+
+        self._notify_timestamps.append(now)
+        return True
+
+    async def _notify_ratelimit_exceeded(self) -> None:
+        if self._ratelimit_warning_sent:
+            return
+
+        self._ratelimit_warning_sent = True
+        await self.bot.notifications.notify(
+            MILESTONE_USAGE_TYPE,
+            content=MILESTONE_RATELIMIT_MESSAGE,
         )
 
     def _get_stable_value(self, milestone_name: str) -> str | None:
@@ -223,6 +259,10 @@ class MilestoneTracker:
                 new_value=new_value,
             )
 
+        if not self._consume_notify_slot():
+            await self._notify_ratelimit_exceeded()
+            return
+
         files: list[discord.File] = []
         value_lines: list[str] = []
         history = self.history.get(milestone_name)
@@ -294,13 +334,28 @@ async def setup(bot: "BotCore"):
     )
     async def milestones(
         interaction: discord.Interaction,
-        action: Literal["subscribe", "unsubscribe", "spoof"],
+        action: Literal["subscribe", "unsubscribe", "spoof", "ratelimit_reset"],
         name: str | None = None,
         data: str | None = None,
         min_count: int | None = None,
     ):
         name = name.strip() if name is not None else None
         data = data.strip() if data is not None else None
+
+        if action == "ratelimit_reset":
+            if name is not None or data is not None or min_count is not None:
+                await bot.discord.send(
+                    "`name`, `data`, and `min_count` are only used with the `spoof` action.",
+                    response=True,
+                )
+                return
+
+            milestone_tracker.reset_ratelimit()
+            await bot.discord.send(
+                "Milestone notification rate limit reset.",
+                response=True,
+            )
+            return
 
         if action in ("subscribe", "unsubscribe"):
             if name is not None or data is not None or min_count is not None:
