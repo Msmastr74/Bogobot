@@ -3,12 +3,12 @@ import subprocess
 import cv2
 import numpy as np
 
-def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15):
-    # 1. Scaling + Early Erosion to separate touching pixels
+def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15, threshold=165):
+    # 1. Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
     img = np.array(pil_cell.convert("L"))
     upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
-    eroded = cv2.erode(upscaled, np.ones((3, 3), np.uint8), iterations=1)
-    _, mask = cv2.threshold(eroded, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
 
     # 2. Contour Extraction & Sorting
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -78,7 +78,7 @@ def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=
 
     # 3. Final Polish: Padding + Dilation (thins the black text)
     bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-    bw = cv2.dilate(bw, np.ones((3, 3), np.uint8), iterations=1) 
+    bw = cv2.dilate(bw, np.ones((2, 2), np.uint8), iterations=1) 
     
     return bw
 
@@ -133,4 +133,6 @@ def test_on_file(file_path, coords, whitelist="0123456789"):
 # Note: Ensure coordinates match the digit location in your specific file
 test_on_file('live_720p.png', (1170, 665, 1195, 685))
 test_on_file('live_720p.png', (81, 610, 312, 640)) #long
+test_on_file('live_720p.png', (331, 610, 551, 640)) #comparisions
 test_on_file('live_720p.png', (645, 610, 730, 640), "01234568789/") #best_run
+test_on_file('live_720p.png', (819, 610, 1043, 640)) #shuffles/sec

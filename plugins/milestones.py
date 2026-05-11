@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 MILESTONE_USAGE_TYPE = "milestones"
 MILESTONE_WINDOW_SIZE = 40
+MILESTONE_STABLE_RATIO = 0.6
 MILESTONE_NOTIFY_LIMIT = 5
 MILESTONE_NOTIFY_WINDOW_SECONDS = 10 * 60
 MILESTONE_RATELIMIT_MESSAGE = "Rate limit exceeded! Notify the owner or use `/manage milestones ratelimit_reset`."
@@ -158,12 +159,13 @@ class MilestoneTracker:
 
     def _get_stable_value(self, milestone_name: str) -> str | None:
         """
-        Returns the mode of the last 60 updates.
+        Returns the stable value from the recent update window.
 
-        Until there are exactly 60 collected updates, this returns None.
+        Until there are exactly MILESTONE_WINDOW_SIZE collected updates, this
+        returns None.
 
-        If there is a tie for mode, this returns None because the stable value
-        is ambiguous.
+        The top value must be a supermajority of the window. If there is a tie
+        for mode, this returns None because the stable value is ambiguous.
         """
 
         history = self.history[milestone_name]
@@ -178,6 +180,9 @@ class MilestoneTracker:
             return None
 
         if len(most_common) >= 2 and most_common[0][1] == most_common[1][1]:
+            return None
+
+        if most_common[0][1] / len(history) < MILESTONE_STABLE_RATIO:
             return None
 
         return most_common[0][0]
@@ -300,7 +305,7 @@ class MilestoneTracker:
                     b = io.BytesIO()
                     img.save(b, format="PNG")
                     b.seek(0)
-                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
+                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
                     files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
                     line += f" - Image {len(files)}"
                 value_lines.append(line)
@@ -508,7 +513,7 @@ async def setup(bot: "BotCore"):
                     b = io.BytesIO()
                     img.save(b, format="PNG")
                     b.seek(0)
-                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
+                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
                     files.append(discord.File(b, filename=f"frame_{idx}_{safe_val}.png"))
                     line += f" - Image {len(files)}"
                 history_lines.append(line)

@@ -73,12 +73,12 @@ class BotCore(discord.Client):
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.05)
         self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 4)))
         self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
-        
+
         self.STATS_COORDS: dict[str, tuple[int, int, int, int] | tuple[int, int, int, int, str]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
             "best_run": (645, 610, 730, 640, "0123456789/"),
-            "shuffles_min": (819, 610, 1043, 640),
+            "shuffles_sec": (819, 610, 1043, 640),
             "elapsed_time": (1166, 0, 1180, 75),
             "average_best_shuffle": (80, 670, 115, 685, "0123456789.")
         }
@@ -272,7 +272,7 @@ class BotCore(discord.Client):
                 if stat_value:
                     await self.milestones.update(milestone_name, stat_value, timestamp=frame_timestamp, img=img)
 
-            shuffles_sec = self._round_stat_down_to_power(self.stats_cache.get("shuffles_min"))
+            shuffles_sec = self._round_stat_down_to_power(self.stats_cache.get("shuffles_sec"))
             if shuffles_sec:
                 await self._update_non_decreasing_milestone(
                     "Shuffles each second record",
@@ -726,12 +726,12 @@ class BotCore(discord.Client):
         await self.notifications.close()
         await super().close() 
 
-    def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15):
-        # 1. Scaling + Early Erosion to separate touching pixels
+    def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15, threshold=165):
+        # 1. Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
         img = np.array(pil_cell.convert("L"))
         upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
-        eroded = cv2.erode(upscaled, np.ones((3, 3), np.uint8), iterations=1)
-        _, mask = cv2.threshold(eroded, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
 
         # 2. Contour Extraction & Sorting
         contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -801,7 +801,7 @@ class BotCore(discord.Client):
 
         # 3. Final Polish: Padding + Dilation (thins the black text)
         bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-        bw = cv2.dilate(bw, np.ones((3, 3), np.uint8), iterations=1) 
+        bw = cv2.dilate(bw, np.ones((2, 2), np.uint8), iterations=1) 
         
         return bw
 
@@ -894,7 +894,7 @@ class BotCore(discord.Client):
         if not self.config.get("save_ocr_debug", False):
             return
 
-        safe_text = "".join(c for c in text if c.isalnum() or c in (' ', '_', '-')).rstrip()
+        safe_text = "".join(c for c in text if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
         new_filename = f"ocr_{safe_text}.png"
         new_path = os.path.join(folder, new_filename)
         
