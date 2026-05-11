@@ -19,7 +19,7 @@ from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 import logging
-from plugins.healthcheck import MEMORY_LOG_HANDLER
+from plugins.admin import MEMORY_LOG_HANDLER
 
 CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)02d %(levelname)-8s | %(name)-15s ] %(message)s'
 LOG_DATE_FORMAT = '%b %d %H:%M:%S'

@@ -30,7 +30,7 @@ Go into `config.json` and provide the main credentials:
  * `owner_uid`: Your Discord user ID.
  * `authorized_users`: User IDs allowed to run authorized commands.
  * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
- * `fallback_healthcheck`: Optional fallback client after fatal startup/runtime errors. Defaults to true.
+ * `fallback_client`: Optional fallback client after fatal startup/runtime errors. Defaults to true.
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.

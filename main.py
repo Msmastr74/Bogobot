@@ -4,7 +4,7 @@ import contextlib
 import os
 import sys
 
-from plugins.healthcheck import start_fallback_healthcheck
+from plugins.admin import start_fallback_client
 
 if os.path.exists('local_config.json'):
     bot = BotCore('local_config.json')
@@ -60,11 +60,11 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         bot.logger.critical(
-            "Fatal error; starting fallback healthcheck client.",
+            "Fatal error; starting fallback client.",
             exc_info=(type(e), e, e.__traceback__),
         )
-        asyncio.run(start_fallback_healthcheck(bot))
+        asyncio.run(start_fallback_client(bot))
     else:
         if fallback_requested:
-            bot.logger.critical("Starting fallback healthcheck client.")
-            asyncio.run(start_fallback_healthcheck(bot))
+            bot.logger.critical("Starting fallback client.")
+            asyncio.run(start_fallback_client(bot))

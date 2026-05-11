@@ -20,8 +20,8 @@ User-edited settings:
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
 - `ocr_concurrency`: Maximum number of Tesseract processes to run at once. Defaults to 4.
 - `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
-- `fallback_healthcheck`: Start the fallback healthcheck client after a fatal main-bot failure. Defaults to true.
-- `healthcheck_log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
+- `fallback_client`: Start the fallback client after a fatal main-bot failure. Defaults to true.
+- `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
@@ -112,17 +112,17 @@ The plugin keeps a small recent-action buffer for `/manage telemetry` and builds
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.
 
-## Healthcheck Commands
-The healthcheck plugin adds `/manage restart` and `/manage logs`.
+## Admin Commands
+The admin plugin adds `/manage restart` and `/manage logs`.
 
 `/manage restart` has different permission behavior depending on which client is running:
 
 - **Normal bot**: registered through the plugin command wrapper with permission level 2, so only `owner_uid` can run it. This is stricter than most `/manage` commands, which default to the authorized-user level.
-- **Fallback healthcheck client**: registered directly on the fallback command tree and checks permission level 1, so `owner_uid` and users in `authorized_users` can run it.
+- **Fallback client**: registered directly on the fallback command tree and checks permission level 1, so `owner_uid` and users in `authorized_users` can run it.
 
 In both modes, it replies with `Restarting...`, waits briefly, closes the Discord client, and then replaces the current process with a fresh invocation of the same Python executable and command-line arguments.
 
-If the main bot fails and `fallback_healthcheck` is enabled, `main.py` starts a fallback healthcheck client using the same bot token. In fallback mode, `/manage restart` is available to authorized users and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
+If the main bot fails and `fallback_client` is enabled, `main.py` starts a fallback client using the same bot token. In fallback mode, `/manage restart` is available to authorized users and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
 
 ## Management Commands
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
