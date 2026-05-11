@@ -286,21 +286,22 @@ async def setup(bot: "BotCore"):
 
     @manage.command(
         name="milestones",
-        description="Subscribe to, unsubscribe from, or spoof/delete milestones",
+        description="Subscribe to, unsubscribe from, or spoof/delete milestones.",
     )
     async def milestones(
         interaction: discord.Interaction,
         action: Literal["subscribe", "unsubscribe", "spoof"],
         name: str | None = None,
         data: str | None = None,
+        min_count: int | None = None,
     ):
         name = name.strip() if name is not None else None
         data = data.strip() if data is not None else None
 
         if action in ("subscribe", "unsubscribe"):
-            if name is not None or data is not None:
+            if name is not None or data is not None or min_count is not None:
                 await bot.discord.send(
-                    "`name` and `data` are only used with the `spoof` action.",
+                    "`name`, `data`, and `min_count` are only used with the `spoof` action.",
                     response=True,
                 )
                 return
@@ -356,6 +357,13 @@ async def setup(bot: "BotCore"):
             return
 
         if data is None:
+            if min_count is not None:
+                await bot.discord.send(
+                    "`min_count` is only used when spoofing milestone data.",
+                    response=True,
+                )
+                return
+
             deleted = await milestone_tracker.delete(name)
             await bot.discord.send(
                 f"Deleted `{name}`." if deleted else f"`{name}` does not exist.",
@@ -373,8 +381,20 @@ async def setup(bot: "BotCore"):
         changed_value = None
         spoof_timestamp = int(time.time())
 
-        for _ in range(MILESTONE_WINDOW_SIZE):
+        if min_count is not None and min_count < 1:
+            await bot.discord.send(
+                "`min_count` must be at least 1.",
+                response=True,
+            )
+            return
+
+        minimum_spoofs = min_count or MILESTONE_WINDOW_SIZE
+        spoof_count = min(minimum_spoofs, MILESTONE_WINDOW_SIZE)
+
+        for i in range(MILESTONE_WINDOW_SIZE):
             changed_value = await milestone_tracker.update(name, data, timestamp=spoof_timestamp) or changed_value
+            if changed_value and i + 1 >= spoof_count:
+                break
 
         if changed_value is None:
             await bot.discord.send(
