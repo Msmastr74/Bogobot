@@ -224,7 +224,7 @@ class MilestoneTracker:
             )
 
         files: list[discord.File] = []
-        attached_values: list[str] = []
+        value_lines: list[str] = []
         history = self.history.get(milestone_name)
         if history:
             target_val = new_value
@@ -255,25 +255,29 @@ class MilestoneTracker:
             selected_frames = history_list[start_idx:end_idx]
             
             for idx, (val, timestamp, img) in enumerate(selected_frames):
+                line = f"<t:{timestamp}:T>: `{val}`"
                 if img:
                     b = io.BytesIO()
                     img.save(b, format="PNG")
                     b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
                     files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
-                    attached_values.append(f"<t:{timestamp}:T>: `{val}` - Image {len(files)}")
+                    line += f" - Image {len(files)}"
+                value_lines.append(line)
+
+        notify_content = f"{content}\n" + "\n".join(value_lines) if value_lines else content
 
         if files:
             await self.bot.notifications.notify(
                 MILESTONE_USAGE_TYPE,
-                content=f"{content}\n" + "\n".join(attached_values),
+                content=notify_content,
                 files=files
             )
             return
 
         await self.bot.notifications.notify(
             MILESTONE_USAGE_TYPE,
-            content=content
+            content=notify_content
         )
 
 
@@ -438,27 +442,28 @@ async def setup(bot: "BotCore"):
         current_value = await milestone_tracker.get(milestone_name)
         
         files: list[discord.File] = []
-        attached_values: list[str] = []
+        history_lines: list[str] = []
         if history:
             history_list = list(history)
             start_idx = max(0, len(history_list) - 10)
-            selected_frames = history_list[start_idx:]
             
-            for idx, (val, timestamp, img) in enumerate(selected_frames):
-                if img:
+            for idx, (val, timestamp, img) in enumerate(history_list):
+                line = f"<t:{timestamp}:T>: `{val}`"
+                if idx >= start_idx and img:
                     b = io.BytesIO()
                     img.save(b, format="PNG")
                     b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
-                    files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
-                    attached_values.append(f"<t:{timestamp}:T>: `{val}` - Image {len(files)}")
+                    files.append(discord.File(b, filename=f"frame_{idx}_{safe_val}.png"))
+                    line += f" - Image {len(files)}"
+                history_lines.append(line)
         
         kwargs = { 'files': files } if files else {}
-        attached_text = "\n".join(attached_values) if attached_values else "(no images)"
+        history_text = "\n".join(history_lines) if history_lines else "(empty)"
         await bot.discord.send(
             f"{milestone_name} current value: `{current_value or 'None'}`\n"
             f"History items: `{history_count}`\n"
-            f"{attached_text}",
+            f"{history_text}",
             response=True,
             ephemeral=ephemeral,
             **kwargs
