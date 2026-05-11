@@ -16,6 +16,8 @@ async def setup(bot: 'BotCore'):
         tlist = list(text)
         random.shuffle(tlist)
         shuffled_text = ''.join(tlist)
+        if bot.is_closed():
+            return
         await bot.change_presence(activity=discord.CustomActivity(name=shuffled_text))
     
     @bot.init_callback

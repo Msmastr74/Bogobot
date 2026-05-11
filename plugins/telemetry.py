@@ -10,6 +10,7 @@ import itertools
 import discord
 
 TELEMETRY_EMBED_LIMIT = 4000
+TELEMETRY_LINE_LIMIT = 30
 
 class CommandTelemetryBase(TypedDict):
     interaction_id: int
@@ -217,6 +218,9 @@ async def setup(bot: "BotCore"):
             line = line[:TELEMETRY_EMBED_LIMIT]
             line_len = len(line) + (1 if output_lines else 0)
 
+            if len(output_lines) >= TELEMETRY_LINE_LIMIT:
+                return True
+
             if output_lines and current_len + line_len > TELEMETRY_EMBED_LIMIT:
                 return True
 
@@ -338,7 +342,7 @@ async def setup(bot: "BotCore"):
 
         embed = discord.Embed(
             title=telemetry_title(requested_commands, page),
-            description=body[:TELEMETRY_EMBED_LIMIT],
+            description=body,
             color=discord.Color.dark_teal(),
         )
 
