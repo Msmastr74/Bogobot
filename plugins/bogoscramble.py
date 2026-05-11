@@ -391,6 +391,69 @@ async def setup(bot: "BotCore"):
                     os.unlink(output_path)
                 except OSError:
                     pass
+        def bogo_gifv_as_webp(
+            data: bytes,
+            filename: str,
+            width_hint: int | None = None,
+            height_hint: int | None = None,
+        ) -> discord.File:
+            suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ".mp4"
+            input_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            input_path = input_file.name
+            input_file.close()
+            try:
+                with open(input_path, "wb") as f:
+                    f.write(data)
+                cap = cv2.VideoCapture(input_path)
+                if not cap.isOpened():
+                    raise BogoUserError(f"Could not read gifv `{filename}`.")
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                if frame_count > MAXIMUM_FRAMES:
+                    cap.release()
+                    raise BogoUserError(
+                        f"{filename} has too many frames ({frame_count} > {MAXIMUM_FRAMES})."
+                    )
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30
+                duration = max(10, round(1000 / fps))
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width_hint or 0)
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height_hint or 0)
+                if width <= 0 or height <= 0:
+                    cap.release()
+                    raise BogoUserError(f"Could not read gifv size for `{filename}`.")
+                plan = None
+                frames: list[Image.Image] = []
+                try:
+                    while True:
+                        ok, frame = cap.read()
+                        if not ok:
+                            break
+                        if len(frames) >= MAXIMUM_FRAMES:
+                            raise BogoUserError(
+                                f"{filename} has too many frames (more than {MAXIMUM_FRAMES})."
+                            )
+                        scrambled, plan = scramble_array(frame, plan)
+                        scrambled = fit_frame(scrambled, width, height)
+                        rgb = cv2.cvtColor(scrambled, cv2.COLOR_BGR2RGB)
+                        frames.append(Image.fromarray(rgb, "RGB"))
+                finally:
+                    cap.release()
+                if not frames:
+                    raise BogoUserError(f"Could not read any frames from `{filename}`.")
+                buffer = io.BytesIO()
+                frames[0].save(
+                    buffer,
+                    format="WEBP",
+                    save_all=True,
+                    append_images=frames[1:],
+                    duration=duration,
+                    loop=0,
+                )
+                buffer.seek(0)
+                stem = filename.rsplit(".", 1)[0] or "gifv"
+                return discord.File(buffer, filename=f"bogo-{stem}.webp")
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(input_path)
         def video_output_settings(suffix: str) -> tuple[str, list[str]]:
             if suffix == ".webm":
                 return "webm", [
@@ -503,6 +566,15 @@ async def setup(bot: "BotCore"):
                 seen.add(url)
                 jobs.append((kind, url, use_discord_headers))
             return jobs
+        def embed_gifv_jobs(embed: discord.Embed) -> list[tuple[str, bool]]:
+            if embed.type != "gifv":
+                return []
+            result = embed_fetch_url(embed.video)
+            if result is not None:
+                return [result]
+            if embed.url:
+                return [(embed.url, False)]
+            return []
         def set_embed_media(embed: discord.Embed, kind: str, url: str | None):
             if kind == "thumbnail":
                 if embed.url == embed.thumbnail.url:
@@ -514,6 +586,8 @@ async def setup(bot: "BotCore"):
                 embed.set_image(url=url)
         def is_plain_image_embed(embed: discord.Embed) -> bool:
             return embed.type == "image"
+        def is_gifv_embed(embed: discord.Embed) -> bool:
+            return embed.type == "gifv"
         def discord_fetch_headers() -> dict[str, str]:
             headers: dict[str, str] = {
                 "User-Agent": bot.http.user_agent
@@ -621,6 +695,30 @@ async def setup(bot: "BotCore"):
                 raise BogoUserError(attachment_too_big_message(file.filename, output_size))
             set_embed_media(embed, kind, f"attachment://{file.filename}")
             return file
+        async def bogo_embed_gifv(
+            index: int,
+            url: str,
+            use_discord_headers: bool,
+        ) -> discord.File | None:
+            data, content_type = await read_url(
+                url,
+                use_discord_headers=use_discord_headers,
+            )
+            if not is_video_attachment(url, content_type):
+                raise BogoUserError("Embed gifv media was not a video.")
+            filename = filename_from_url(url, f"embed_gifv_{index}.mp4")
+            try:
+                loop = asyncio.get_running_loop()
+                file = await loop.run_in_executor(None, bogo_gifv_as_webp, data, filename)
+            except BogoUserError:
+                raise
+            except Exception as e:
+                raise BogoUserError(f"Could not bogo gifv `{filename}`.") from e
+            output_size = file_size(file)
+            if output_size is not None and output_size > upload_limit:
+                file.close()
+                raise BogoUserError(attachment_too_big_message(file.filename, output_size))
+            return file
         async def gather_bogo_files(
             tasks: list[CoroutineType[Any, Any, discord.File | None]]
         ) -> list[discord.File]:
@@ -657,7 +755,7 @@ async def setup(bot: "BotCore"):
         omit_embed_indexes = {
             index
             for index, (original, _) in enumerate(embed_pairs)
-            if is_plain_image_embed(original)
+            if is_plain_image_embed(original) or is_gifv_embed(original)
         }
         embeds = [
             scrambled
@@ -673,11 +771,23 @@ async def setup(bot: "BotCore"):
         for file in attachment_files[10:]:
             file.close()
         try:
+            embed_gifv_candidates = [
+                (index, url, use_discord_headers)
+                for index, (original, _) in enumerate(embed_pairs)
+                for url, use_discord_headers in embed_gifv_jobs(original)
+            ]
             embed_image_candidates = [
                 (index, embed, kind, url, use_discord_headers)
                 for index, (original, embed) in enumerate(embed_pairs)
+                if not is_gifv_embed(original)
                 for kind, url, use_discord_headers in embed_media_jobs(original)
             ]
+            available_file_slots = max(0, 10 - len(files))
+            embed_gifv_tasks = [
+                bogo_embed_gifv(index, url, use_discord_headers)
+                for index, url, use_discord_headers in embed_gifv_candidates[:available_file_slots]
+            ]
+            files.extend(await gather_bogo_files(embed_gifv_tasks))
             available_file_slots = max(0, 10 - len(files))
             for _, embed, kind, _, _ in embed_image_candidates[available_file_slots:]:
                 set_embed_media(embed, kind, None)
