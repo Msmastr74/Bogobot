@@ -70,7 +70,7 @@ class BotCore(discord.Client):
         self.CELL_COORDS = (1170, 665, 1195, 685)
         self.CELL_OFFSET = 37 # x offset per historical cell
         self.SORT_AREA_COORDS = (75, 60, 1205, 575)
-        self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.05)
+        self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.1)
         self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 4)))
         self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
 
