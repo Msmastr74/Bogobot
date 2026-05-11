@@ -18,7 +18,8 @@ User-edited settings:
 - `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
-- `ocr_concurrency`: Maximum number of Tesseract processes to run at once. Defaults to 2.
+- `ocr_concurrency`: Maximum number of Tesseract processes to run at once. Defaults to 4.
+- `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
 - `fallback_healthcheck`: Start the fallback healthcheck client after a fatal main-bot failure. Defaults to true.
 - `healthcheck_log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
@@ -60,6 +61,7 @@ Bogobot utilizes Tesseract OCR for visual data extraction.
 - **Processing**: Frames are pre-processed using the Pillow (PIL) library, including grayscale conversion and thresholding, to improve recognition accuracy.
 - **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
 - **Parallelism**: OCR calls are limited by `ocr_concurrency`, so multiple crops can be parsed without starting too many Tesseract processes.
+- **Latest cells**: When the sort visualization changes, `ocr_cell_count` controls how many recent history cells are read for monitor updates.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
 ## Stream Change Detection

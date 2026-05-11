@@ -71,7 +71,9 @@ class BotCore(discord.Client):
         self.CELL_OFFSET = 37 # x offset per historical cell
         self.SORT_AREA_COORDS = (75, 60, 1205, 575)
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.05)
-        self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 2)))
+        self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 4)))
+        self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
+        
         self.STATS_COORDS: dict[str, tuple[int, int, int, int] | tuple[int, int, int, int, str]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
@@ -243,7 +245,7 @@ class BotCore(discord.Client):
     
     async def on_new_frame(self, img: Image.Image):
         frame_received_at = time.time()
-        
+
         frame_received_monotonic = time.monotonic()
         dt = frame_received_monotonic - self._last_frame_ms
         self._last_frame_ms = frame_received_monotonic
@@ -383,46 +385,51 @@ class BotCore(discord.Client):
                         whitelist,
                     )
 
-            stats_tasks = []
-            stats_specs = []
+            async def parse_stats():
+                stats_tasks = []
+                stats_specs = []
 
-            for name, coords in self.STATS_COORDS.items():
-                whitelist = "0123456789"
-                if len(coords) >= 5:
-                    whitelist = coords[4]
-                    coords = coords[:4]
+                for name, coords in self.STATS_COORDS.items():
+                    whitelist = "0123456789"
+                    if len(coords) >= 5:
+                        whitelist = coords[4]
+                        coords = coords[:4]
 
-                stats_specs.append((name, whitelist))
-                stats_tasks.append(parse_crop(coords, whitelist))
+                    stats_specs.append((name, whitelist))
+                    stats_tasks.append(parse_crop(coords, whitelist))
 
-            stats_results = await asyncio.gather(*stats_tasks)
+                stats_results = await asyncio.gather(*stats_tasks)
 
-            for (name, whitelist), (text, conf) in zip(stats_specs, stats_results):
-                if not text or conf < 0:
-                    continue
+                for (name, whitelist), (text, conf) in zip(stats_specs, stats_results):
+                    if not text or conf < 0:
+                        continue
 
-                if whitelist != "0123456789":
-                    self.stats_cache[name] = text
-                else:
-                    self.stats_cache[name] = f"{int(text):,}"
-            
-            if not sort_changed:
-                self._last_ocr_refresh = time.time()
-                return
+                    if whitelist != "0123456789":
+                        self.stats_cache[name] = text
+                    else:
+                        self.stats_cache[name] = f"{int(text):,}"
 
-            self.current_vals = []
-            self._current_vals_updated = True
-            coords = self.CELL_COORDS
-            cell_tasks = []
-            for _ in range(2): # last 2 cells
-                cell_tasks.append(parse_crop(coords, "0123456789"))
-                coords = (
-                    coords[0] - self.CELL_OFFSET, coords[1],
-                    coords[2] - self.CELL_OFFSET, coords[3]
-                )
+            async def parse_cells():
+                coords = self.CELL_COORDS
+                cell_tasks = []
+                for _ in range(self.OCR_CELL_COUNT):
+                    cell_tasks.append(parse_crop(coords, "0123456789"))
+                    coords = (
+                        coords[0] - self.CELL_OFFSET, coords[1],
+                        coords[2] - self.CELL_OFFSET, coords[3]
+                    )
 
-            self.current_vals = await asyncio.gather(*cell_tasks)
-            self.current_vals.reverse()
+                current_vals = await asyncio.gather(*cell_tasks)
+                current_vals.reverse()
+                self.current_vals = current_vals
+                self._current_vals_updated = True
+
+            if sort_changed:
+                self.current_vals = []
+                await asyncio.gather(parse_stats(), parse_cells())
+            else:
+                await parse_stats()
+
             self._last_ocr_refresh = time.time()
         except Exception as e:
             self.logger.warning(f"OCR processing error: {e}")
