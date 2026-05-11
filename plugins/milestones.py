@@ -261,7 +261,7 @@ class MilestoneTracker:
                     b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
                     files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
-                    attached_values.append(f"{start_idx + idx}: <t:{timestamp}:T> `{val}`")
+                    attached_values.append(f"<t:{timestamp}:T>: `{val}` - Image {len(files)}")
 
         if files:
             await self.bot.notifications.notify(
@@ -281,14 +281,14 @@ async def setup(bot: "BotCore"):
     from utils import groups
 
     manage = groups.manage(bot)
-    milestones = MilestoneTracker(bot)
-    bot.milestones = milestones
+    milestone_tracker = MilestoneTracker(bot)
+    bot.milestones = milestone_tracker
 
     @manage.command(
-        name="milestone",
-        description="Subscribe, unsubscribe, or spoof/delete a milestone",
+        name="milestones",
+        description="Subscribe to, unsubscribe from, or spoof/delete milestones",
     )
-    async def milestone(
+    async def milestones(
         interaction: discord.Interaction,
         action: Literal["subscribe", "unsubscribe", "spoof"],
         name: str | None = None,
@@ -315,7 +315,7 @@ async def setup(bot: "BotCore"):
                 return
 
             if action == "unsubscribe":
-                unsubscribed = await milestones.unsubscribe(channel_id)
+                unsubscribed = await milestone_tracker.unsubscribe(channel_id)
                 await bot.discord.send(
                     "This channel is no longer subscribed to milestone notifications."
                     if unsubscribed
@@ -324,7 +324,7 @@ async def setup(bot: "BotCore"):
                 )
                 return
 
-            subscribed = await milestones.subscribe(channel_id)
+            subscribed = await milestone_tracker.subscribe(channel_id)
 
             if not subscribed:
                 await bot.discord.send(
@@ -356,7 +356,7 @@ async def setup(bot: "BotCore"):
             return
 
         if data is None:
-            deleted = await milestones.delete(name)
+            deleted = await milestone_tracker.delete(name)
             await bot.discord.send(
                 f"Deleted `{name}`." if deleted else f"`{name}` does not exist.",
                 response=True,
@@ -374,7 +374,7 @@ async def setup(bot: "BotCore"):
         spoof_timestamp = int(time.time())
 
         for _ in range(MILESTONE_WINDOW_SIZE):
-            changed_value = await milestones.update(name, data, timestamp=spoof_timestamp) or changed_value
+            changed_value = await milestone_tracker.update(name, data, timestamp=spoof_timestamp) or changed_value
 
         if changed_value is None:
             await bot.discord.send(
@@ -388,7 +388,7 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
-    @milestone.autocomplete("name")
+    @milestones.autocomplete("name")
     async def milestone_autocomplete(
         interaction: discord.Interaction,
         current: str,
@@ -413,12 +413,12 @@ async def setup(bot: "BotCore"):
             return
         await interaction.response.defer(ephemeral=ephemeral)
 
-        history = milestones.history.get(milestone_name)
-        history_items = [f"{idx}: {val} @ {timestamp}" for idx, (val, timestamp, img) in enumerate(history)] if history else []
-        history_text = "\n".join(history_items) if history_items else "(empty)"
-        current_value = await milestones.get(milestone_name)
+        history = milestone_tracker.history.get(milestone_name)
+        history_count = len(history) if history else 0
+        current_value = await milestone_tracker.get(milestone_name)
         
         files: list[discord.File] = []
+        attached_values: list[str] = []
         if history:
             history_list = list(history)
             start_idx = max(0, len(history_list) - 10)
@@ -431,12 +431,14 @@ async def setup(bot: "BotCore"):
                     b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-')).rstrip()
                     files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
+                    attached_values.append(f"<t:{timestamp}:T>: `{val}` - Image {len(files)}")
         
         kwargs = { 'files': files } if files else {}
+        attached_text = "\n".join(attached_values) if attached_values else "(no images)"
         await bot.discord.send(
             f"{milestone_name} current value: `{current_value or 'None'}`\n"
-            f"History items: `{len(history_items)}`\n"
-            f"```\n{history_text}\n```",
+            f"History items: `{history_count}`\n"
+            f"{attached_text}",
             response=True,
             ephemeral=ephemeral,
             **kwargs
@@ -453,7 +455,7 @@ async def setup(bot: "BotCore"):
         current = current.strip().lower()
         choices = []
 
-        for name in sorted(await milestones.names(), key=str.casefold):
+        for name in sorted(await milestone_tracker.names(), key=str.casefold):
             if current and not name.lower().startswith(current):
                 continue
 
