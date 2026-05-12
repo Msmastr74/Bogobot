@@ -145,6 +145,66 @@ async def setup(bot):
         await bot.discord.send("Hello World", response=True)
 
 ```
+
+### Creating a Grouped Command
+Use `utils.groups` to get a shared command group, then register commands with `.command(...)`:
+
+```python
+import discord
+from typing import Literal
+
+async def setup(bot):
+    from utils import groups
+
+    manage = groups.manage(bot)
+
+    @manage.command(
+        name="example",
+        description="Run a grouped management action",
+        perm_requirement=1,
+    )
+    async def example(
+        interaction: discord.Interaction,
+        action: Literal["info", "reset"],
+    ):
+        if action == "info":
+            await bot.discord.send("Example info.", response=True)
+            return
+
+        await bot.discord.send("Example reset complete.", response=True)
+```
+
+`groups.manage(bot)` returns the shared `/manage` group. If the group does not exist yet, it is created and added to the command tree; later plugins reuse the same group object.
+
+### Creating a Group Helper
+Shared groups live in `utils/groups.py`. Add a small helper that calls `bot.setup.group(...)`, then import and use that helper from plugins:
+
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from main import BotCore
+
+
+def tools(bot: "BotCore"):
+    return bot.setup.group("tools", "Tool commands")
+```
+
+Plugins can then register commands on the group:
+
+```python
+async def setup(bot):
+    from utils import groups
+
+    tools = groups.tools(bot)
+
+    @tools.command(name="ping", description="Ping the tools group", perm_requirement=0)
+    async def ping(interaction):
+        await bot.discord.send("Pong.", response=True)
+```
+
+Keep group helpers tiny. They should only name and return the shared group; command behavior belongs in plugins.
+
 ### Permission Levels
  * **0 (Public)**: Accessible by all users.
  * **1 (Authorized)**: Accessible by users configured at level 1 or higher.

@@ -1,6 +1,6 @@
 from collections import Counter, defaultdict, deque
 from string import Template
-from typing import Literal, TYPE_CHECKING
+from typing import Callable, Literal, TYPE_CHECKING
 import io
 import time
 
@@ -268,7 +268,7 @@ class MilestoneTracker:
             await self._notify_ratelimit_exceeded()
             return
 
-        files: list[discord.File] = []
+        file_templates: list[Callable[[], discord.File]] = []
         value_lines: list[str] = []
         history = self.history.get(milestone_name)
         if history:
@@ -302,21 +302,28 @@ class MilestoneTracker:
             for idx, (val, timestamp, img) in enumerate(selected_frames):
                 line = f"<t:{timestamp}:T>: `{val}`"
                 if img:
-                    b = io.BytesIO()
-                    img.save(b, format="PNG")
-                    b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
-                    files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
-                    line += f" - Image {len(files)}"
+                    
+                    def bytesIO(img: Image.Image):
+                        b = io.BytesIO()
+                        img.save(b, format="PNG")
+                        b.seek(0)
+                        return b
+                    filename = f"frame_{start_idx + idx}_{safe_val}.png"
+                    file_templates.append(
+                        lambda img=img, filename=filename:
+                            discord.File(bytesIO(img), filename=filename)
+                    )
+                    line += f" - Image {len(file_templates)}"
                 value_lines.append(line)
 
         notify_content = f"{content}\n" + "\n".join(value_lines) if value_lines else content
 
-        if files:
+        if file_templates:
             await self.bot.notifications.notify(
                 MILESTONE_USAGE_TYPE,
                 content=notify_content,
-                files=files
+                create_files=lambda: list(map(lambda t: t(), file_templates)),
             )
             return
 
