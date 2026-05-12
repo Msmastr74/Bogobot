@@ -662,7 +662,7 @@ class BotCore(discord.Client):
                 finally:
                     self.message = None
             
-            async def add_reaction(self, emoji_data: int | discord.Emoji | str):
+            async def add_reaction(self, emoji_data: int | discord.Emoji):
                 if not self.message:
                     return
 
