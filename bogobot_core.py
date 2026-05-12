@@ -62,10 +62,15 @@ class BotCore(discord.Client):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
+        self.accounts_path: str = self.config.get("accounts_path", "accounts.json")
+        with open(self.accounts_path, 'r') as f:
+            self.accounts: dict[str, dict[str, Any]] = json.load(f)
         self._config_lock = asyncio.Lock()
+        self._accounts_lock = asyncio.Lock()
         self._migrate_authorized_users()
-        
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.members = True
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         
         self.CELL_COORDS = (1170, 665, 1195, 685)
@@ -725,6 +730,27 @@ class BotCore(discord.Client):
                 await callback()
             except Exception as e:
                 self.logger.warning(f"Error in on_ready callback: {e}")
+        guild_count = 0
+        member_count = 0
+        added_member_count = 0
+        guild_member_count = 0
+        added_guild_member_count = 0
+        self.logger.info("Beginning automatic account creation...")
+        for guild in self.guilds:
+            guild_count += 1
+            for member in guild.members:
+                guild_member_count += 1
+                member_count += 1
+                if str(member.id) not in self.accounts:
+                    added_member_count += 1
+                    added_guild_member_count += 1
+                    self.accounts[str(member.id)] = {"perm_level": 0}
+            self.logger.info(f"Automatically created {added_guild_member_count} accounts out of {guild_member_count} members from {guild.name} ({guild.id})")
+            guild_member_count = 0
+            added_guild_member_count = 0
+        self.accounts[str(self.config["owner_uid"])]["perm_level"] = 4
+        await self.save_accounts()
+        self.logger.info(f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers")
 
     async def load_plugins(self, folder_name="plugins"):
         if not os.path.exists(folder_name):
@@ -739,6 +765,13 @@ class BotCore(discord.Client):
     async def save_config(self):
         async with self._config_lock:
             self._save_config_sync()
+
+    async def save_accounts(self):
+        async with self._accounts_lock:
+            tmp_path = f"{self.accounts_path}.tmp"
+            with open(tmp_path, 'w') as f:
+                json.dump(self.accounts, f, indent=4)
+            os.replace(tmp_path, self.accounts_path)
 
     async def run_bot(self):
         self.stream_handler.async_loop = self.loop
