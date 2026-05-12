@@ -31,4 +31,6 @@ async def setup(bot: 'BotCore'):
         embed = discord.Embed(title="Pong!", color=color, timestamp=now)
         embed.add_field(name="Interaction Latency", value=f"{ping_ms:.2f} ms")
         embed.add_field(name="Gateway Latency", value=f"{bot.latency * 1000:.2f} ms")
-        await bot.discord.send_embed(embed=embed, response=True)
+        message = await bot.discord.send_embed(embed=embed, response=True)
+        if message is not None:
+            await message.add_reaction("🏓")
