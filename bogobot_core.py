@@ -296,8 +296,8 @@ class BotCore(discord.Client):
                 await self.milestones.update("Best run", best_run, timestamp=frame_timestamp, img=img)
 
             for milestone_name, stat_name in (
-                ("Shuffles", "shuffles"),
-                ("Comparisons", "comparisons"),
+                ("Shuffles record", "shuffles"),
+                ("Comparisons record", "comparisons"),
             ):
                 stat_value = self._round_stat_down_to_power(self.stats_cache.get(stat_name))
                 if stat_value:
