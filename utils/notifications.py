@@ -110,7 +110,6 @@ class NotificationBroadcaster:
     async def notify(
         self,
         topic: str,
-        create_files: Callable[[], list[discord.File]] | None = None,
         **kwargs: Any,
     ) -> int:
         sent = 0
@@ -121,8 +120,6 @@ class NotificationBroadcaster:
                 stale_channel_ids.append(channel_id)
                 continue
             try:
-                if create_files is not None:
-                    kwargs["files"] = create_files()
                 await cast(Any, channel).send(**kwargs)
             except (discord.NotFound, discord.Forbidden):
                 stale_channel_ids.append(channel_id)

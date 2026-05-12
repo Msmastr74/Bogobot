@@ -1,6 +1,6 @@
 from collections import Counter, defaultdict, deque
 from string import Template
-from typing import Callable, Literal, TYPE_CHECKING
+from typing import Literal, TYPE_CHECKING
 import io
 import time
 
@@ -268,7 +268,7 @@ class MilestoneTracker:
             await self._notify_ratelimit_exceeded()
             return
 
-        file_templates: list[Callable[[], discord.File]] = []
+        files: list[discord.File] = []
         value_lines: list[str] = []
         history = self.history.get(milestone_name)
         if history:
@@ -306,17 +306,17 @@ class MilestoneTracker:
                     img.save(b, format="PNG")
                     b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
-                    file_templates.append(lambda b=b, start_idx=start_idx, idx=idx, safe_val=safe_val: discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
-                    line += f" - Image {len(file_templates)}"
+                    files.append(discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
+                    line += f" - Image {len(files)}"
                 value_lines.append(line)
 
         notify_content = f"{content}\n" + "\n".join(value_lines) if value_lines else content
 
-        if file_templates:
+        if files:
             await self.bot.notifications.notify(
                 MILESTONE_USAGE_TYPE,
                 content=notify_content,
-                create_files=lambda: list(map(lambda t: t(), file_templates)),
+                files=files
             )
             return
 
