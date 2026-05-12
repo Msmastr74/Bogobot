@@ -82,7 +82,7 @@ In your terminal output, you should see this:
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
  * /manage monitor: Starts or stops a persistent tracking system for stream serial numbers.
- * /manage milestone: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
+ * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /roll: A random number generation utility.
  * /manage auth: Manages user permissions.
 ## Documentation
