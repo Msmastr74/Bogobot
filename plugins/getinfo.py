@@ -1,3 +1,5 @@
+import re
+
 import discord
 
 from typing import TYPE_CHECKING
@@ -14,7 +16,7 @@ async def setup(bot: 'BotCore'):
         embed = discord.Embed(title=f"{user.display_name}'s Avatar:")
         embed.set_image(url=user.display_avatar.url)
 
-        await bot.discord.send_embed(embed=embed)
+        await bot.discord.send_embed(embed=embed, response=True)
     
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     async def ping(interaction: discord.Interaction):
@@ -29,4 +31,4 @@ async def setup(bot: 'BotCore'):
         embed = discord.Embed(title="Pong!", color=color, timestamp=now)
         embed.add_field(name="Interaction Latency", value=f"{ping_ms:.2f} ms")
         embed.add_field(name="Gateway Latency", value=f"{bot.latency * 1000:.2f} ms")
-        await bot.discord.send_embed(embed=embed)
+        await bot.discord.send_embed(embed=embed, response=True)
