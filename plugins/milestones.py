@@ -302,11 +302,18 @@ class MilestoneTracker:
             for idx, (val, timestamp, img) in enumerate(selected_frames):
                 line = f"<t:{timestamp}:T>: `{val}`"
                 if img:
-                    b = io.BytesIO()
-                    img.save(b, format="PNG")
-                    b.seek(0)
                     safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
-                    file_templates.append(lambda b=b, start_idx=start_idx, idx=idx, safe_val=safe_val: discord.File(b, filename=f"frame_{start_idx + idx}_{safe_val}.png"))
+                    
+                    def bytesIO(img: Image.Image):
+                        b = io.BytesIO()
+                        img.save(b, format="PNG")
+                        b.seek(0)
+                        return b
+                    filename = f"frame_{start_idx + idx}_{safe_val}.png"
+                    file_templates.append(
+                        lambda img=img, filename=filename:
+                            discord.File(bytesIO(img), filename=filename)
+                    )
                     line += f" - Image {len(file_templates)}"
                 value_lines.append(line)
 
