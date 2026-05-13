@@ -18,9 +18,9 @@ async def setup(bot: 'BotCore'):
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     async def ping(
         interaction: discord.Interaction,
-        interaction_latency: int | None = None,
-        gateway_latency: int | None = None,
-        timestamp: int | None = None
+        interaction_latency: float | None = None,
+        gateway_latency: float | None = None,
+        timestamp: float | None = None
     ):
         now = discord.utils.utcnow() 
         ping_ms = (now - interaction.created_at).total_seconds() * 1000
