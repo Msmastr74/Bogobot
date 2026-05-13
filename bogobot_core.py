@@ -98,11 +98,11 @@ class BotCore(discord.Client):
                                 tuple[int, int, int, int, tuple[str | None, int | None]]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
-            "best_run": (645, 610, 730, 640, "0123456789/."),
+            "best_run": (645, 610, 730, 640, "0123456789/.dhm "),
             "shuffles_sec": (819, 610, 1043, 640),
             "elapsed_time": (1166, 0, 1180, 75),
-            "average_best_shuffle": (80, 670, 115, 685, "0123456789/."),
-            "uptime": (1160, 10, 1260, 30, "0123456789dhm ")
+            "average_best_shuffle": (80, 670, 115, 685, "0123456789/.dhm "),
+            "uptime": (1160, 10, 1260, 30, "0123456789/.dhm ")
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
@@ -387,12 +387,17 @@ class BotCore(discord.Client):
                 ) -> None:
                     whitelist, psm = key
                     cells: list[Image.Image] = [img.crop(coords) for _, coords in items]
+                    if len(cells) < 1:
+                        return
                     async with semaphore:
-                        group_results: list[OcrResult] = await self.tesseract_parse_batch(
-                            cells,
-                            whitelist,
-                            psm=psm,
-                        )
+                        if len(cells) == 1:
+                            group_results: list[OcrResult] = [await self.tesseract_parse(cells[0], whitelist, psm=psm)]
+                        else:
+                            group_results: list[OcrResult] = await self.tesseract_parse_batch(
+                                cells,
+                                whitelist,
+                                psm=psm,
+                            )
                     for (index, _), result in zip(items, group_results):
                         results[index] = result
 
