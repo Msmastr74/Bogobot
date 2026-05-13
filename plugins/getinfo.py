@@ -20,7 +20,7 @@ async def setup(bot: 'BotCore'):
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     async def ping(
         interaction: discord.Interaction,
-        user: discord.User | None = None
+        user: discord.User | discord.Member | None = None
     ):
         now = discord.utils.utcnow() 
         interaction_latency = (now - interaction.created_at).total_seconds() * 1000
@@ -52,10 +52,10 @@ async def setup(bot: 'BotCore'):
             return
         await message.add_reaction("🏓")
         
-        user_id = user.id if user else interaction.user.id
+        user = user or interaction.user
         user_msg = await bot.wait_for(
             "message",
-            check=lambda m: m.author.id == user_id and m.channel.id == interaction.channel_id,
+            check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
             timeout=60
         )
         if user_msg.nonce is not None:
@@ -66,9 +66,10 @@ async def setup(bot: 'BotCore'):
             user_client_time = discord.utils.snowflake_time(nonce)
             msg_created_at = user_msg.created_at
             user_latency = (msg_created_at - user_client_time).total_seconds() * 1000
+            user_text = f"{user.mention}: " if user.id != interaction.user.id else ""
             await message.edit_embed(
-                name="User Latency" if not user else f"{user.mention}'s Latency",
-                value=f"{user_latency:.2f} ms",
+                name="User Latency",
+                value=f"{user_text}{user_latency:.2f} ms",
                 add_field=True, inline=True,
                 color=choose_color(user_latency),
                 allowed_mentions=discord.AllowedMentions.none()
