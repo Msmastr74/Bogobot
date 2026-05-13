@@ -6,5 +6,6 @@
     "debug": false,
     "fallback_client": true,
     "save_ocr_debug": false,
-    "save_live_frame": false
+    "save_live_frame": false,
+    "channels": {}
 }

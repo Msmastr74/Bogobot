@@ -14,14 +14,13 @@ import importlib
 import contextvars
 import aiohttp
 import time
+import tempfile
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
-
-os.environ["OMP_THREAD_LIMIT"] = "1"
 
 CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)02d %(levelname)-8s | %(name)-15s ] %(message)s'
 LOG_DATE_FORMAT = '%b %d %H:%M:%S'
@@ -58,6 +57,11 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
 if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
+
+OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
+OcrResult = tuple[str, float]
+TesseractGroupKey = tuple[str, int]
+TesseractGroupItems = list[tuple[int, tuple[int, int, int, int]]]
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
@@ -406,71 +410,94 @@ class BotCore(discord.Client):
         self.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
         return changed.item()
     
-    async def update_ocr_data(self, img: Image.Image, *, sort_changed: bool = True):
+    async def update_ocr_data(self, img: Image.Image, *, sort_changed: bool = True) -> None:
         try:
             semaphore = asyncio.Semaphore(self.OCR_CONCURRENCY)
 
-            async def parse_crop(coords, whitelist: str, psm: int | None = None):
-                async with semaphore:
-                    return await self.tesseract_parse(
-                        img.crop(coords),
-                        whitelist,
-                        **({"psm": psm} if psm is not None else {})
-                    )
+            async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
+                results: list[OcrResult | None] = [None] * len(crops)
+                groups: dict[TesseractGroupKey, TesseractGroupItems] = {}
 
-            async def parse_stats():
-                stats_tasks = []
-                stats_specs = []
+                for index, (coords, whitelist, psm) in enumerate(crops):
+                    key: TesseractGroupKey = (whitelist, 7 if psm is None else psm)
+                    groups.setdefault(key, []).append((index, coords))
 
-                for name, coords in self.STATS_COORDS.items():
-                    whitelist = "0123456789"
-                    psm: int | None = None
-                    if len(coords) >= 5:
-                        extra = coords[4]
-                        if isinstance(extra, str):
-                            whitelist = extra
-                        else:
-                            w, psm = extra
-                            if w is not None:
-                                whitelist = w
-                            if psm is not None:
-                                psm = int(psm)
-                        coords = coords[:4]
+                async def parse_group(
+                    key: TesseractGroupKey,
+                    items: TesseractGroupItems,
+                ) -> None:
+                    whitelist, psm = key
+                    cells: list[Image.Image] = [img.crop(coords) for _, coords in items]
+                    async with semaphore:
+                        group_results: list[OcrResult] = await self.tesseract_parse_batch(
+                            cells,
+                            whitelist,
+                            psm=psm,
+                        )
+                    for (index, _), result in zip(items, group_results):
+                        results[index] = result
 
-                    stats_specs.append((name, whitelist))
-                    stats_tasks.append(parse_crop(coords, whitelist, psm))
+                await asyncio.gather(*[
+                    parse_group(key, items)
+                    for key, items in groups.items()
+                ])
 
-                stats_results = await asyncio.gather(*stats_tasks)
+                return [
+                    result if result is not None else ("", 0.0)
+                    for result in results
+                ]
 
-                for (name, whitelist), (text, conf) in zip(stats_specs, stats_results):
-                    if not text or conf < 0:
-                        continue
+            crops: list[OcrCrop] = []
+            stats_specs: list[tuple[int, str, str]] = []
+            cell_indexes: list[int] = []
 
-                    if whitelist != "0123456789":
-                        self.stats_cache[name] = text
+            if sort_changed:
+                self.current_vals = []
+
+            for name, coords in self.STATS_COORDS.items():
+                whitelist = "0123456789"
+                psm: int | None = None
+                if len(coords) >= 5:
+                    extra = coords[4]
+                    if isinstance(extra, str):
+                        whitelist = extra
                     else:
-                        self.stats_cache[name] = f"{int(text):,}"
+                        w, psm = extra
+                        if w is not None:
+                            whitelist = w
+                        if psm is not None:
+                            psm = int(psm)
+                crop_coords = cast(tuple[int, int, int, int], coords[:4])
 
-            async def parse_cells():
+                stats_specs.append((len(crops), name, whitelist))
+                crops.append((crop_coords, whitelist, psm))
+
+            if sort_changed:
                 coords = self.CELL_COORDS
-                cell_tasks = []
                 for _ in range(self.OCR_CELL_COUNT):
-                    cell_tasks.append(parse_crop(coords, "0123456789"))
+                    cell_indexes.append(len(crops))
+                    crops.append((coords, "0123456789", None))
                     coords = (
                         coords[0] - self.CELL_OFFSET, coords[1],
                         coords[2] - self.CELL_OFFSET, coords[3]
                     )
 
-                current_vals = await asyncio.gather(*cell_tasks)
-                current_vals.reverse()
-                self.current_vals = current_vals
-                self._current_vals_updated = True
+            results = await parse_crops(crops)
+
+            for index, name, whitelist in stats_specs:
+                text, conf = results[index]
+                if not text or conf < 0:
+                    continue
+
+                if whitelist != "0123456789":
+                    self.stats_cache[name] = text
+                else:
+                    self.stats_cache[name] = f"{int(text):,}"
 
             if sort_changed:
-                self.current_vals = []
-                await asyncio.gather(parse_stats(), parse_cells())
-            else:
-                await parse_stats()
+                self.current_vals = [results[index] for index in cell_indexes]
+                self.current_vals.reverse()
+                self._current_vals_updated = True
 
             self._last_ocr_refresh = time.time()
         except Exception as e:
@@ -847,14 +874,22 @@ class BotCore(discord.Client):
         
         return bw
 
-    async def tesseract_parse(self, pil_cell: 'Image.Image', whitelist: str, psm=7):
+    def _encode_tesseract_cell(self, pil_cell: 'Image.Image') -> bytes:
         processed = self._preprocess_cell(pil_cell)
 
         success, buffer = cv2.imencode(".png", processed)
         if not success:
             raise ValueError("Could not encode image")
 
-        image_bytes = buffer.tobytes()
+        return buffer.tobytes()
+
+    async def tesseract_parse(
+        self,
+        pil_cell: 'Image.Image',
+        whitelist: str,
+        psm: int = 7,
+    ) -> OcrResult:
+        image_bytes = self._encode_tesseract_cell(pil_cell)
 
         cmd = [
             "tesseract",
@@ -898,8 +933,82 @@ class BotCore(discord.Client):
         self._save_ocr_debug('ocr_debug', image_bytes, f'{conf:.2f}c_{out}')
 
         return res, conf
+
+    async def tesseract_parse_batch(
+        self,
+        pil_cells: list['Image.Image'],
+        whitelist: str,
+        psm: int = 7,
+    ) -> list[OcrResult]:
+        if not pil_cells:
+            return []
+
+        image_bytes_by_page: list[bytes] = [
+            self._encode_tesseract_cell(pil_cell)
+            for pil_cell in pil_cells
+        ]
+
+        with tempfile.TemporaryDirectory(prefix="bogobot_ocr_") as tmpdir:
+            image_paths: list[str] = []
+            for index, image_bytes in enumerate(image_bytes_by_page):
+                image_path = os.path.join(tmpdir, f"{index}.png")
+                with open(image_path, "wb") as f:
+                    f.write(image_bytes)
+                image_paths.append(image_path)
+
+            list_path = os.path.join(tmpdir, "images.txt")
+            with open(list_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(image_paths))
+                f.write("\n")
+
+            cmd = [
+                "tesseract",
+                list_path,
+                "stdout",
+                "--psm", str(psm),
+                "--oem", "3",
+                "-c", "load_system_dawg=0",
+                "-c", "load_freq_dawg=0",
+                "-c", f"tessedit_char_whitelist={whitelist}",
+                "tsv"
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+        stderr_text = stderr.decode(errors="ignore").strip()
+
+        if process.returncode != 0:
+            if stderr_text:
+                self.logger.error(f"tesseract: {stderr_text}")
+            raise RuntimeError(
+                f"Tesseract batch failed with code {process.returncode}: {stderr_text}"
+            )
+
+        if stderr_text:
+            self.logger.debug(f"tesseract: {stderr_text}")
+
+        parsed: list[OcrResult] = self._parse_tesseract_tsv_pages(
+            stdout.decode(errors="ignore"),
+            page_count=len(pil_cells),
+        )
+
+        results: list[OcrResult] = []
+        for image_bytes, (out, conf) in zip(image_bytes_by_page, parsed):
+            res = ""
+            for char in out:
+                if char in whitelist:
+                    res += char
+            self._save_ocr_debug('ocr_debug', image_bytes, f'{conf:.2f}c_{out}')
+            results.append((res, conf))
+
+        return results
     
-    def _parse_tesseract_tsv_stdout(self, stdout: str) -> tuple[str, float]:
+    def _parse_tesseract_tsv_stdout(self, stdout: str) -> OcrResult:
         """
         Parse Tesseract TSV stdout and return:
         (combined_text, confidence_0_to_1)
@@ -908,7 +1017,35 @@ class BotCore(discord.Client):
         Tesseract conf is usually 0-100, with -1 for non-text structural rows.
         """
         rows = csv.DictReader(io.StringIO(stdout), delimiter="\t")
+        return self._parse_tesseract_tsv_rows(list(rows))
 
+    def _parse_tesseract_tsv_pages(
+        self,
+        stdout: str,
+        *,
+        page_count: int,
+    ) -> list[OcrResult]:
+        rows_by_page: list[list[dict[str, str]]] = [
+            []
+            for _ in range(page_count)
+        ]
+
+        rows = csv.DictReader(io.StringIO(stdout), delimiter="\t")
+        for row in rows:
+            try:
+                page_num = int(row.get("page_num", "1"))
+            except ValueError:
+                page_num = 1
+            page_index = page_num - 1
+            if 0 <= page_index < page_count:
+                rows_by_page[page_index].append(row)
+
+        return [
+            self._parse_tesseract_tsv_rows(rows)
+            for rows in rows_by_page
+        ]
+
+    def _parse_tesseract_tsv_rows(self, rows: list[dict[str, str]]) -> OcrResult:
         parts: list[str] = []
         confs: list[float] = []
 
