@@ -1,3 +1,5 @@
+from multiprocessing import allow_connection_pickling
+
 import discord
 import datetime
 
@@ -42,7 +44,10 @@ async def setup(bot: 'BotCore'):
         
         gateway_latency = bot.latency * 1000
         embed.add_field(name="Gateway Latency", value=f"{gateway_latency:.2f} ms")
-        message = await bot.discord.send_embed(embed=embed, response=True)
+        message = await bot.discord.send_embed(
+            embed=embed, response=True,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
         if message is None:
             return
         await message.add_reaction("🏓")
@@ -62,8 +67,9 @@ async def setup(bot: 'BotCore'):
             msg_created_at = user_msg.created_at
             user_latency = (msg_created_at - user_client_time).total_seconds() * 1000
             await message.edit_embed(
-                name="User Latency",
+                name="User Latency" if not user else f"{user.mention}'s Latency",
                 value=f"{user_latency:.2f} ms",
                 add_field=True, inline=True,
-                color=choose_color(user_latency)
+                color=choose_color(user_latency),
+                allowed_mentions=discord.AllowedMentions.none()
             )
