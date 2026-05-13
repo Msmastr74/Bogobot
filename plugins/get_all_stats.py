@@ -19,20 +19,18 @@ async def setup(bot: 'BotCore'):
         uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = await bot.info.get_uptime()
         
-
-        # Send the base embed
-        embed = await bot.discord.send_embed(
-            contents=f"Fetched at: <t:{int(round(time.time()))}:T>\nUpdated at: <t:{int(round(bot._last_ocr_refresh))}:T>",
+        discord_embed = discord.Embed(
             title="Current Bogosort Statistics",
-            color=discord.Color.green(), response=True
+            description=f"Fetched at: <t:{int(round(time.time()))}:T>\nUpdated at: <t:{int(round(bot._last_ocr_refresh))}:T>",
+            color=discord.Color.green()
         )
-        assert embed is not None
         
-        # Rapid-fire the fields 
-        await embed.edit_embed(contents=f"{shuffles}", title="Shuffles", add_field=True)
-        await embed.edit_embed(contents=f"{comparisons}", title="Comparisons", add_field=True)
-        await embed.edit_embed(contents=f"{best_run}", title="Best Run", add_field=True)
-        await embed.edit_embed(contents=f"{shuffles_sec}", title="Shuffles Per Second", add_field=True)
-        await embed.edit_embed(contents=f"{average_best_shuffle}", title="Average Best Shuffle", add_field=True)
-        await embed.edit_embed(contents=f"{uptime}", title="Uptime [STREAM]", add_field=True)
-        await embed.edit_embed(contents=f"{elapsed_time}", title="Elapsed Time [API]", add_field=True)
+        discord_embed.add_field(name="Shuffles", value=f"{shuffles}", inline=False)
+        discord_embed.add_field(name="Comparisons", value=f"{comparisons}", inline=False)
+        discord_embed.add_field(name="Best Run", value=f"{best_run}", inline=False)
+        discord_embed.add_field(name="Shuffles Per Second", value=f"{shuffles_sec}", inline=False)
+        discord_embed.add_field(name="Average Best Shuffle", value=f"{average_best_shuffle}", inline=False)
+        discord_embed.add_field(name="Uptime [STREAM]", value=f"{uptime}", inline=False)
+        discord_embed.add_field(name="Elapsed Time [API]", value=f"{elapsed_time}", inline=False)
+        
+        await bot.discord.send_embed(embed=discord_embed, response=True)

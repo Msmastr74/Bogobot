@@ -57,8 +57,8 @@ The `discord` subclass provides a simplified interface for interacting with the 
 * `message.delete()`: Deletes the message.
 
 ### Embeds
-* `send_embed(contents, title, color, footer, response=True)`: Initializes and sends a new embed. Returns an MessageHandle object or None.
-* `message.edit_embed(contents, title, author, add_field=False)`: Modifies the embed. Setting `add_field` to true will append a new field instead of editing the main body.
+* `send_embed(description, title, color, footer, response=True)`: Initializes and sends a new embed. Returns an MessageHandle object or None.
+* `message.edit_embed(description, title, author, add_field=False, name, value, inline=False)`: Modifies the embed. Setting `add_field` to true will append a new field based on name, value, and inline.
 
 ## OCR Implementation
 Bogobot utilizes Tesseract OCR for visual data extraction.

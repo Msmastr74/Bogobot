@@ -499,7 +499,7 @@ class BotCore(discord.Client):
 
         async def send_embed(
             self,
-            contents=None,
+            description=None,
             *,
             embed: discord.Embed | None = None,
             title="embed",
@@ -513,7 +513,7 @@ class BotCore(discord.Client):
             if embed is None:
                 embed = discord.Embed(
                     title=title,
-                    description=contents,
+                    description=description,
                     color=color,
                 )
                 embed.set_footer(text=footer)
@@ -575,12 +575,6 @@ class BotCore(discord.Client):
                 if not self.message:
                     return
 
-                if self.embed is not None and any(
-                    key in kwargs for key in ("title", "footer", "author", "color", "add_field")
-                ):
-                    await self.edit_embed(contents, **kwargs)
-                    return
-
                 if contents is not None and "content" not in kwargs:
                     kwargs["content"] = contents
 
@@ -594,26 +588,29 @@ class BotCore(discord.Client):
 
             async def edit_embed(
                 self,
-                contents=None,
+                description=None,
                 *,
                 embed: discord.Embed | None = None,
                 title=None,
                 footer=None,
                 author=None,
                 color=None,
-                add_field=False,
+                add_field=False, name=None, value=None, inline=False,
                 **kwargs,
             ):
                 if not self.message:
                     return
 
                 new_embed = embed or self._updated_embed(
-                    contents=contents,
+                    description=description,
                     title=title,
                     footer=footer,
                     author=author,
                     color=color,
                     add_field=add_field,
+                    name=name,
+                    value=value,
+                    inline=inline
                 )
 
                 try:
@@ -622,29 +619,21 @@ class BotCore(discord.Client):
                 except discord.NotFound:
                     self.message = None
 
-            def _updated_embed(self, contents=None, title=None, footer=None, author=None, color=None, add_field=False):
+            def _updated_embed(
+                self, description=None, title=None, footer=None, author=None, color=None,
+                add_field=False, name=None, value=None, inline=False
+            ):
                 old = self.embed or discord.Embed()
+                new_embed = discord.Embed.from_dict(old.to_dict())
+                if title is not None:
+                    new_embed.title = title
+                if description is not None:
+                    new_embed.description = description
+                if color is not None:
+                    new_embed.colour = color
 
                 if add_field:
-                    new_embed = discord.Embed.from_dict(old.to_dict())
-                    new_embed.add_field(
-                        name=title or "Info",
-                        value=contents or "N/A",
-                        inline=False,
-                    )
-                else:
-                    new_embed = discord.Embed(
-                        title=title or old.title,
-                        description=contents or old.description,
-                        color=color or old.color,
-                    )
-
-                    for field in old.fields:
-                        new_embed.add_field(
-                            name=field.name,
-                            value=field.value,
-                            inline=field.inline,
-                        )
+                    new_embed.add_field(name=name, value=value, inline=inline)
 
                 current_author = old.author.name if old.author else ""
                 new_embed.set_author(name=author or current_author)

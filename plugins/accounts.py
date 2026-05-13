@@ -105,7 +105,7 @@ async def setup(bot: "BotCore"):
             text = "No users found with the specified criteria."
         await bot.discord.send_embed(
             title=f"Accounts with rank {minimum_rank} or higher" if minimum_rank else "All accounts",
-            contents=text,
+            description=text,
             response=True, ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
         )
