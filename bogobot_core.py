@@ -21,6 +21,8 @@ from utils.notifications import NotificationBroadcaster
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
+os.environ["OMP_THREAD_LIMIT"] = "1"
+
 CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)02d %(levelname)-8s | %(name)-15s ] %(message)s'
 LOG_DATE_FORMAT = '%b %d %H:%M:%S'
 
@@ -80,13 +82,17 @@ class BotCore(discord.Client):
         self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 4)))
         self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
 
-        self.STATS_COORDS: dict[str, tuple[int, int, int, int] | tuple[int, int, int, int, str]] = {
+        self.STATS_COORDS: dict[str, 
+                                tuple[int, int, int, int] |
+                                tuple[int, int, int, int, str] |
+                                tuple[int, int, int, int, tuple[str | None, int | None]]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
             "best_run": (645, 610, 730, 640, "0123456789/"),
             "shuffles_sec": (819, 610, 1043, 640),
             "elapsed_time": (1166, 0, 1180, 75),
-            "average_best_shuffle": (80, 670, 115, 685, "0123456789.")
+            "average_best_shuffle": (80, 670, 115, 685, "0123456789."),
+            "uptime": (1160, 10, 1260, 30, "0123456789dhm ")
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
@@ -409,11 +415,12 @@ class BotCore(discord.Client):
         try:
             semaphore = asyncio.Semaphore(self.OCR_CONCURRENCY)
 
-            async def parse_crop(coords, whitelist: str):
+            async def parse_crop(coords, whitelist: str, psm: int | None = None):
                 async with semaphore:
                     return await self.tesseract_parse(
                         img.crop(coords),
                         whitelist,
+                        **({"psm": psm} if psm is not None else {})
                     )
 
             async def parse_stats():
@@ -422,12 +429,21 @@ class BotCore(discord.Client):
 
                 for name, coords in self.STATS_COORDS.items():
                     whitelist = "0123456789"
+                    psm: int | None = None
                     if len(coords) >= 5:
-                        whitelist = coords[4]
+                        extra = coords[4]
+                        if isinstance(extra, str):
+                            whitelist = extra
+                        else:
+                            w, psm = extra
+                            if w is not None:
+                                whitelist = w
+                            if psm is not None:
+                                psm = int(psm)
                         coords = coords[:4]
 
                     stats_specs.append((name, whitelist))
-                    stats_tasks.append(parse_crop(coords, whitelist))
+                    stats_tasks.append(parse_crop(coords, whitelist, psm))
 
                 stats_results = await asyncio.gather(*stats_tasks)
 
@@ -930,7 +946,7 @@ class BotCore(discord.Client):
         confs: list[float] = []
 
         for row in rows:
-            text = (row.get("text") or "").strip()
+            text = row.get("text") or ""
             if not text:
                 continue
 
@@ -944,7 +960,7 @@ class BotCore(discord.Client):
             if conf >= 0:
                 confs.append(conf / 100.0)
 
-        combined_text = "".join(parts)
+        combined_text = " ".join(parts)
         avg_conf = sum(confs) / len(confs) if confs else 0.0
 
         return combined_text, avg_conf
