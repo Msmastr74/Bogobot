@@ -1,12 +1,9 @@
-import re
-
 import discord
+import datetime
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
-
-import time
 
 async def setup(bot: 'BotCore'):
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
@@ -19,9 +16,17 @@ async def setup(bot: 'BotCore'):
         await bot.discord.send_embed(embed=embed, response=True)
     
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
-    async def ping(interaction: discord.Interaction):
+    async def ping(
+        interaction: discord.Interaction,
+        interaction_latency: int | None = None,
+        gateway_latency: int | None = None,
+        timestamp: int | None = None
+    ):
         now = discord.utils.utcnow() 
         ping_ms = (now - interaction.created_at).total_seconds() * 1000
+        if interaction_latency is not None:
+            ping_ms = interaction_latency
+        
         if ping_ms > 500:
             color = discord.Colour.red()
         elif ping_ms > 200:
@@ -34,9 +39,13 @@ async def setup(bot: 'BotCore'):
             color = discord.Colour.green()
         else:
             color = discord.Colour.blue()
-        embed = discord.Embed(title="Pong!", color=color, timestamp=now)
+        
+        t = datetime.datetime.fromtimestamp(timestamp) if timestamp is not None else now
+        embed = discord.Embed(title="Pong!", color=color, timestamp=t)
         embed.add_field(name="Interaction Latency", value=f"{ping_ms:.2f} ms")
-        embed.add_field(name="Gateway Latency", value=f"{bot.latency * 1000:.2f} ms")
+        
+        gateway_latency_ms = gateway_latency if gateway_latency is not None else bot.latency * 1000
+        embed.add_field(name="Gateway Latency", value=f"{gateway_latency_ms:.2f} ms")
         message = await bot.discord.send_embed(embed=embed, response=True)
         if message is not None:
             await message.add_reaction("🏓")
