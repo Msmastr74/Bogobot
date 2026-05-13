@@ -64,6 +64,6 @@ async def setup(bot: 'BotCore'):
             await message.edit_embed(
                 title="User Latency",
                 description=f"{user_latency:.2f} ms",
-                add_field=True,
+                add_field=True, inline=True,
                 color=choose_color(user_latency)
             )
