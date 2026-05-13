@@ -26,12 +26,12 @@ async def setup(bot: 'BotCore'):
             color = discord.Colour.red()
         elif ping_ms > 200:
             color = discord.Colour.orange()
-        elif ping_ms < 50:
-            color = discord.Colour.green()
-        elif ping_ms < 0:
-            color = discord.Colour.purple()
         elif ping_ms < -50:
             color = discord.Colour.magenta()
+        elif ping_ms < 0:
+            color = discord.Colour.purple()
+        elif ping_ms < 50:
+            color = discord.Colour.green()
         else:
             color = discord.Colour.blue()
         embed = discord.Embed(title="Pong!", color=color, timestamp=now)
