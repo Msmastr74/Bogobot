@@ -57,6 +57,7 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
 if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
+    from plugins.accounts import Account
 
 OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
 OcrResult = tuple[str, float]
@@ -75,11 +76,10 @@ class BotCore(discord.Client):
                 json.dump({}, f)
         
         with open(self.accounts_path, 'r') as f:
-            self.accounts: dict[str, dict[str, Any]] = json.load(f)
+            self.accounts: dict[str, 'Account'] = json.load(f)
         
         self._config_lock = asyncio.Lock()
         self._accounts_lock = asyncio.Lock()
-        self._migrate_authorized_users()
         intents = discord.Intents.default()
         intents.members = True
         super().__init__(intents=intents)
@@ -182,42 +182,12 @@ class BotCore(discord.Client):
         self._save_config_sync()
         return channel_data
 
-    def _migrate_authorized_users(self) -> None:
-        authorized_users = self.config.get("authorized_users", {})
-        migrated: dict[str, int] = {}
-
-        if isinstance(authorized_users, list):
-            for user_id in authorized_users:
-                try:
-                    migrated[str(int(user_id))] = 1
-                except (TypeError, ValueError):
-                    continue
-        elif isinstance(authorized_users, dict):
-            for user_id, level in authorized_users.items():
-                try:
-                    normalized_user_id = str(int(user_id))
-                    normalized_level = int(level)
-                except (TypeError, ValueError):
-                    continue
-                if normalized_level > 0:
-                    migrated[normalized_user_id] = min(normalized_level, 2)
-
-        if authorized_users != migrated:
-            self.config["authorized_users"] = migrated
-            self._save_config_sync()
-
     def authorization_level(self, user_id: int) -> int:
-        if user_id == self.config.get("owner_uid"):
-            return 3
-
-        authorized_users = self.config.get("authorized_users", {})
-        if not isinstance(authorized_users, dict):
+        if str(user_id) not in self.accounts:
             return 0
 
-        try:
-            return max(0, int(authorized_users.get(str(user_id), 0)))
-        except (TypeError, ValueError):
-            return 0
+        rank = self.accounts[str(user_id)]["perm_level"]
+        return rank
 
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
         return self.authorization_level(user_id) >= perm_requirement
@@ -775,6 +745,7 @@ class BotCore(discord.Client):
             self.logger.info(f"Automatically created {added_guild_member_count} accounts out of {guild_member_count} members from {guild.name} ({guild.id})")
             guild_member_count = 0
             added_guild_member_count = 0
+        
         self.accounts[str(self.config["owner_uid"])]["perm_level"] = 4
         await self.save_accounts()
         self.logger.info(f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers")

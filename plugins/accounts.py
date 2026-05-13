@@ -1,6 +1,6 @@
 import discord
 
-from typing import Literal, TYPE_CHECKING
+from typing import Literal, TYPE_CHECKING, TypedDict
 if TYPE_CHECKING:
     from main import BotCore
 
@@ -11,6 +11,9 @@ RANKS = {
     "3": "admin",
     "4": "owner"
 }
+
+class Account(TypedDict):
+    perm_level: int
 
 async def setup(bot: "BotCore"):
     from utils import groups
@@ -25,7 +28,7 @@ async def setup(bot: "BotCore"):
         if str(user.id) not in bot.accounts:
             await bot.discord.send(contents="User not found in accounts database", response=True, ephemeral=True)
             return
-        current_rank: int = bot.accounts[str(user.id)]["perm_level"]
+        current_rank = bot.accounts[str(user.id)]["perm_level"]
         new_rank: int | None = None
         if action != "set" and level is not None:
             await bot.discord.send(contents="Level argument should not be provided unless using the set action", response=True, ephemeral=True)
@@ -79,6 +82,6 @@ async def setup(bot: "BotCore"):
         if str(user.id) not in bot.accounts:
             await bot.discord.send(contents="User not found in accounts database", response=True, ephemeral=True)
             return
-        current_rank: int = bot.accounts[str(user.id)]["perm_level"]
+        current_rank = bot.accounts[str(user.id)]["perm_level"]
         current_rank_name = RANKS.get(str(current_rank), "Unknown")
         await bot.discord.send(contents=f"<@{user.id}>'s current rank is {current_rank_name}", response=True, ephemeral=True)

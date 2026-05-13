@@ -10,8 +10,8 @@ Configuration is managed via `config.json`.
 
 User-edited settings:
 - `bot_token`: The Discord bot token.
-- `owner_uid`: Discord user ID for the bot owner. Permission level 2 commands require this ID.
-- `authorized_users`: Discord user IDs mapped to authorization levels. Level 0 is public/no authorization, levels 1 and 2 are configurable, and `owner_uid` is always effective level 3. Older list-style configs are migrated to level 1. This can also be changed with `/manage auth`.
+- `owner_uid`: Discord user ID for the bot owner. On startup, this user is set to account permission level 4.
+- `accounts_path`: Optional path to the account database. Defaults to `accounts.json`.
 - `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes, then writes this back to false.
 - `debug`: Enable debug logging for Bogobot.
 - `silence_stream`: Suppress Streamlink/FFmpeg subprocess output. Defaults to false, but stream output is also quiet unless `debug` is true.
@@ -33,6 +33,11 @@ Bot-managed storage:
 - `monitor_messages`: Persistent monitor message IDs by Discord channel ID.
 - `milestones`: Latest confirmed value for each milestone name.
 
+Account storage:
+- `accounts.json`, or the file named by `accounts_path`, stores Discord user IDs mapped to account records.
+- Each account record currently contains `perm_level`.
+- On ready, the bot creates basic accounts for visible guild members and saves the configured `owner_uid` at permission level 4.
+
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
 
 ## Info Subclass
@@ -40,7 +45,7 @@ The `info` subclass handles data extraction from the livestream using a combinat
 
 ### Methods
 * `get_stats_all()`: Returns a dictionary containing the most recent values for shuffles, comparisons, and calculated shuffles per minute.
-* `get_uptime()`: An asynchronous method that fetches the raw epoch timestamp from the YouTube Framework Update API and returns a formatted `DD:HH:MM:SS` string.
+* `get_uptime()`: Returns the current calculated stream uptime as a formatted `DD:HH:MM:SS` string.
 * `format_to_ddhhmmss(total_seconds)`: Converts raw seconds into a standardized duration string.
 
 ## Discord Subclass
@@ -118,21 +123,29 @@ The admin plugin adds `/manage state` and `/manage logs`.
 
 `/manage state` has different permission behavior depending on which client is running:
 
-- **Normal bot**: registered through the plugin command wrapper with permission level 2, so only `owner_uid` can run it. This is stricter than most `/manage` commands, which default to the authorized-user level. `restart` restarts the process, `stop` closes the main bot and starts the fallback client, and `info` reports that the main bot is up.
-- **Fallback client**: registered directly on the fallback command tree and checks permission level 1, so `owner_uid` and users in `authorized_users` can run it.
+- **Normal bot**: registered through the plugin command wrapper with permission level 2. `restart` restarts the process, `stop` closes the main bot and starts the fallback client, and `info` reports that the main bot is up.
+- **Fallback client**: registered directly on the fallback command tree and checks permission level 1, so authorized accounts can still recover the bot when the normal command wrapper is unavailable.
 
 In both modes, `restart` replies with `Restarting...`, waits briefly, closes the Discord client, and then replaces the current process with a fresh invocation of the same Python executable and command-line arguments.
 
-If the main bot fails, or `/manage state stop` is used, and `fallback_client` is enabled, `main.py` starts a fallback client using the same bot token. In fallback mode, `/manage state restart` is available to authorized users and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
+If the main bot fails, or `/manage state stop` is used, and `fallback_client` is enabled, `main.py` starts a fallback client using the same bot token. In fallback mode, `/manage state restart` is available to level 1+ accounts and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
 
 ## Management Commands
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
 
-- `/manage auth info user`: Shows a user's effective authorization level.
-- `/manage auth set user level`: Sets a user's authorization level. Level 0 removes the user from `authorized_users`; set levels must be lower than the caller's effective level.
 - `/manage monitor start|stop`: Creates or removes the persistent monitor message in the current channel.
-- `/manage milestone subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
-- `/manage milestone spoof name [data]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
+- `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
+- `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
+- `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
+- `/manage state stop|restart|info`: Stops into fallback mode, restarts the current process, or reports which client is active.
+- `/manage logs`: Shows recent in-memory bot logs.
+- `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
+
+Account commands live under `/accounts`:
+
+- `/accounts perm_info user`: Shows a user's current account rank.
+- `/accounts perm_edit promote|demote user`: Moves a user up or down by one rank.
+- `/accounts perm_edit set user level`: Sets a user to `basic`, `authorized`, `mod`, or `admin`.
 
 ### Creating a Plugin
 Each plugin must include a `setup` function to register commands with the `BotCore` instance:
@@ -207,25 +220,10 @@ async def setup(bot):
 Keep group helpers tiny. They should only name and return the shared group; command behavior belongs in plugins.
 
 ### Permission Levels
- * **0 (Public)**: Accessible by all users.
- * **1 (Authorized)**: Accessible by users configured at level 1 or higher.
- * **2 (Admin)**: Accessible by users configured at level 2 or higher.
- * **3 (Owner)**: Effective level for `owner_uid`; not stored in `authorized_users`.
+ * **0 (`basic`)**: Default account rank. Public commands should use `perm_requirement=0`.
+ * **1 (`authorized`)**: Trusted account rank. This is the default requirement for `bot.setup.command` and grouped commands.
+ * **2 (`mod`)**: Elevated management rank.
+ * **3 (`admin`)**: Highest manually assignable rank through `/accounts perm_edit`.
+ * **4 (`owner`)**: Forced rank for `owner_uid` on startup.
 
-## Harness
-`harness.py` is a small process wrapper for running the bot on a server.
-
-It does three things:
-- starts `main.py`
-- runs `git pull --ff-only` every 10 seconds
-- restarts the bot when the checked-out commit changes
-
-This is useful when the bot is deployed somewhere simple and you want pushes to restart the app without logging in and doing it manually. It only accepts fast-forward pulls; if the server has local changes or git cannot pull cleanly, it keeps the current bot process running and prints the git error.
-
-Run it with:
-
-```bash
-python harness.py
-```
-
-Stop it with Ctrl+C or SIGTERM. The harness will try SIGINT on the bot first, then terminate/kill it if it does not exit.
+When editing permissions, the caller must overrank both the target's current rank and the new rank.
