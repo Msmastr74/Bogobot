@@ -1,7 +1,5 @@
-from multiprocessing import allow_connection_pickling
-
+import asyncio
 import discord
-import datetime
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -53,11 +51,14 @@ async def setup(bot: 'BotCore'):
         await message.add_reaction("🏓")
         
         user = user or interaction.user
-        user_msg = await bot.wait_for(
-            "message",
-            check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
-            timeout=60
-        )
+        try:
+            user_msg = await bot.wait_for(
+                "message",
+                check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
+                timeout=60
+            )
+        except asyncio.TimeoutError:
+            return
         if user_msg.nonce is not None:
             try:
                 nonce = int(user_msg.nonce)
