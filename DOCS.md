@@ -18,7 +18,7 @@ User-edited settings:
 - `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
-- `ocr_concurrency`: Maximum number of Tesseract processes to run at once. Defaults to 4.
+- `ocr_concurrency`: Maximum number of concurrent Tesseract batch processes to run at once. Defaults to 4.
 - `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
 - `fallback_client`: Start the fallback client after a fatal main-bot failure. Defaults to true.
 - `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
@@ -58,9 +58,10 @@ The `discord` subclass provides a simplified interface for interacting with the 
 ## OCR Implementation
 Bogobot utilizes Tesseract OCR for visual data extraction.
 - **Coordinates**: Stats are extracted from defined regions of a 720p frame.
-- **Processing**: Frames are pre-processed using the Pillow (PIL) library, including grayscale conversion and thresholding, to improve recognition accuracy.
+- **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and encoded as temporary PNG files for Tesseract.
 - **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
-- **Parallelism**: OCR calls are limited by `ocr_concurrency`, so multiple crops can be parsed without starting too many Tesseract processes.
+- **Batch mode**: Crops with the same whitelist and page segmentation mode are sent to Tesseract together using its native list-file batch input. This reduces process startup overhead while keeping separate batches for crops that require different OCR options.
+- **Parallelism**: `ocr_concurrency` limits how many Tesseract batch processes can run at once, not how many individual crops can be read per frame.
 - **Latest cells**: When the sort visualization changes, `ocr_cell_count` controls how many recent history cells are read for monitor updates.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
