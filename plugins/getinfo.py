@@ -62,8 +62,8 @@ async def setup(bot: 'BotCore'):
             msg_created_at = user_msg.created_at
             user_latency = (msg_created_at - user_client_time).total_seconds() * 1000
             await message.edit_embed(
-                title="User Latency",
-                description=f"{user_latency:.2f} ms",
+                name="User Latency",
+                value=f"{user_latency:.2f} ms",
                 add_field=True, inline=True,
                 color=choose_color(user_latency)
             )
