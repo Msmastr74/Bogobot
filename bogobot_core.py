@@ -21,6 +21,8 @@ from utils.notifications import NotificationBroadcaster
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
+os.environ["OMP_THREAD_LIMIT"] = "1"
+
 CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)02d %(levelname)-8s | %(name)-15s ] %(message)s'
 LOG_DATE_FORMAT = '%b %d %H:%M:%S'
 
