@@ -7,3 +7,4 @@ local_config.json
 channels.json
 telemetry.jsonl
 accounts.json
+tessdata/

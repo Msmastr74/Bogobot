@@ -12,9 +12,8 @@ import functools
 import asyncio
 import importlib
 import contextvars
-import aiohttp
 import time
-import tempfile
+import urllib.request
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
@@ -63,6 +62,8 @@ OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
 OcrResult = tuple[str, float]
 TesseractGroupKey = tuple[str, int]
 TesseractGroupItems = list[tuple[int, tuple[int, int, int, int]]]
+TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
+TESSERACT_LANGUAGE = "eng_fast"
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
@@ -115,6 +116,9 @@ class BotCore(discord.Client):
         self.logger = logging.getLogger("Bogobot")
         loglevel = logging.DEBUG if self.debug else logging.INFO
         self.logger.setLevel(loglevel)
+        self.tessdata_path: str = os.path.abspath(self.config.get("tessdata_path", "tessdata"))
+        self.tessdata_fast_url: str = self.config.get("tessdata_fast_url", TESSDATA_FAST_URL)
+        self._ensure_tessdata_fast()
 
         self.stream_handler = StreamHandler(
             url="https://www.youtube.com/live/DgfiqGPmGWY",
@@ -871,6 +875,46 @@ class BotCore(discord.Client):
 
         return buffer.tobytes()
 
+    def _tesseract_cell_image(self, pil_cell: 'Image.Image') -> Image.Image:
+        processed = self._preprocess_cell(pil_cell)
+        return Image.fromarray(processed)
+
+    def _ensure_tessdata_fast(self) -> None:
+        tessdata_file = os.path.join(
+            self.tessdata_path,
+            f"{TESSERACT_LANGUAGE}.traineddata",
+        )
+
+        if os.path.exists(tessdata_file) and os.path.getsize(tessdata_file) > 0:
+            return
+
+        os.makedirs(self.tessdata_path, exist_ok=True)
+        tmp_path = f"{tessdata_file}.tmp"
+
+        self.logger.info(
+            f"Downloading {TESSERACT_LANGUAGE}.traineddata to {self.tessdata_path}"
+        )
+        try:
+            with urllib.request.urlopen(self.tessdata_fast_url, timeout=30) as response:
+                status = getattr(response, "status", 200)
+                if status >= 400:
+                    raise RuntimeError(f"HTTP {status}")
+
+                with open(tmp_path, "wb") as f:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+            os.replace(tmp_path, tessdata_file)
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
     async def tesseract_parse(
         self,
         pil_cell: 'Image.Image',
@@ -883,19 +927,21 @@ class BotCore(discord.Client):
             "tesseract",
             "stdin",
             "stdout",
+            "--tessdata-dir", self.tessdata_path,
+            "-l", TESSERACT_LANGUAGE,
             "--psm", str(psm),
             "--oem", "3",
             "-c", "load_system_dawg=0",
             "-c", "load_freq_dawg=0",
             "-c", f"tessedit_char_whitelist={whitelist}",
-            "tsv"
+            "-c", "tessedit_create_tsv=1",
         ]
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate(input=image_bytes)
         stderr_text = stderr.decode(errors="ignore").strip()
@@ -931,42 +977,40 @@ class BotCore(discord.Client):
         if not pil_cells:
             return []
 
-        image_bytes_by_page: list[bytes] = [
-            self._encode_tesseract_cell(pil_cell)
+        page_images: list[Image.Image] = [
+            self._tesseract_cell_image(pil_cell)
             for pil_cell in pil_cells
         ]
 
-        with tempfile.TemporaryDirectory(prefix="bogobot_ocr_") as tmpdir:
-            image_paths: list[str] = []
-            for index, image_bytes in enumerate(image_bytes_by_page):
-                image_path = os.path.join(tmpdir, f"{index}.png")
-                with open(image_path, "wb") as f:
-                    f.write(image_bytes)
-                image_paths.append(image_path)
+        tiff_image = io.BytesIO()
+        page_images[0].save(
+            tiff_image,
+            format="TIFF",
+            save_all=True,
+            append_images=page_images[1:],
+        )
 
-            list_path = os.path.join(tmpdir, "images.txt")
-            with open(list_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(image_paths))
-                f.write("\n")
+        cmd = [
+            "tesseract",
+            "stdin",
+            "stdout",
+            "--tessdata-dir", self.tessdata_path,
+            "-l", TESSERACT_LANGUAGE,
+            "--psm", str(psm),
+            "--oem", "3",
+            "-c", "load_system_dawg=0",
+            "-c", "load_freq_dawg=0",
+            "-c", f"tessedit_char_whitelist={whitelist}",
+            "-c", "tessedit_create_tsv=1",
+        ]
 
-            cmd = [
-                "tesseract",
-                list_path,
-                "stdout",
-                "--psm", str(psm),
-                "--oem", "3",
-                "-c", "load_system_dawg=0",
-                "-c", "load_freq_dawg=0",
-                "-c", f"tessedit_char_whitelist={whitelist}",
-                "tsv"
-            ]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(input=tiff_image.getvalue())
 
         stderr_text = stderr.decode(errors="ignore").strip()
 
@@ -986,12 +1030,15 @@ class BotCore(discord.Client):
         )
 
         results: list[OcrResult] = []
-        for image_bytes, (out, conf) in zip(image_bytes_by_page, parsed):
+        for page_image, (out, conf) in zip(page_images, parsed):
             res = ""
             for char in out:
                 if char in whitelist:
                     res += char
-            self._save_ocr_debug('ocr_debug', image_bytes, f'{conf:.2f}c_{out}')
+            if self.config.get("save_ocr_debug", False):
+                debug_image = io.BytesIO()
+                page_image.save(debug_image, format="PNG")
+                self._save_ocr_debug('ocr_debug', debug_image.getvalue(), f'{conf:.2f}c_{out}')
             results.append((res, conf))
 
         return results

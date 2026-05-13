@@ -20,6 +20,8 @@ User-edited settings:
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
 - `ocr_concurrency`: Maximum number of concurrent Tesseract batch processes to run at once. Defaults to 4.
 - `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
+- `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
+- `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
 - `fallback_client`: Start the fallback client after a fatal main-bot failure. Defaults to true.
 - `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
@@ -63,9 +65,10 @@ The `discord` subclass provides a simplified interface for interacting with the 
 ## OCR Implementation
 Bogobot utilizes Tesseract OCR for visual data extraction.
 - **Coordinates**: Stats are extracted from defined regions of a 720p frame.
-- **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and encoded as temporary PNG files for Tesseract.
+- **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and encoded in memory for Tesseract.
+- **OCR model**: The bot ensures `eng_fast.traineddata` exists in `tessdata_path`, downloading it from `tessdata_fast` on first startup when missing. Tesseract is run with `--tessdata-dir` pointing at that directory and `-l eng_fast`.
 - **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
-- **Batch mode**: Crops with the same whitelist and page segmentation mode are sent to Tesseract together using its native list-file batch input. This reduces process startup overhead while keeping separate batches for crops that require different OCR options.
+- **Batch mode**: Crops with the same whitelist and page segmentation mode are sent to Tesseract together as one multi-page TIFF over stdin. This reduces process startup overhead and avoids per-crop disk I/O while keeping separate batches for crops that require different OCR options.
 - **Parallelism**: `ocr_concurrency` limits how many Tesseract batch processes can run at once, not how many individual crops can be read per frame.
 - **Latest cells**: When the sort visualization changes, `ocr_cell_count` controls how many recent history cells are read for monitor updates.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
