@@ -442,6 +442,7 @@ async def setup(bot: "BotCore"):
             await bot.discord.send(
                 embed=embed,
                 response=True,
+                ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
