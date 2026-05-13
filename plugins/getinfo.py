@@ -68,7 +68,7 @@ async def setup(bot: 'BotCore'):
             user_latency = (msg_created_at - user_client_time).total_seconds() * 1000
             user_text = f"{user.mention}: " if user.id != interaction.user.id else ""
             await message.edit_embed(
-                name="User Latency",
+                name="User Latency" if user.id != interaction.user.id else f"{user.display_name}'s Latency",
                 value=f"{user_text}{user_latency:.2f} ms",
                 add_field=True, inline=True,
                 color=choose_color(user_latency),
