@@ -16,6 +16,7 @@ async def setup(bot: 'BotCore'):
         best_run = stats_list.get("best_run", "Loading...")
         shuffles_sec = stats_list.get("shuffles_sec", "Loading...")
         average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
+        uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = await bot.info.get_uptime()
         
 
@@ -33,4 +34,5 @@ async def setup(bot: 'BotCore'):
         await embed.edit_embed(contents=f"{best_run}", title="Best Run", add_field=True)
         await embed.edit_embed(contents=f"{shuffles_sec}", title="Shuffles Per Second", add_field=True)
         await embed.edit_embed(contents=f"{average_best_shuffle}", title="Average Best Shuffle", add_field=True)
-        await embed.edit_embed(contents=f"{elapsed_time}", title="Elapsed Time", add_field=True)
+        await embed.edit_embed(contents=f"{uptime}", title="Uptime [STREAM]", add_field=True)
+        await embed.edit_embed(contents=f"{elapsed_time}", title="Elapsed Time [API]", add_field=True)
