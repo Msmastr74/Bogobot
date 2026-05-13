@@ -241,7 +241,7 @@ class BotCore(discord.Client):
         
         # FIX: Added 'self' as the first argument
         def format_to_ddhhmmss(self, total_seconds):
-            seconds = int(total_seconds) - 1776273837
+            seconds = int(total_seconds) - 1776273017
             minutes = seconds // 60
             seconds = seconds % 60
             hours = minutes // 60
@@ -251,30 +251,8 @@ class BotCore(discord.Client):
             return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
 
         async def get_uptime(self):
-            url = "https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
-            payload = {
-                "context": {
-                    "client": {
-                        "hl": "en",
-                        "gl": "US",
-                        "clientName": "WEB",
-                        "clientVersion": "2.20260424.01.00"
-                    }
-                },
-                "videoId": "DgfiqGPmGWY"
-            }
-            
-            try:
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, json=payload) as response:
-                        response.raise_for_status()
-                        data = await response.json()
-                raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
-                
-                return self.format_to_ddhhmmss(raw_seconds)
-            except (KeyError, aiohttp.ClientError, asyncio.TimeoutError):
-                return "00:00:00:00"
+            raw_seconds = round(time.time())
+            return self.format_to_ddhhmmss(raw_seconds)
 
         async def get_best_shuffles(self):
             is_new = self.outer._current_vals_updated

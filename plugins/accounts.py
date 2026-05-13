@@ -18,7 +18,7 @@ async def setup(bot: "BotCore"):
     accounts = groups.accounts(bot)
     
     @accounts.command(name="perm_edit", description="Edits a user's rank")
-    async def perm_edit(interaction: discord.Interaction, action: Literal['promote', 'demote', 'set'], user: discord.Member, level: int | None = None):
+    async def perm_edit(interaction: discord.Interaction, action: Literal['promote', 'demote', 'set'], user: discord.Member, level: Literal['basic', 'authorized', 'mod', 'admin'] | None = None):
         old_rank = bot.accounts[str(user.id)]["perm_level"]
         if action == "promote":
             new_rank = old_rank + 1
@@ -26,7 +26,7 @@ async def setup(bot: "BotCore"):
             new_rank = old_rank - 1
         elif action == "set":
             if level:
-                new_rank = level
+                new_rank = 0 if level == 'basic' else 1 if level == 'authorized' else 2 if level == 'mod' else 3 if level == 'admin' else None
             else:
                 await bot.discord.send(contents="Must provide level in order to use the set action", response=True, ephemeral=True)
                 return
