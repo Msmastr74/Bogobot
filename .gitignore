@@ -6,3 +6,4 @@ local_config.json
 .DS_Store
 channels.json
 telemetry.jsonl
+accounts.json

@@ -68,9 +68,15 @@ class BotCore(discord.Client):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
+
         self.accounts_path: str = self.config.get("accounts_path", "accounts.json")
+        if not os.path.exists(self.accounts_path):
+            with open(self.accounts_path, 'w') as f:
+                json.dump({}, f)
+        
         with open(self.accounts_path, 'r') as f:
             self.accounts: dict[str, dict[str, Any]] = json.load(f)
+        
         self._config_lock = asyncio.Lock()
         self._accounts_lock = asyncio.Lock()
         self._migrate_authorized_users()
