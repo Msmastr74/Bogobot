@@ -4,13 +4,15 @@ from typing import Literal, TYPE_CHECKING, TypedDict
 if TYPE_CHECKING:
     from main import BotCore
 
-RANKS = {
-    "0": "basic",
-    "1": "authorized",
-    "2": "mod",
-    "3": "admin",
-    "4": "owner"
+Rank = Literal['basic', 'authorized', 'mod', 'admin', 'owner']
+RANKS: dict[int, Rank] = {
+    0: "basic",
+    1: "authorized",
+    2: "mod",
+    3: "admin",
+    4: "owner"
 }
+RANK_NUMS: dict[Rank, int] = dict((v, k) for k, v in RANKS.items())
 
 class Account(TypedDict):
     perm_level: int
@@ -23,8 +25,12 @@ async def setup(bot: "BotCore"):
     @accounts.command(name="perm_edit", description="Edits a user's rank")
     async def perm_edit(
         interaction: discord.Interaction, action: Literal['promote', 'demote', 'set'],
-        user: discord.Member, level: Literal['basic', 'authorized', 'mod', 'admin'] | None = None
+        user: discord.Member, level: Rank | None = None
     ):
+        if str(user.id) == str(interaction.user.id):
+            # Lockout prevention
+            await bot.discord.send(contents="You cannot edit your own rank", response=True, ephemeral=True)
+            return
         if str(user.id) not in bot.accounts:
             await bot.discord.send(contents="User not found in accounts database", response=True, ephemeral=True)
             return
@@ -39,23 +45,13 @@ async def setup(bot: "BotCore"):
             new_rank = current_rank - 1
         elif action == "set":
             if level:
-                if level == 'basic':
-                    new_rank = 0
-                elif level == 'authorized':
-                    new_rank = 1
-                elif level == 'mod':
-                    new_rank = 2
-                elif level == 'admin':
-                    new_rank = 3
-                else:
-                    await bot.discord.send(contents="Invalid rank level provided", response=True, ephemeral=True)
-                    return
+                new_rank = RANK_NUMS[level]
             else:
                 await bot.discord.send(contents="Must provide level in order to use the set action", response=True, ephemeral=True)
                 return
         assert new_rank is not None
-        cur_rank_name = RANKS.get(str(current_rank), "Unknown")
-        new_rank_name = RANKS.get(str(new_rank), "Unknown")
+        cur_rank_name = RANKS.get(current_rank, "Unknown")
+        new_rank_name = RANKS.get(new_rank, "Unknown")
 
         own_rank = bot.accounts[str(interaction.user.id)]["perm_level"]
         if own_rank > current_rank and own_rank > new_rank:
@@ -83,5 +79,33 @@ async def setup(bot: "BotCore"):
             await bot.discord.send(contents="User not found in accounts database", response=True, ephemeral=True)
             return
         current_rank = bot.accounts[str(user.id)]["perm_level"]
-        current_rank_name = RANKS.get(str(current_rank), "Unknown")
-        await bot.discord.send(contents=f"<@{user.id}>'s current rank is {current_rank_name}", response=True, ephemeral=True)
+        current_rank_name = RANKS.get(current_rank, "Unknown")
+        await bot.discord.send(
+            contents=f"<@{user.id}>'s current rank is {current_rank_name}",
+            response=True, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
+    
+    @accounts.command(name="list_users", description="List users in the accounts database")
+    async def list_users(
+        interaction: discord.Interaction, minimum_rank: Rank | None
+    ):
+        text = ""
+        for uid, info in bot.accounts.items():
+            rank_num = info["perm_level"]
+            rank_name = RANKS.get(rank_num, "Unknown")
+            if minimum_rank is not None and rank_num < RANK_NUMS[minimum_rank]:
+                continue
+            new_text = text + f"<@{uid}>: {rank_name}\n"
+            if len(new_text) > 4000:
+                text += "[...truncated...]"
+                break
+            text = new_text
+        if text == "":
+            text = "No users found with the specified criteria."
+        await bot.discord.send_embed(
+            title=f"Accounts with rank {minimum_rank} or higher" if minimum_rank else "All accounts",
+            contents=text,
+            response=True, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none()
+        )

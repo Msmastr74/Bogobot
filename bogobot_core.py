@@ -751,7 +751,13 @@ class BotCore(discord.Client):
             guild_member_count = 0
             added_guild_member_count = 0
         
-        self.accounts[str(self.config["owner_uid"])]["perm_level"] = 4
+        owner_uid = str(self.config["owner_uid"])
+        for uid, account in self.accounts.items():
+            if account["perm_level"] == 4 and uid != owner_uid:
+                account["perm_level"] = 3
+        if owner_uid in self.accounts:
+            self.accounts[owner_uid]["perm_level"] = 4
+
         await self.save_accounts()
         self.logger.info(f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers")
 
