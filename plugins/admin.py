@@ -196,6 +196,20 @@ class SingleLogView(PaginatedView[LogState]):
             ),
         )
     
+    async def previous_section(self, state: LogState) -> SectionRead[LogState] | None:
+        previous_index = state.cursor - 1
+        section = self.handler.section_for(state.records, previous_index, end=state.end)
+        if section is None:
+            return None
+        return SectionRead(
+            section=section,
+            state=LogState(
+                records=state.records,
+                cursor=previous_index,
+                end=state.end,
+            ),
+        )
+
     def page_header(self, page: Page) -> str | None:
         return "## Logs"
 
