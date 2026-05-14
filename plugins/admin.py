@@ -463,7 +463,7 @@ async def setup(bot: "BotCore"):
                 handler=handler,
                 initial_state=LogState(
                     records=records,
-                    cursor=start,
+                    cursor=end - 1,
                     end=end,
                 ),
                 owner_id=interaction.user.id,
