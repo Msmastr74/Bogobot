@@ -9,6 +9,7 @@ from typing import Literal, TYPE_CHECKING
 
 import discord
 from discord import app_commands
+from utils.pagination import Page, PageSection, PaginatedView, SectionRead
 
 if TYPE_CHECKING:
     from main import BotCore
@@ -20,6 +21,7 @@ FALLBACK_CLIENT_REQUESTED = False
 
 @dataclass(frozen=True)
 class LogEntry:
+    counter: int
     created_at: int
     levelno: int
     logger_name: str
@@ -28,23 +30,13 @@ class LogEntry:
 
 
 @dataclass(frozen=True)
-class LogChunk:
-    text: str
-    levelno: int
-
-
-@dataclass(frozen=True)
-class LogRange:
-    start: int
+class LogState:
+    records: tuple[LogEntry, ...]
+    cursor: int
     end: int
-    label: str
-    truncate_mode: str
-    msgs: int
 
 
 class MemoryLogHandler(logging.Handler):
-    EMBED_TEXT_LIMIT = 3800
-    MAX_MESSAGES = 5
     DEFAULT_LENGTH = 30
 
     LEVEL_COLORS = {
@@ -68,6 +60,7 @@ class MemoryLogHandler(logging.Handler):
     def __init__(self, capacity: int):
         super().__init__()
         self.records: deque[LogEntry] = deque(maxlen=capacity)
+        self.next_counter = 1
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -78,12 +71,14 @@ class MemoryLogHandler(logging.Handler):
             if record.stack_info:
                 message = f"{message}\n{record.stack_info}"
             self.records.append(LogEntry(
+                counter=self.next_counter,
                 created_at=int(record.created),
                 levelno=record.levelno,
                 logger_name=record.name,
                 message=message,
                 has_exception=record.exc_info is not None,
             ))
+            self.next_counter += 1
         except Exception:
             self.handleError(record)
 
@@ -92,42 +87,31 @@ class MemoryLogHandler(logging.Handler):
         if self.records.maxlen != capacity:
             self.records = deque(self.records, maxlen=capacity)
 
-    def range_for(
+    def snapshot(self) -> tuple[LogEntry, ...]:
+        self.acquire()
+        try:
+            return tuple(self.records)
+        finally:
+            self.release()
+
+    def section_for(
         self,
+        records: tuple[LogEntry, ...],
+        index: int,
         *,
-        start_from_last: int | None,
-        end_at_last: int | None,
-        start_from_first: int | None,
-        end_at_first: int | None,
-        msgs: int,
-    ) -> tuple[LogRange | None, str | None]:
-        return self._validate_range(
-            len(self.records),
-            start_from_last=start_from_last,
-            end_at_last=end_at_last,
-            start_from_first=start_from_first,
-            end_at_first=end_at_first,
-            msgs=msgs,
+        end: int,
+    ) -> PageSection | None:
+        total = len(records)
+        if index < 0 or index >= min(total, end):
+            return None
+
+        entry = records[index]
+        return PageSection(
+            title="Logs",
+            body=self._format_entry(entry),
+            accent_colour=self._color_for_level(entry.levelno),
+            index=index,
         )
-
-    def embeds(self, *, log_range: LogRange) -> list[discord.Embed]:
-        entries, total = self._selected_entries(log_range)
-        chunks = self._chunk_entries(entries, self.EMBED_TEXT_LIMIT) or [
-            LogChunk("(no logs in that range)", logging.INFO)
-        ]
-        chunks = self._truncated_chunks(chunks, log_range)
-        embeds: list[discord.Embed] = []
-
-        for index, chunk in enumerate(chunks):
-            title = "Logs" if len(chunks) == 1 else f"Logs {index + 1}/{len(chunks)}"
-            prefix = f"Captured logs: `{total}`\n{log_range.label}:\n\n" if index == 0 else ""
-            embeds.append(discord.Embed(
-                title=title,
-                description=f"{prefix}{chunk.text}",
-                color=self._color_for_level(chunk.levelno),
-            ))
-
-        return embeds
 
     def _emoji_for_level(self, levelno: int) -> str:
         if levelno <= logging.NOTSET:
@@ -144,189 +128,174 @@ class MemoryLogHandler(logging.Handler):
         return discord.Color.light_grey()
 
     def _format_entry(self, entry: LogEntry) -> str:
-        header_parts = [f"<t:{entry.created_at}:T>", f"**{discord.utils.escape_markdown(entry.logger_name)}**"]
+        header_parts = [
+            f"`#{entry.counter}`",
+        ]
         if emoji := self._emoji_for_level(entry.levelno):
-            header_parts.insert(0, emoji)
+            header_parts.append(emoji)
+        header_parts.extend([
+            f"<t:{entry.created_at}:T>",
+            f"**{discord.utils.escape_markdown(entry.logger_name)}**",
+        ])
         if entry.has_exception:
             message = entry.message.replace("```", "`\u200b``")
             return f"{' '.join(header_parts)}\n```\n{message}\n```"
         return f"{' '.join(header_parts)}\n{discord.utils.escape_markdown(entry.message)}"
 
-    def _chunk_text(self, text: str, limit: int) -> list[str]:
-        chunks: list[str] = []
-        current: list[str] = []
-        current_len = 0
-        split_threshold = limit // 3
-
-        def flush_current() -> None:
-            nonlocal current, current_len
-            if current:
-                chunks.append("\n".join(current))
-                current = []
-                current_len = 0
-
-        for line in text.splitlines() or [""]:
-            while line:
-                separator_len = 1 if current else 0
-                remaining = limit - current_len - separator_len
-                if len(line) <= remaining:
-                    current.append(line)
-                    current_len += separator_len + len(line)
-                    break
-                if len(line) > split_threshold and remaining > 0:
-                    current.append(line[:remaining])
-                    chunks.append("\n".join(current))
-                    current = []
-                    current_len = 0
-                    line = line[remaining:]
-                    continue
-                flush_current()
-                if len(line) > limit:
-                    chunks.append(line[:limit])
-                    line = line[limit:]
-            if line == "":
-                current.append("")
-
-        flush_current()
-        return chunks
-
-    def _chunk_entries(self, entries: list[LogEntry], limit: int) -> list[LogChunk]:
-        chunks: list[LogChunk] = []
-        current: list[str] = []
-        current_len = 0
-        current_levelno = logging.DEBUG
-
-        def flush_current() -> None:
-            nonlocal current, current_len, current_levelno
-            if current:
-                chunks.append(LogChunk(text="\n".join(current), levelno=current_levelno))
-                current = []
-                current_len = 0
-                current_levelno = logging.DEBUG
-
-        for entry in entries:
-            entry_text = self._format_entry(entry)
-            if len(entry_text) > limit:
-                flush_current()
-                chunks.extend(LogChunk(text=chunk, levelno=entry.levelno) for chunk in self._chunk_text(entry_text, limit))
-                continue
-            separator_len = 2 if current else 0
-            if current_len + separator_len + len(entry_text) > limit:
-                flush_current()
-                separator_len = 0
-            current.append(entry_text)
-            current_len += separator_len + len(entry_text)
-            current_levelno = max(current_levelno, entry.levelno)
-
-        flush_current()
-        return chunks
-
-    def _selected_entries(self, log_range: LogRange) -> tuple[list[LogEntry], int]:
-        records = list(self.records)
-        return records[log_range.start:log_range.end], len(records)
-
-    def _truncated_chunks(self, chunks: list[LogChunk], log_range: LogRange) -> list[LogChunk]:
-        truncated = len(chunks) > log_range.msgs
-        if not truncated:
-            return chunks
-        if log_range.truncate_mode == "last":
-            kept = chunks[-log_range.msgs:]
-            kept[0] = LogChunk(text="... truncated ...\n" + kept[0].text, levelno=kept[0].levelno)
-            return kept
-        kept = chunks[:log_range.msgs]
-        kept[-1] = LogChunk(text=kept[-1].text + "\n... truncated ...", levelno=kept[-1].levelno)
-        return kept
-
-    def _default_range(self, total: int) -> tuple[int, int, str]:
-        return max(0, total - self.DEFAULT_LENGTH), total, "last"
-
-    def _explicit_range(
-        self,
-        total: int,
-        *,
-        start_from_last: int | None,
-        end_at_last: int | None,
-        start_from_first: int | None,
-        end_at_first: int | None,
-    ) -> tuple[int, int, str]:
-        start: int | None = None
-        end: int | None = None
-        truncate_mode = "last"
-
-        if start_from_first is not None:
-            start = self._clamped(start_from_first, total)
-            truncate_mode = "first"
-        elif start_from_last is not None:
-            start = self._clamped(total - start_from_last, total)
-        if end_at_first is not None:
-            end = self._clamped(end_at_first, total)
-            if start is None:
-                start = end
-                end = self._clamped(start + self.DEFAULT_LENGTH, total)
-                truncate_mode = "first"
-        elif end_at_last is not None:
-            end = self._clamped(total - end_at_last, total)
-            if start is None:
-                start = self._clamped(end - self.DEFAULT_LENGTH, total)
-        if start is None:
-            start = max(0, total - self.DEFAULT_LENGTH)
-        if end is None:
-            if start_from_last is not None:
-                end = start
-                start = self._clamped(end - self.DEFAULT_LENGTH, total)
-            else:
-                end = self._clamped(start + self.DEFAULT_LENGTH, total)
-        if start > end:
-            start, end = end, start
-
-        return start, end, truncate_mode
-
-    def _validate_range(
-        self,
-        total: int,
-        *,
-        start_from_last: int | None = None,
-        end_at_last: int | None = None,
-        start_from_first: int | None = None,
-        end_at_first: int | None = None,
-        msgs: int = 1,
-    ) -> tuple[LogRange | None, str | None]:
-        if not 1 <= msgs <= self.MAX_MESSAGES:
-            return None, f"`msgs` must be between 1 and {self.MAX_MESSAGES}."
-        if self._has_negative_offset(start_from_last, end_at_last, start_from_first, end_at_first):
-            return None, "Log offsets must be non-negative."
-        if start_from_first is not None and start_from_last is not None:
-            return None, "Use only one start offset."
-        if end_at_first is not None and end_at_last is not None:
-            return None, "Use only one end offset."
-
-        if start_from_first is None and start_from_last is None and end_at_first is None and end_at_last is None:
-            start, end, truncate_mode = self._default_range(total)
-        else:
-            start, end, truncate_mode = self._explicit_range(
-                total,
-                start_from_last=start_from_last,
-                end_at_last=end_at_last,
-                start_from_first=start_from_first,
-                end_at_first=end_at_first,
-            )
-        return LogRange(
-            start=start,
-            end=end,
-            label=f"Showing log indexes `{start}` to `{end}`",
-            truncate_mode=truncate_mode,
-            msgs=msgs,
-        ), None
-
-    def _has_negative_offset(self, *offsets: int | None) -> bool:
-        return any(offset is not None and offset < 0 for offset in offsets)
-
-    def _clamped(self, position: int, total: int) -> int:
-        return max(0, min(position, total))
+    def _default_range(self, total: int) -> tuple[int, int]:
+        return max(0, total - self.DEFAULT_LENGTH), total
 
 MEMORY_LOG_HANDLER = MemoryLogHandler(500)
 MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
 MEMORY_LOG_HANDLER.setFormatter(logging.Formatter())
+
+
+class LogsView(PaginatedView[LogState]):
+    def __init__(
+        self,
+        *,
+        handler: MemoryLogHandler,
+        initial_state: LogState,
+        owner_id: int,
+    ):
+        super().__init__(
+            initial_state=initial_state,
+            owner_id=owner_id,
+            timeout=300,
+        )
+        self.handler = handler
+        self.newer = discord.ui.Button(
+            label="Newer",
+            style=discord.ButtonStyle.secondary,
+        )
+        self.jump_edge = discord.ui.Button(
+            label="Start",
+            style=discord.ButtonStyle.secondary,
+        )
+        self.refresh = discord.ui.Button(
+            label="Refresh",
+            style=discord.ButtonStyle.primary,
+        )
+        self.older = discord.ui.Button(
+            label="Older",
+            style=discord.ButtonStyle.secondary,
+        )
+        self.newer.callback = self.newer_action
+        self.jump_edge.callback = self.jump_edge_action
+        self.refresh.callback = self.refresh_action
+        self.older.callback = self.older_action
+        self.controls = discord.ui.ActionRow(
+            self.newer,
+            self.jump_edge,
+            self.refresh,
+            self.older,
+        )
+
+    def page_allowed_mentions(self) -> discord.AllowedMentions | None:
+        return discord.AllowedMentions.none()
+
+    def empty_sections(self) -> list[PageSection]:
+        return [
+            PageSection(
+                title="Logs",
+                body="(no logs in that range)",
+                accent_colour=discord.Color.green(),
+            )
+        ]
+
+    def page_header(self, page: Page) -> str | None:
+        indexes = [section.index for section in page.sections if section.index is not None]
+        total = len(self.state.records)
+        if not indexes:
+            return f"## Logs\nCaptured logs: `{total}`"
+        counters = [
+            self.state.records[index].counter
+            for index in indexes
+            if index < len(self.state.records)
+        ]
+        counter_range = ""
+        if counters:
+            counter_range = f"\nLog counters: `#{min(counters)}` to `#{max(counters)}`"
+        return (
+            "## Logs\n"
+            f"Captured logs: `{total}`\n"
+            f"Showing snapshot indexes `{min(indexes)}` to `{max(indexes) + 1}`"
+            f"{counter_range}"
+        )
+
+    def fresh_state(self) -> LogState:
+        records = self.handler.snapshot()
+        start, end = self.handler._default_range(len(records))
+        return LogState(records=records, cursor=start, end=end)
+
+    def start_state(self) -> LogState:
+        return LogState(records=self.state.records, cursor=0, end=len(self.state.records))
+
+    def end_state(self) -> LogState:
+        start, end = self.handler._default_range(len(self.state.records))
+        return LogState(records=self.state.records, cursor=start, end=end)
+
+    async def next_section(self, state: LogState) -> SectionRead[LogState] | None:
+        section = self.handler.section_for(state.records, state.cursor, end=state.end)
+        if section is None:
+            return None
+        return SectionRead(
+            section=section,
+            state=LogState(
+                records=state.records,
+                cursor=state.cursor + 1,
+                end=state.end,
+            ),
+        )
+
+    async def previous_section(self, state: LogState) -> SectionRead[LogState] | None:
+        previous_index = state.cursor - 1
+        section = self.handler.section_for(state.records, previous_index, end=state.end)
+        if section is None:
+            return None
+        return SectionRead(
+            section=section,
+            state=LogState(
+                records=state.records,
+                cursor=previous_index,
+                end=state.end,
+            ),
+        )
+
+    def sync_controls(self) -> None:
+        self.newer.disabled = self.next_page_state is None
+        self.older.disabled = self.previous_page_state is None
+        self.refresh.disabled = False
+        self.jump_edge.disabled = not self.state.records or self.start_state() == self.end_state()
+        self.jump_edge.label = "End" if self.state.cursor <= 0 else "Start"
+
+    def add_controls(self) -> None:
+        self.add_item(self.controls)
+
+    async def newer_action(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        await self.show_next_page(interaction)
+
+    async def refresh_action(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        await self.set_state(interaction, self.fresh_state())
+
+    async def jump_edge_action(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        state = self.end_state() if self.state.cursor <= 0 else self.start_state()
+        await self.set_state(interaction, state)
+
+    async def older_action(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        await self.show_previous_page(interaction)
 
 class FallbackClient(discord.Client):
     def __init__(self, bot: "BotCore", handler: MemoryLogHandler):
@@ -419,32 +388,25 @@ async def setup(bot: "BotCore"):
         )
 
     @manage.command(name="logs", description="Show recent bot logs")
-    async def logs(
-        interaction: discord.Interaction,
-        start_from_last: int | None = None,
-        end_at_last: int | None = None,
-        start_from_first: int | None = None,
-        end_at_first: int | None = None,
-        msgs: int = 1,
-    ):
-        log_range, error = handler.range_for(
-            start_from_last=start_from_last,
-            end_at_last=end_at_last,
-            start_from_first=start_from_first,
-            end_at_first=end_at_first,
-            msgs=msgs,
+    async def logs(interaction: discord.Interaction):
+        records = handler.snapshot()
+        start, end = handler._default_range(len(records))
+        view = LogsView(
+            handler=handler,
+            initial_state=LogState(
+                records=records,
+                cursor=start,
+                end=end,
+            ),
+            owner_id=interaction.user.id,
         )
-        if error:
-            await bot.discord.send(error, response=True)
-            return
-        assert log_range is not None
-        for embed in handler.embeds(log_range=log_range):
-            await bot.discord.send(
-                embed=embed,
-                response=True,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+        page = await view.load()
+        await bot.discord.send(
+            **page.as_send_kwargs(),
+            view=view,
+            response=True,
+            ephemeral=True,
+        )
 
 async def setup_fallback(client: FallbackClient):
     manage = app_commands.Group(
@@ -478,34 +440,27 @@ async def setup_fallback(client: FallbackClient):
         )
 
     @manage.command(name="logs", description="Show recent bot logs")
-    async def logs(
-        interaction: discord.Interaction,
-        start_from_last: int | None = None,
-        end_at_last: int | None = None,
-        start_from_first: int | None = None,
-        end_at_first: int | None = None,
-        msgs: int = 1,
-    ):
+    async def logs(interaction: discord.Interaction):
         if not client.source_bot.is_authorized(interaction.user.id, 1):
             await interaction.response.send_message("Unauthorized.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        log_range, error = client.handler.range_for(
-            start_from_last=start_from_last,
-            end_at_last=end_at_last,
-            start_from_first=start_from_first,
-            end_at_first=end_at_first,
-            msgs=msgs,
+        records = client.handler.snapshot()
+        start, end = client.handler._default_range(len(records))
+        view = LogsView(
+            handler=client.handler,
+            initial_state=LogState(
+                records=records,
+                cursor=start,
+                end=end,
+            ),
+            owner_id=interaction.user.id,
         )
-        if error:
-            await interaction.followup.send(error, ephemeral=True)
-            return
-        assert log_range is not None
-        for embed in client.handler.embeds(log_range=log_range):
-            await interaction.followup.send(
-                embed=embed,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+        page = await view.load()
+        await interaction.followup.send(
+            **page.as_send_kwargs(),
+            view=view,
+            ephemeral=True,
+        )
 
     client.tree.add_command(manage)

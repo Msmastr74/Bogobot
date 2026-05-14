@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 import itertools
 import discord
-
-TELEMETRY_EMBED_LIMIT = 4000
-TELEMETRY_LINE_LIMIT = 30
+from utils.pagination import PageSection, PaginatedView, SectionRead
 
 class CommandTelemetryBase(TypedDict):
     interaction_id: int
@@ -39,29 +37,10 @@ class UserUsage:
     commands: Counter[str]
 
 @dataclass(frozen=True)
-class TelemetryCursor:
-    # Exclusive byte offset. The reader scans bytes before this offset.
-    # None means "start at EOF".
-    offset: int | None
-
-    # Logical index among matching telemetry entries, counted from newest.
-    # Used only for display.
-    index_from_end: int = 0
-
-@dataclass
-class TelemetryPage:
-    lines: list[str]
-    cursor: TelemetryCursor
-    end_index_from_end: int
-    next_cursor: TelemetryCursor | None
-
-    @property
-    def start_index(self) -> int:
-        return self.cursor.index_from_end
-
-    @property
-    def end_index(self) -> int:
-        return self.end_index_from_end
+class TelemetryState:
+    # Byte offsets from the start of the append-only telemetry file.
+    cursor: int
+    snapshot_end: int
 
 if TYPE_CHECKING:
     from main import BotCore
@@ -197,52 +176,45 @@ async def setup(bot: "BotCore"):
         pending_lines.append(json.dumps(action, separators=(",", ":")))
         schedule_flush()
 
-    def read_recent_from_file(
-        requested: set[str],
-        cursor: TelemetryCursor = TelemetryCursor(offset=None, index_from_end=0),
-    ) -> TelemetryPage:
+    def telemetry_eof_from_file() -> int:
         if not telemetry_path.exists():
-            return TelemetryPage(
-                lines=[],
-                cursor=cursor,
-                end_index_from_end=cursor.index_from_end,
-                next_cursor=None,
-            )
+            return 0
+        with telemetry_path.open("rb") as f:
+            return f.seek(0, 2)
 
-        output_lines: list[str] = []
-        current_len = 0
-        current_index = cursor.index_from_end
-        next_cursor: TelemetryCursor | None = None
-        leftover = b""
+    async def fresh_telemetry_state() -> TelemetryState:
+        async with telemetry_lock:
+            await flush_pending_locked()
+            eof = await asyncio.to_thread(telemetry_eof_from_file)
+        return TelemetryState(cursor=eof, snapshot_end=eof)
 
+    def parse_telemetry_line(raw_line: bytes, requested: set[str]) -> str | None:
         def action_matches(action: "CommandTelemetryEnd") -> bool:
             return not requested or action["command"] in requested
 
-        def try_add_line(line: str) -> bool:
-            """
-            Returns True if the page is full and this line should be deferred
-            to the next page.
-            """
-            nonlocal current_len
+        with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
+            action = parse_action(json.loads(raw_line))
+            if action is not None and action_matches(action):
+                return format_telemetry_line(action)
+        return None
 
-            line = line[:TELEMETRY_EMBED_LIMIT]
-            line_len = len(line) + (1 if output_lines else 0)
+    def read_previous_telemetry_section_from_file(
+        requested: set[str],
+        state: TelemetryState,
+    ) -> tuple[str, TelemetryState] | None:
+        if not telemetry_path.exists():
+            return None
 
-            if len(output_lines) >= TELEMETRY_LINE_LIMIT:
-                return True
+        cursor = min(state.cursor, state.snapshot_end)
+        if cursor <= 0:
+            return None
 
-            if output_lines and current_len + line_len > TELEMETRY_EMBED_LIMIT:
-                return True
-
-            output_lines.append(line)
-            current_len += line_len
-            return False
+        leftover = b""
 
         with telemetry_path.open("rb") as f:
-            eof = f.seek(0, 2)
-            position = eof if cursor.offset is None else min(cursor.offset, eof)
+            position = cursor
 
-            while position > 0 and next_cursor is None:
+            while position > 0:
                 read_size = min(8192, position)
                 chunk_start = position - read_size
 
@@ -266,195 +238,199 @@ async def setup(bot: "BotCore"):
                     line_start = line_end + 1
 
                 # Process newest to oldest within this chunk.
-                for _line_start, line_end, raw_line in reversed(line_offsets):
+                for line_start, _line_end, raw_line in reversed(line_offsets):
                     if not raw_line:
                         continue
 
-                    with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
-                        action = parse_action(json.loads(raw_line))
-                        if action is None or not action_matches(action):
-                            continue
-
-                        line = format_telemetry_line(action)
-
-                        if try_add_line(line):
-                            # We did not consume this action. Resume before/at this
-                            # line next time so it appears on the next older page.
-                            next_cursor = TelemetryCursor(
-                                offset=line_end,
-                                index_from_end=current_index,
-                            )
-                            break
-
-                        current_index += 1
+                    line = parse_telemetry_line(raw_line, requested)
+                    if line is not None:
+                        return line, TelemetryState(
+                            cursor=line_start,
+                            snapshot_end=state.snapshot_end,
+                        )
 
             # Handle the first line of the file, if any.
-            if leftover and next_cursor is None:
-                with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
-                    action = parse_action(json.loads(leftover))
-                    if action is not None and action_matches(action):
-                        line = format_telemetry_line(action)
+            if leftover:
+                line = parse_telemetry_line(leftover, requested)
+                if line is not None:
+                    return line, TelemetryState(cursor=0, snapshot_end=state.snapshot_end)
+        return None
 
-                        if try_add_line(line):
-                            next_cursor = TelemetryCursor(
-                                offset=len(leftover),
-                                index_from_end=current_index,
-                            )
-                        else:
-                            current_index += 1
-
-        return TelemetryPage(
-            # Keep newest-first. If you prefer chronological order per page,
-            # change this to list(reversed(output_lines)).
-            lines=output_lines,
-            cursor=cursor,
-            end_index_from_end=current_index,
-            next_cursor=next_cursor,
-        )
-    
-    async def read_telemetry_page(
+    def read_next_telemetry_section_from_file(
         requested: set[str],
-        cursor: TelemetryCursor,
-    ) -> TelemetryPage:
-        async with telemetry_lock:
-            await flush_pending_locked()
-            return await asyncio.to_thread(
-                read_recent_from_file,
-                requested,
-                cursor,
-            )
+        state: TelemetryState,
+    ) -> tuple[str, TelemetryState] | None:
+        if not telemetry_path.exists() or state.cursor >= state.snapshot_end:
+            return None
+
+        with telemetry_path.open("rb") as f:
+            f.seek(state.cursor)
+            while f.tell() < state.snapshot_end:
+                line_start = f.tell()
+                raw_line = f.readline(state.snapshot_end - line_start)
+                if not raw_line:
+                    return None
+
+                line_end = f.tell()
+                raw_line = raw_line.rstrip(b"\n")
+                if not raw_line:
+                    continue
+
+                line = parse_telemetry_line(raw_line, requested)
+                if line is not None:
+                    return line, TelemetryState(
+                        cursor=line_end,
+                        snapshot_end=state.snapshot_end,
+                    )
+        return None
+    
+    async def read_previous_telemetry_section(
+        requested: set[str],
+        state: TelemetryState,
+    ) -> tuple[str, TelemetryState] | None:
+        return await asyncio.to_thread(read_previous_telemetry_section_from_file, requested, state)
+
+    async def read_next_telemetry_section(
+        requested: set[str],
+        state: TelemetryState,
+    ) -> tuple[str, TelemetryState] | None:
+        return await asyncio.to_thread(read_next_telemetry_section_from_file, requested, state)
     
     def telemetry_title(
         requested_commands: list[str] | None,
-        page: TelemetryPage,
+        state: TelemetryState,
     ) -> str:
         title = "Recent Command Telemetry"
 
         if requested_commands:
             title = f"Telemetry: {', '.join('/' + command for command in requested_commands)}"
 
-        if page.start_index > 0:
-            title = f"{title} - Older {page.start_index}+"
+        if state.cursor < state.snapshot_end:
+            title = f"{title} - Older"
 
         return title
-
-    def telemetry_embed(
-        page: TelemetryPage,
-        requested_commands: list[str] | None,
-        requested: set[str],
-    ) -> discord.Embed:
-        if page.lines:
-            body = "\n".join(page.lines)
-        elif page.start_index > 0:
-            body = "No older telemetry."
-        else:
-            body = "No telemetry for that query." if requested else "No telemetry yet."
-
-        embed = discord.Embed(
-            title=telemetry_title(requested_commands, page),
-            description=body,
-            color=discord.Color.dark_teal(),
-        )
-
-        if page.lines:
-            embed.set_footer(
-                text=f"Showing entries {page.start_index + 1}-{page.end_index} from newest"
-            )
-
-        return embed
     
-    class TelemetryView(discord.ui.View):
+    class TelemetryView(PaginatedView[TelemetryState]):
         def __init__(
             self,
             *,
+            initial_state: TelemetryState,
             requested: set[str],
             requested_commands: list[str] | None,
             owner_id: int,
         ):
-            super().__init__(timeout=300)
+            super().__init__(
+                initial_state=initial_state,
+                owner_id=owner_id,
+                timeout=300,
+            )
             self.requested = requested
             self.requested_commands = requested_commands
-            self.owner_id = owner_id
-
-            self.cursor = TelemetryCursor(offset=None, index_from_end=0)
-            self.previous_cursors: list[TelemetryCursor] = []
-
-            self.current_page = TelemetryPage(
-                lines=[],
-                cursor=self.cursor,
-                end_index_from_end=0,
-                next_cursor=None,
+            self.newer = discord.ui.Button(
+                label="Newer",
+                style=discord.ButtonStyle.secondary,
+            )
+            self.refresh = discord.ui.Button(
+                label="Refresh",
+                style=discord.ButtonStyle.primary,
+            )
+            self.older = discord.ui.Button(
+                label="Older",
+                style=discord.ButtonStyle.secondary,
+            )
+            self.newer.callback = self.newer_action
+            self.refresh.callback = self.refresh_action
+            self.older.callback = self.older_action
+            self.controls = discord.ui.ActionRow(
+                self.newer,
+                self.refresh,
+                self.older,
             )
 
-        async def load(self) -> discord.Embed:
-            self.current_page = await read_telemetry_page(
-                self.requested,
-                self.cursor,
+        def page_allowed_mentions(self) -> discord.AllowedMentions | None:
+            return discord.AllowedMentions.none()
+
+        def empty_sections(self) -> list[PageSection]:
+            body = (
+                "No older telemetry."
+                if self.state.cursor < self.state.snapshot_end
+                else "No telemetry for that query." if self.requested else "No telemetry yet."
             )
-            self._sync_buttons()
-            return telemetry_embed(
-                self.current_page,
-                self.requested_commands,
-                self.requested,
+            return [
+                PageSection(
+                    title=telemetry_title(self.requested_commands, self.state),
+                    body=body,
+                    accent_colour=discord.Color.dark_teal(),
+                )
+            ]
+
+        def page_header(self, page) -> str | None:
+            return f"## {telemetry_title(self.requested_commands, self.state)}"
+
+        async def next_section(
+            self,
+            state: TelemetryState,
+        ) -> SectionRead[TelemetryState] | None:
+            result = await read_previous_telemetry_section(self.requested, state)
+            if result is None:
+                return None
+
+            line, next_state = result
+            return SectionRead(
+                section=PageSection(
+                    title=telemetry_title(self.requested_commands, state),
+                    body=line,
+                    accent_colour=discord.Color.dark_teal(),
+                ),
+                state=next_state,
             )
 
-        async def interaction_check(self, interaction: discord.Interaction) -> bool:
-            if interaction.user.id == self.owner_id:
-                return True
+        async def previous_section(
+            self,
+            state: TelemetryState,
+        ) -> SectionRead[TelemetryState] | None:
+            if state.cursor >= state.snapshot_end:
+                return None
 
-            await interaction.response.send_message(
-                "This telemetry view is not yours.",
-                ephemeral=True,
+            result = await read_next_telemetry_section(self.requested, state)
+            if result is None:
+                return None
+
+            line, previous_state = result
+            return SectionRead(
+                section=PageSection(
+                    title=telemetry_title(self.requested_commands, state),
+                    body=line,
+                    accent_colour=discord.Color.dark_teal(),
+                ),
+                state=previous_state,
             )
-            return False
 
-        def _sync_buttons(self) -> None:
-            self.newer.disabled = not self.previous_cursors
-            self.older.disabled = self.current_page.next_cursor is None
-            self.refresh.disabled = self.cursor.offset is not None
+        def sync_controls(self) -> None:
+            self.newer.disabled = self.previous_page_state is None
+            self.older.disabled = self.next_page_state is None
+            self.refresh.disabled = False
 
-        @discord.ui.button(label="Newer", style=discord.ButtonStyle.secondary)
-        async def newer(
+        def add_controls(self) -> None:
+            self.add_item(self.controls)
+
+        async def newer_action(
             self,
             interaction: discord.Interaction,
-            button: discord.ui.Button,
-        ):
-            if self.previous_cursors:
-                self.cursor = self.previous_cursors.pop()
+        ) -> None:
+            await self.show_previous_page(interaction)
 
-            await interaction.response.edit_message(
-                embed=await self.load(),
-                view=self,
-            )
-
-        @discord.ui.button(label="Refresh", style=discord.ButtonStyle.primary)
-        async def refresh(
+        async def refresh_action(
             self,
             interaction: discord.Interaction,
-            button: discord.ui.Button,
-        ):
-            self.cursor = TelemetryCursor(offset=None, index_from_end=0)
-            self.previous_cursors.clear()
+        ) -> None:
+            await self.set_state(interaction, await fresh_telemetry_state())
 
-            await interaction.response.edit_message(
-                embed=await self.load(),
-                view=self,
-            )
-
-        @discord.ui.button(label="Older", style=discord.ButtonStyle.secondary)
-        async def older(
+        async def older_action(
             self,
             interaction: discord.Interaction,
-            button: discord.ui.Button,
-        ):
-            if self.current_page.next_cursor is not None:
-                self.previous_cursors.append(self.cursor)
-                self.cursor = self.current_page.next_cursor
-
-            await interaction.response.edit_message(
-                embed=await self.load(),
-                view=self,
-            )
+        ) -> None:
+            await self.show_next_page(interaction)
     
     def status_icon(status: str) -> str:
         if status == "ok":
@@ -622,17 +598,18 @@ async def setup(bot: "BotCore"):
             return
 
         requested = set(requested_commands or [])
+        initial_state = await fresh_telemetry_state()
         view = TelemetryView(
+            initial_state=initial_state,
             requested=requested,
             requested_commands=requested_commands,
             owner_id=interaction.user.id,
         )
-        embed = await view.load()
+        page = await view.load()
 
         await bot.discord.send(
-            embed=embed,
+            **page.as_send_kwargs(),
             view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
             response=True
         )
 
