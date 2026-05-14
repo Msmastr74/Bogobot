@@ -1,6 +1,6 @@
 # Bogobot
 
-Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/DgfiqGPmGWY). The bot utilizes a hybrid of Optical Character Recognition (OCR) and YouTube Framework Metadata to provide high-accuracy statistics directly from the stream.
+Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/DgfiqGPmGWY). The bot uses OCR and stream-derived timing to provide high-accuracy statistics directly from the stream.
 
 ## Prerequisites
 
@@ -27,8 +27,8 @@ Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
 ## Configuration
 Go into `config.json` and provide the main credentials:
  * `bot_token`: Discord bot token.
- * `owner_uid`: Your Discord user ID.
- * `authorized_users`: User IDs mapped to authorization levels.
+ * `owner_uid`: Your Discord user ID. This account is forced to the owner rank on startup.
+ * `accounts_path`: Optional account database path. Defaults to `accounts.json`.
  * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
  * `fallback_client`: Optional fallback client after fatal startup/runtime errors. Defaults to true.
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.
@@ -50,13 +50,6 @@ Milestone templates use Python's `string.Template` syntax:
 ## Execution
 ```bash
 python main.py
-```
-
-For a simple server deployment, `harness.py` can run the bot and restart it
-after fast-forward git pulls:
-
-```bash
-python harness.py
 ```
 
 In your terminal output, you should see this:
@@ -84,6 +77,6 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage monitor: Starts or stops a persistent tracking system for stream serial numbers.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /roll: A random number generation utility.
- * /manage auth: Manages user permissions.
+ * /accounts: Manages account permission ranks.
 ## Documentation
 For technical details regarding the internal API, OCR configuration, channel proxies, and plugin development, refer to `DOCS.md`.

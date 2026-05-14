@@ -394,7 +394,7 @@ async def setup(bot: "BotCore"):
     @manage.command(
         name="state",
         description="Show or change bot process state",
-        perm_requirement=2,
+        perm_requirement=4,
     )
     async def state(
         interaction: discord.Interaction,
@@ -442,6 +442,7 @@ async def setup(bot: "BotCore"):
             await bot.discord.send(
                 embed=embed,
                 response=True,
+                ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 

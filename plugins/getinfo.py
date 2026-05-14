@@ -1,12 +1,9 @@
-import re
-
+import asyncio
 import discord
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from main import BotCore
-
-import time
 
 async def setup(bot: 'BotCore'):
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
@@ -19,18 +16,62 @@ async def setup(bot: 'BotCore'):
         await bot.discord.send_embed(embed=embed, response=True)
     
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
-    async def ping(interaction: discord.Interaction):
+    async def ping(
+        interaction: discord.Interaction,
+        user: discord.User | discord.Member | None = None
+    ):
         now = discord.utils.utcnow() 
-        ping_ms = (now - interaction.created_at).total_seconds() * 1000
-        if ping_ms > 500:
-            color = discord.Colour.red()
-        elif ping_ms > 200:
-            color = discord.Colour.orange()
-        else:
-            color = discord.Colour.blue()
-        embed = discord.Embed(title="Pong!", color=color, timestamp=now)
-        embed.add_field(name="Interaction Latency", value=f"{ping_ms:.2f} ms")
-        embed.add_field(name="Gateway Latency", value=f"{bot.latency * 1000:.2f} ms")
-        message = await bot.discord.send_embed(embed=embed, response=True)
-        if message is not None:
-            await message.add_reaction("🏓")
+        interaction_latency = (now - interaction.created_at).total_seconds() * 1000
+        
+        def choose_color(latency: float) -> discord.Colour:
+            if latency > 500:
+                return discord.Colour.red()
+            elif latency > 200:
+                return discord.Colour.orange()
+            elif latency < -50:
+                return discord.Colour.dark_magenta()
+            elif latency < 0:
+                return discord.Colour.brand_green()
+            elif latency < 50:
+                return discord.Colour.green()
+            else:
+                return discord.Colour.blue()
+        
+        embed = discord.Embed(title="Pong!", color=choose_color(interaction_latency), timestamp=now)
+        embed.add_field(name="Interaction Latency", value=f"{interaction_latency:.2f} ms")
+        
+        gateway_latency = bot.latency * 1000
+        embed.add_field(name="Gateway Latency", value=f"{gateway_latency:.2f} ms")
+        message = await bot.discord.send_embed(
+            embed=embed, response=True,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
+        if message is None:
+            return
+        await message.add_reaction("🏓")
+        
+        user = user or interaction.user
+        try:
+            user_msg = await bot.wait_for(
+                "message",
+                check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
+                timeout=60
+            )
+        except asyncio.TimeoutError:
+            return
+        if user_msg.nonce is not None:
+            try:
+                nonce = int(user_msg.nonce)
+            except ValueError:
+                return
+            user_client_time = discord.utils.snowflake_time(nonce)
+            msg_created_at = user_msg.created_at
+            user_latency = (msg_created_at - user_client_time).total_seconds() * 1000
+            user_text = f"{user.mention}: " if user.id != interaction.user.id else ""
+            await message.edit_embed(
+                name="User Latency" if user.id == interaction.user.id else f"{user.display_name}'s Latency",
+                value=f"{user_text}{user_latency:.2f} ms",
+                add_field=True, inline=True,
+                color=choose_color(user_latency),
+                allowed_mentions=discord.AllowedMentions.none()
+            )

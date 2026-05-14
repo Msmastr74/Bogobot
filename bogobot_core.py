@@ -12,9 +12,8 @@ import functools
 import asyncio
 import importlib
 import contextvars
-import aiohttp
 import time
-import tempfile
+import urllib.request
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
@@ -57,21 +56,34 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
 if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
+    from plugins.accounts import Account
 
 OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
 OcrResult = tuple[str, float]
 TesseractGroupKey = tuple[str, int]
 TesseractGroupItems = list[tuple[int, tuple[int, int, int, int]]]
+TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
+TESSERACT_LANGUAGE = "eng_fast"
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
-        self._config_lock = asyncio.Lock()
-        self._migrate_authorized_users()
+
+        self.accounts_path: str = self.config.get("accounts_path", "accounts.json")
+        if not os.path.exists(self.accounts_path):
+            with open(self.accounts_path, 'w') as f:
+                json.dump({}, f)
         
-        super().__init__(intents=discord.Intents.default())
+        with open(self.accounts_path, 'r') as f:
+            self.accounts: dict[str, 'Account'] = json.load(f)
+        
+        self._config_lock = asyncio.Lock()
+        self._accounts_lock = asyncio.Lock()
+        intents = discord.Intents.default()
+        intents.members = True
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         
         self.CELL_COORDS = (1170, 665, 1195, 685)
@@ -87,11 +99,11 @@ class BotCore(discord.Client):
                                 tuple[int, int, int, int, tuple[str | None, int | None]]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
-            "best_run": (645, 610, 730, 640, "0123456789/."),
+            "best_run": (645, 610, 730, 640, "0123456789/.dhm "),
             "shuffles_sec": (819, 610, 1043, 640),
             "elapsed_time": (1166, 0, 1180, 75),
-            "average_best_shuffle": (80, 670, 115, 685, "0123456789/."),
-            "uptime": (1160, 10, 1260, 30, "0123456789dhm ")
+            "average_best_shuffle": (80, 670, 115, 685, "0123456789/.dhm "),
+            "uptime": (1160, 10, 1260, 30, "0123456789/.dhm ")
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
@@ -104,6 +116,9 @@ class BotCore(discord.Client):
         self.logger = logging.getLogger("Bogobot")
         loglevel = logging.DEBUG if self.debug else logging.INFO
         self.logger.setLevel(loglevel)
+        self.tessdata_path: str = os.path.abspath(self.config.get("tessdata_path", "tessdata"))
+        self.tessdata_fast_url: str = self.config.get("tessdata_fast_url", TESSDATA_FAST_URL)
+        self._ensure_tessdata_fast()
 
         self.stream_handler = StreamHandler(
             url="https://www.youtube.com/live/DgfiqGPmGWY",
@@ -172,42 +187,12 @@ class BotCore(discord.Client):
         self._save_config_sync()
         return channel_data
 
-    def _migrate_authorized_users(self) -> None:
-        authorized_users = self.config.get("authorized_users", {})
-        migrated: dict[str, int] = {}
-
-        if isinstance(authorized_users, list):
-            for user_id in authorized_users:
-                try:
-                    migrated[str(int(user_id))] = 1
-                except (TypeError, ValueError):
-                    continue
-        elif isinstance(authorized_users, dict):
-            for user_id, level in authorized_users.items():
-                try:
-                    normalized_user_id = str(int(user_id))
-                    normalized_level = int(level)
-                except (TypeError, ValueError):
-                    continue
-                if normalized_level > 0:
-                    migrated[normalized_user_id] = min(normalized_level, 2)
-
-        if authorized_users != migrated:
-            self.config["authorized_users"] = migrated
-            self._save_config_sync()
-
     def authorization_level(self, user_id: int) -> int:
-        if user_id == self.config.get("owner_uid"):
-            return 3
-
-        authorized_users = self.config.get("authorized_users", {})
-        if not isinstance(authorized_users, dict):
+        if str(user_id) not in self.accounts:
             return 0
 
-        try:
-            return max(0, int(authorized_users.get(str(user_id), 0)))
-        except (TypeError, ValueError):
-            return 0
+        rank = self.accounts[str(user_id)]["perm_level"]
+        return rank
 
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
         return self.authorization_level(user_id) >= perm_requirement
@@ -251,7 +236,7 @@ class BotCore(discord.Client):
         
         # FIX: Added 'self' as the first argument
         def format_to_ddhhmmss(self, total_seconds):
-            seconds = int(total_seconds) - 1776273837
+            seconds = int(total_seconds) - 1776273017
             minutes = seconds // 60
             seconds = seconds % 60
             hours = minutes // 60
@@ -261,30 +246,8 @@ class BotCore(discord.Client):
             return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
 
         async def get_uptime(self):
-            url = "https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false"
-            payload = {
-                "context": {
-                    "client": {
-                        "hl": "en",
-                        "gl": "US",
-                        "clientName": "WEB",
-                        "clientVersion": "2.20260424.01.00"
-                    }
-                },
-                "videoId": "DgfiqGPmGWY"
-            }
-            
-            try:
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, json=payload) as response:
-                        response.raise_for_status()
-                        data = await response.json()
-                raw_seconds = data["frameworkUpdates"]["entityBatchUpdate"]["timestamp"]["seconds"]
-                
-                return self.format_to_ddhhmmss(raw_seconds)
-            except (KeyError, aiohttp.ClientError, asyncio.TimeoutError):
-                return "00:00:00:00"
+            raw_seconds = round(time.time())
+            return self.format_to_ddhhmmss(raw_seconds)
 
         async def get_best_shuffles(self):
             is_new = self.outer._current_vals_updated
@@ -443,12 +406,17 @@ class BotCore(discord.Client):
                 ) -> None:
                     whitelist, psm = key
                     cells: list[Image.Image] = [img.crop(coords) for _, coords in items]
+                    if len(cells) < 1:
+                        return
                     async with semaphore:
-                        group_results: list[OcrResult] = await self.tesseract_parse_batch(
-                            cells,
-                            whitelist,
-                            psm=psm,
-                        )
+                        if len(cells) == 1:
+                            group_results: list[OcrResult] = [await self.tesseract_parse(cells[0], whitelist, psm=psm)]
+                        else:
+                            group_results: list[OcrResult] = await self.tesseract_parse_batch(
+                                cells,
+                                whitelist,
+                                psm=psm,
+                            )
                     for (index, _), result in zip(items, group_results):
                         results[index] = result
 
@@ -550,7 +518,7 @@ class BotCore(discord.Client):
 
         async def send_embed(
             self,
-            contents=None,
+            description=None,
             *,
             embed: discord.Embed | None = None,
             title="embed",
@@ -564,7 +532,7 @@ class BotCore(discord.Client):
             if embed is None:
                 embed = discord.Embed(
                     title=title,
-                    description=contents,
+                    description=description,
                     color=color,
                 )
                 embed.set_footer(text=footer)
@@ -626,12 +594,6 @@ class BotCore(discord.Client):
                 if not self.message:
                     return
 
-                if self.embed is not None and any(
-                    key in kwargs for key in ("title", "footer", "author", "color", "add_field")
-                ):
-                    await self.edit_embed(contents, **kwargs)
-                    return
-
                 if contents is not None and "content" not in kwargs:
                     kwargs["content"] = contents
 
@@ -645,26 +607,29 @@ class BotCore(discord.Client):
 
             async def edit_embed(
                 self,
-                contents=None,
+                description=None,
                 *,
                 embed: discord.Embed | None = None,
                 title=None,
                 footer=None,
                 author=None,
                 color=None,
-                add_field=False,
+                add_field=False, name=None, value=None, inline=False,
                 **kwargs,
             ):
                 if not self.message:
                     return
 
                 new_embed = embed or self._updated_embed(
-                    contents=contents,
+                    description=description,
                     title=title,
                     footer=footer,
                     author=author,
                     color=color,
                     add_field=add_field,
+                    name=name,
+                    value=value,
+                    inline=inline
                 )
 
                 try:
@@ -673,29 +638,21 @@ class BotCore(discord.Client):
                 except discord.NotFound:
                     self.message = None
 
-            def _updated_embed(self, contents=None, title=None, footer=None, author=None, color=None, add_field=False):
+            def _updated_embed(
+                self, description=None, title=None, footer=None, author=None, color=None,
+                add_field=False, name=None, value=None, inline=False
+            ):
                 old = self.embed or discord.Embed()
+                new_embed = discord.Embed.from_dict(old.to_dict())
+                if title is not None:
+                    new_embed.title = title
+                if description is not None:
+                    new_embed.description = description
+                if color is not None:
+                    new_embed.colour = color
 
                 if add_field:
-                    new_embed = discord.Embed.from_dict(old.to_dict())
-                    new_embed.add_field(
-                        name=title or "Info",
-                        value=contents or "N/A",
-                        inline=False,
-                    )
-                else:
-                    new_embed = discord.Embed(
-                        title=title or old.title,
-                        description=contents or old.description,
-                        color=color or old.color,
-                    )
-
-                    for field in old.fields:
-                        new_embed.add_field(
-                            name=field.name,
-                            value=field.value,
-                            inline=field.inline,
-                        )
+                    new_embed.add_field(name=name, value=value, inline=inline)
 
                 current_author = old.author.name if old.author else ""
                 new_embed.set_author(name=author or current_author)
@@ -783,6 +740,34 @@ class BotCore(discord.Client):
                 await callback()
             except Exception as e:
                 self.logger.warning(f"Error in on_ready callback: {e}")
+        guild_count = 0
+        member_count = 0
+        added_member_count = 0
+        guild_member_count = 0
+        added_guild_member_count = 0
+        self.logger.info("Beginning automatic account creation...")
+        for guild in self.guilds:
+            guild_count += 1
+            for member in guild.members:
+                guild_member_count += 1
+                member_count += 1
+                if str(member.id) not in self.accounts:
+                    added_member_count += 1
+                    added_guild_member_count += 1
+                    self.accounts[str(member.id)] = {"perm_level": 0}
+            self.logger.info(f"Automatically created {added_guild_member_count} accounts out of {guild_member_count} members from {guild.name} ({guild.id})")
+            guild_member_count = 0
+            added_guild_member_count = 0
+        
+        owner_uid = str(self.config["owner_uid"])
+        for uid, account in self.accounts.items():
+            if account["perm_level"] == 4 and uid != owner_uid:
+                account["perm_level"] = 3
+        if owner_uid in self.accounts:
+            self.accounts[owner_uid]["perm_level"] = 4
+
+        await self.save_accounts()
+        self.logger.info(f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers")
 
     async def load_plugins(self, folder_name="plugins"):
         if not os.path.exists(folder_name):
@@ -797,6 +782,13 @@ class BotCore(discord.Client):
     async def save_config(self):
         async with self._config_lock:
             self._save_config_sync()
+
+    async def save_accounts(self):
+        async with self._accounts_lock:
+            tmp_path = f"{self.accounts_path}.tmp"
+            with open(tmp_path, 'w') as f:
+                json.dump(self.accounts, f, indent=4)
+            os.replace(tmp_path, self.accounts_path)
 
     async def run_bot(self):
         self.stream_handler.async_loop = self.loop
@@ -898,6 +890,46 @@ class BotCore(discord.Client):
 
         return buffer.tobytes()
 
+    def _tesseract_cell_image(self, pil_cell: 'Image.Image') -> Image.Image:
+        processed = self._preprocess_cell(pil_cell)
+        return Image.fromarray(processed)
+
+    def _ensure_tessdata_fast(self) -> None:
+        tessdata_file = os.path.join(
+            self.tessdata_path,
+            f"{TESSERACT_LANGUAGE}.traineddata",
+        )
+
+        if os.path.exists(tessdata_file) and os.path.getsize(tessdata_file) > 0:
+            return
+
+        os.makedirs(self.tessdata_path, exist_ok=True)
+        tmp_path = f"{tessdata_file}.tmp"
+
+        self.logger.info(
+            f"Downloading {TESSERACT_LANGUAGE}.traineddata to {self.tessdata_path}"
+        )
+        try:
+            with urllib.request.urlopen(self.tessdata_fast_url, timeout=30) as response:
+                status = getattr(response, "status", 200)
+                if status >= 400:
+                    raise RuntimeError(f"HTTP {status}")
+
+                with open(tmp_path, "wb") as f:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+            os.replace(tmp_path, tessdata_file)
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
     async def tesseract_parse(
         self,
         pil_cell: 'Image.Image',
@@ -910,19 +942,21 @@ class BotCore(discord.Client):
             "tesseract",
             "stdin",
             "stdout",
+            "--tessdata-dir", self.tessdata_path,
+            "-l", TESSERACT_LANGUAGE,
             "--psm", str(psm),
             "--oem", "3",
             "-c", "load_system_dawg=0",
             "-c", "load_freq_dawg=0",
             "-c", f"tessedit_char_whitelist={whitelist}",
-            "tsv"
+            "-c", "tessedit_create_tsv=1",
         ]
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate(input=image_bytes)
         stderr_text = stderr.decode(errors="ignore").strip()
@@ -958,42 +992,40 @@ class BotCore(discord.Client):
         if not pil_cells:
             return []
 
-        image_bytes_by_page: list[bytes] = [
-            self._encode_tesseract_cell(pil_cell)
+        page_images: list[Image.Image] = [
+            self._tesseract_cell_image(pil_cell)
             for pil_cell in pil_cells
         ]
 
-        with tempfile.TemporaryDirectory(prefix="bogobot_ocr_") as tmpdir:
-            image_paths: list[str] = []
-            for index, image_bytes in enumerate(image_bytes_by_page):
-                image_path = os.path.join(tmpdir, f"{index}.png")
-                with open(image_path, "wb") as f:
-                    f.write(image_bytes)
-                image_paths.append(image_path)
+        tiff_image = io.BytesIO()
+        page_images[0].save(
+            tiff_image,
+            format="TIFF",
+            save_all=True,
+            append_images=page_images[1:],
+        )
 
-            list_path = os.path.join(tmpdir, "images.txt")
-            with open(list_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(image_paths))
-                f.write("\n")
+        cmd = [
+            "tesseract",
+            "stdin",
+            "stdout",
+            "--tessdata-dir", self.tessdata_path,
+            "-l", TESSERACT_LANGUAGE,
+            "--psm", str(psm),
+            "--oem", "3",
+            "-c", "load_system_dawg=0",
+            "-c", "load_freq_dawg=0",
+            "-c", f"tessedit_char_whitelist={whitelist}",
+            "-c", "tessedit_create_tsv=1",
+        ]
 
-            cmd = [
-                "tesseract",
-                list_path,
-                "stdout",
-                "--psm", str(psm),
-                "--oem", "3",
-                "-c", "load_system_dawg=0",
-                "-c", "load_freq_dawg=0",
-                "-c", f"tessedit_char_whitelist={whitelist}",
-                "tsv"
-            ]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(input=tiff_image.getvalue())
 
         stderr_text = stderr.decode(errors="ignore").strip()
 
@@ -1013,12 +1045,15 @@ class BotCore(discord.Client):
         )
 
         results: list[OcrResult] = []
-        for image_bytes, (out, conf) in zip(image_bytes_by_page, parsed):
+        for page_image, (out, conf) in zip(page_images, parsed):
             res = ""
             for char in out:
                 if char in whitelist:
                     res += char
-            self._save_ocr_debug('ocr_debug', image_bytes, f'{conf:.2f}c_{out}')
+            if self.config.get("save_ocr_debug", False):
+                debug_image = io.BytesIO()
+                page_image.save(debug_image, format="PNG")
+                self._save_ocr_debug('ocr_debug', debug_image.getvalue(), f'{conf:.2f}c_{out}')
             results.append((res, conf))
 
         return results

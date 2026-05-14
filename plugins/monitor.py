@@ -226,7 +226,7 @@ async def setup(bot: "BotCore"):
         try:
             message = await bot.discord.send_embed(
                 title="Monitor",
-                contents="Initializing...",
+                description="Initializing...",
                 footer="Oldest → Newest [?? = Unknown]",
                 response=False
             )

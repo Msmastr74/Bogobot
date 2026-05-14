@@ -684,7 +684,7 @@ async def setup(bot: "BotCore"):
 
         await bot.discord.send_embed(
             title=title,
-            contents=body[:4000],
+            description=body[:4000],
             color=discord.Color.blurple(),
             allowed_mentions=discord.AllowedMentions.none(),
             response=True
