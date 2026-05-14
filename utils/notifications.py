@@ -111,6 +111,7 @@ class NotificationBroadcaster:
         self,
         topic: str,
         create_files: Callable[[], list[discord.File]] | None = None,
+        create_view: Callable[[], discord.ui.View | discord.ui.LayoutView] | None = None,
         **kwargs: Any,
     ) -> int:
         sent = 0
@@ -121,9 +122,12 @@ class NotificationBroadcaster:
                 stale_channel_ids.append(channel_id)
                 continue
             try:
+                send_kwargs = kwargs.copy()
                 if create_files is not None:
-                    kwargs["files"] = create_files()
-                await cast(Any, channel).send(**kwargs)
+                    send_kwargs["files"] = create_files()
+                if create_view is not None:
+                    send_kwargs["view"] = create_view()
+                await cast(Any, channel).send(**send_kwargs)
             except (discord.NotFound, discord.Forbidden):
                 stale_channel_ids.append(channel_id)
             except Exception as exc:

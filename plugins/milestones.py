@@ -21,6 +21,48 @@ DEFAULT_MILESTONE_INITIALIZE_FORMAT = "$milestone_name initialized to `$new_valu
 DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to `$new_value`."
 
 
+class MilestoneMessageView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        title: str,
+        body: str,
+        gallery_items: list[tuple[str, str]] | None = None,
+    ):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.TextDisplay(f"## {title}"))
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(body or "\u200b"),
+            accent_colour=discord.Color.gold(),
+        ))
+
+        if gallery_items:
+            gallery = discord.ui.MediaGallery()
+            for filename, description in gallery_items[:10]:
+                gallery.add_item(
+                    media=f"attachment://{filename}",
+                    description=description[:256],
+                )
+            self.add_item(gallery)
+
+
+def milestone_image_file_factory(img: Image.Image, filename: str) -> Callable[[], discord.File]:
+    def create_file() -> discord.File:
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+        return discord.File(buffer, filename=filename)
+
+    return create_file
+
+
+def safe_milestone_filename_value(value: str) -> str:
+    safe_value = "".join(
+        c for c in value if c.isalnum() or c in (" ", "_", "-", ",")
+    ).rstrip()
+    return safe_value or "value"
+
+
 class MilestoneTracker:
     def __init__(self, bot: "BotCore"):
         self.bot = bot
@@ -269,6 +311,7 @@ class MilestoneTracker:
             return
 
         file_templates: list[Callable[[], discord.File]] = []
+        gallery_items: list[tuple[str, str]] = []
         value_lines: list[str] = []
         history = self.history.get(milestone_name)
         if history:
@@ -300,36 +343,42 @@ class MilestoneTracker:
             selected_frames = history_list[start_idx:end_idx]
             
             for idx, (val, timestamp, img) in enumerate(selected_frames):
-                line = f"<t:{timestamp}:T>: `{val}`"
+                frame_index = start_idx + idx
+                idx_text = str(frame_index + 1).ljust(len(str(end_idx + 1)))
+                line = f"`#{idx_text}` <t:{timestamp}:T> `{val}`"
                 if img:
-                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
-                    
-                    def bytesIO(img: Image.Image):
-                        b = io.BytesIO()
-                        img.save(b, format="PNG")
-                        b.seek(0)
-                        return b
-                    filename = f"frame_{start_idx + idx}_{safe_val}.png"
-                    file_templates.append(
-                        lambda img=img, filename=filename:
-                            discord.File(bytesIO(img), filename=filename)
+                    filename = f"frame_{frame_index}_{safe_milestone_filename_value(val)}.png"
+                    file_templates.append(milestone_image_file_factory(img, filename))
+                    gallery_items.append(
+                        (
+                            filename,
+                            f"Frame {frame_index}: {val} at <t:{timestamp}:T>",
+                        )
                     )
-                    line += f" - Image {len(file_templates)}"
+                    img_idx_text = str(len(file_templates)).ljust(2)
+                    line += f" [image `{img_idx_text}`]"
                 value_lines.append(line)
 
-        notify_content = f"{content}\n" + "\n".join(value_lines) if value_lines else content
+        notify_body = f"{content}\n\n" + "\n".join(value_lines) if value_lines else content
+
+        def create_view() -> MilestoneMessageView:
+            return MilestoneMessageView(
+                title=milestone_name,
+                body=notify_body,
+                gallery_items=gallery_items,
+            )
 
         if file_templates:
             await self.bot.notifications.notify(
                 MILESTONE_USAGE_TYPE,
-                content=notify_content,
+                create_view=create_view,
                 create_files=lambda: list(map(lambda t: t(), file_templates)),
             )
             return
 
         await self.bot.notifications.notify(
             MILESTONE_USAGE_TYPE,
-            content=notify_content
+            create_view=create_view,
         )
 
 
@@ -508,32 +557,41 @@ async def setup(bot: "BotCore"):
         history_count = len(history) if history else 0
         current_value = await milestone_tracker.get(milestone_name)
         
-        files: list[discord.File] = []
+        file_templates: list[Callable[[], discord.File]] = []
+        gallery_items: list[tuple[str, str]] = []
         history_lines: list[str] = []
         if history:
             history_list = list(history)
             start_idx = max(0, len(history_list) - 10)
             
             for idx, (val, timestamp, img) in enumerate(history_list):
-                line = f"<t:{timestamp}:T>: `{val}`"
+                idx_text = str(idx + 1).ljust(len(str(len(history_list))))
+                line = f"`#{idx_text}` <t:{timestamp}:T> `{val}`"
                 if idx >= start_idx and img:
-                    b = io.BytesIO()
-                    img.save(b, format="PNG")
-                    b.seek(0)
-                    safe_val = "".join(c for c in val if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
-                    files.append(discord.File(b, filename=f"frame_{idx}_{safe_val}.png"))
-                    line += f" - Image {len(files)}"
+                    filename = f"frame_{idx}_{safe_milestone_filename_value(val)}.png"
+                    file_templates.append(milestone_image_file_factory(img, filename))
+                    gallery_items.append((filename, f"Frame {idx}: {val} at <t:{timestamp}:T>"))
+                    img_idx_text = str(len(file_templates)).ljust(2)
+                    line += f" [image `{img_idx_text}`]"
                 history_lines.append(line)
         
-        kwargs = { 'files': files } if files else {}
         history_text = "\n".join(history_lines) if history_lines else "(empty)"
+        body = (
+            f"Current value: `{current_value or 'None'}`\n"
+            f"History items: `{history_count}`\n\n"
+            f"{history_text}"
+        )
+        files = [template() for template in file_templates]
+        view = MilestoneMessageView(
+            title=milestone_name,
+            body=body,
+            gallery_items=gallery_items,
+        )
         await bot.discord.send(
-            f"{milestone_name} current value: `{current_value or 'None'}`\n"
-            f"History items: `{history_count}`\n"
-            f"{history_text}",
             response=True,
             ephemeral=ephemeral,
-            **kwargs
+            files=files,
+            view=view,
         )
 
     @milestone_info.autocomplete("milestone_name")
