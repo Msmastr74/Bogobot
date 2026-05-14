@@ -16,6 +16,7 @@ User-edited settings:
 - `debug`: Enable debug logging for Bogobot.
 - `silence_stream`: Suppress Streamlink/FFmpeg subprocess output. Defaults to false, but stream output is also quiet unless `debug` is true.
 - `cookies`: Optional Streamlink HTTP cookies. Use either a list of `name=value` strings or an object whose keys and values are converted to `name=value`. Each entry is passed as `--http-cookie`.
+- `http_headers`: Optional Streamlink HTTP headers. Use either a list of `Name=value` strings or an object whose keys and values are converted to `Name=value`. Each entry is passed as `--http-header`. Useful for `User-Agent` or `Referer`.
 - `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.

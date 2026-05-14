@@ -124,6 +124,7 @@ class BotCore(discord.Client):
             on_new_frame=self.on_new_frame,
             fps=1.1,
             cookies=self._streamlink_cookies(),
+            http_headers=self._streamlink_http_headers(),
             quiet=self.config.get(
                 "silence_stream", False) or not self.debug,
             logger=self.logger.getChild("Stream"),
@@ -210,6 +211,22 @@ class BotCore(discord.Client):
         if isinstance(cookies, list):
             return [str(cookie) for cookie in cookies]
         self.logger.warning("Ignoring config cookies because it is not a list or object")
+        return []
+
+    def _streamlink_http_headers(self) -> list[str]:
+        headers = self.config.get("http_headers")
+        if headers is None:
+            headers = self.config.get("headers")
+        if headers is None:
+            return []
+        if isinstance(headers, dict):
+            return [
+                f"{name}={value}"
+                for name, value in headers.items()
+            ]
+        if isinstance(headers, list):
+            return [str(header) for header in headers]
+        self.logger.warning("Ignoring config http_headers because it is not a list or object")
         return []
 
     def command_telemetry_callback(
