@@ -71,6 +71,12 @@ async def setup(bot: "BotCore"):
     from utils import groups
 
     manage = groups.manage(bot)
+    accounts = groups.accounts(bot)
+    hidden_commands: list[str] = [
+        manage.group.name,
+        accounts.group.name,
+    ]
+
     telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.jsonl"))
     flush_interval = max(0.1, float(bot.config.get("telemetry_flush_interval", 2)))
     active: dict[tuple[int, str], "CommandTelemetryEvent"] = {}
@@ -83,9 +89,13 @@ async def setup(bot: "BotCore"):
     users_by_command: defaultdict[str, Counter[int]] = defaultdict(Counter)
 
     def is_public_action(action: "CommandTelemetryEnd") -> bool:
-        return action["status"] == "ok" and not action["command"].startswith(
-            manage.group.name + " "
-        )
+        return action["status"] == "ok" and is_public_command(action["command"])
+    
+    def is_public_command(command: str) -> bool:
+        for entry in hidden_commands:
+            if command == entry or command.startswith(entry + " "):
+                return False
+        return True
 
     def add_usage(action: "CommandTelemetryEnd") -> None:
         if not is_public_action(action):
@@ -568,10 +578,9 @@ async def setup(bot: "BotCore"):
         ):
             if isinstance(command, discord.app_commands.Group):
                 continue
+            if is_public_command(command.qualified_name):
+                valid_public_commands.add(command.qualified_name)
             all_valid_commands.add(command.qualified_name)
-            if command.qualified_name.startswith(manage.group.name + " "):
-                continue
-            valid_public_commands.add(command.qualified_name)
 
     load_actions()
 
