@@ -2,8 +2,6 @@ import discord
 from discord import app_commands
 import json
 import hashlib
-import csv
-import io
 import numpy as np
 from PIL import Image
 import cv2
@@ -13,8 +11,8 @@ import asyncio
 import importlib
 import contextvars
 import time
-import urllib.request
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
+from ocr import LibTesseractOCR, OcrCrop, OcrResult, TESSDATA_FAST_URL
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
@@ -58,12 +56,8 @@ if TYPE_CHECKING:
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
     from plugins.accounts import Account
 
-OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
-OcrResult = tuple[str, float]
 TesseractGroupKey = tuple[str, int]
 TesseractGroupItems = list[tuple[int, tuple[int, int, int, int]]]
-TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
-TESSERACT_LANGUAGE = "eng_fast"
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
@@ -90,7 +84,7 @@ class BotCore(discord.Client):
         self.CELL_OFFSET = 37 # x offset per historical cell
         self.SORT_AREA_COORDS = (75, 60, 1205, 575)
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.1)
-        self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 4)))
+        self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 1)))
         self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
 
         self.STATS_COORDS: dict[str, 
@@ -116,9 +110,13 @@ class BotCore(discord.Client):
         self.logger = logging.getLogger("Bogobot")
         loglevel = logging.DEBUG if self.debug else logging.INFO
         self.logger.setLevel(loglevel)
-        self.tessdata_path: str = os.path.abspath(self.config.get("tessdata_path", "tessdata"))
-        self.tessdata_fast_url: str = self.config.get("tessdata_fast_url", TESSDATA_FAST_URL)
-        self._ensure_tessdata_fast()
+        self.ocr = LibTesseractOCR(
+            tessdata_path=self.config.get("tessdata_path", "tessdata"),
+            tessdata_fast_url=self.config.get("tessdata_fast_url", TESSDATA_FAST_URL),
+            save_debug=self.config.get("save_ocr_debug", False),
+            logger=self.logger.getChild("OCR"),
+            library_path=self.config.get("libtesseract_path"),
+        )
 
         self.stream_handler = StreamHandler(
             url="https://www.youtube.com/live/DgfiqGPmGWY",
@@ -426,14 +424,11 @@ class BotCore(discord.Client):
                     if len(cells) < 1:
                         return
                     async with semaphore:
-                        if len(cells) == 1:
-                            group_results: list[OcrResult] = [await self.tesseract_parse(cells[0], whitelist, psm=psm)]
-                        else:
-                            group_results: list[OcrResult] = await self.tesseract_parse_batch(
-                                cells,
-                                whitelist,
-                                psm=psm,
-                            )
+                        group_results: list[OcrResult] = await self.ocr.parse_batch(
+                            cells,
+                            whitelist,
+                            psm=psm,
+                        )
                     for (index, _), result in zip(items, group_results):
                         results[index] = result
 
@@ -815,366 +810,10 @@ class BotCore(discord.Client):
     async def close(self):
         self.logger.info("Shutting down bot...")
         self.stream_handler.stop()
+        self.ocr.close()
         await self.edits.close()
         await self.notifications.close()
         await super().close() 
-
-    def _preprocess_cell(self, pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15, threshold=165):
-        # 1. Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
-        img = np.array(pil_cell.convert("L"))
-        upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
-        _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
-
-        # 2. Contour Extraction & Sorting
-        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
-        bw = np.ones_like(mask) * 255
-        img_h, img_w = mask.shape
-        image_area = img_h * img_w
-        shells = [] 
-
-        def draw_inward_stroke(cnt: np.ndarray):
-            contour_mask = np.zeros_like(mask)
-            cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=-1)
-
-            kernel = np.ones((stroke_thickness, stroke_thickness), np.uint8)
-            inner = cv2.erode(contour_mask, kernel, iterations=1)
-            stroke = cv2.subtract(contour_mask, inner)
-            bw[stroke > 0] = 0
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            x, y, w, h = cv2.boundingRect(cnt)
-            
-            # A: Ignore the image border
-            if area > (image_area * 0.9):
-                continue
-
-            # B: Spatial Containment (Check if inside a Zero or Normal digit)
-            parent_shell = None
-            for s in shells:
-                sx, sy, sw, sh = s['box']
-                if x >= sx-2 and y >= sy-2 and (x+w) <= (sx+sw+2) and (y+h) <= (sy+sh+2):
-                    parent_shell = s
-                    break
-            
-            # C: Suppression: Don't draw the 'slash' inside a Zero
-            if parent_shell and parent_shell['type'] == 'zero':
-                continue
-
-            # D: Normalization for scoring
-            norm_scale = 100.0 / h if h > 0 else 1
-            cnt_norm = ((cnt.astype(np.float32) - [x, y]) * norm_scale).astype(np.float32)
-
-            ellipse_score = 0
-            if len(cnt_norm) >= 5:
-                _, (MA, ma), _ = cv2.fitEllipse(cnt_norm)
-                ellipse_area = (np.pi * MA * ma) / 4.0
-                ellipse_score = cv2.contourArea(cnt_norm) / ellipse_area if ellipse_area > 0 else 0
-
-            # E: Solidity Check (Zero = High, 8 = Low due to waist)
-            hull = cv2.convexHull(cnt)
-            hull_area = cv2.contourArea(hull)
-            solidity = area / hull_area if hull_area > 0 else 0
-
-            # G: Hybrid Rendering
-            if parent_shell:
-                # Hole in 9, 8, etc -> Fill White
-                cv2.drawContours(bw, [cnt], -1, 255, thickness=-1)
-            else:
-                # New Shell -> Determine if it's a 0 or a normal digit
-                if ellipse_score > 0.88 and solidity > 0.94:
-                    draw_inward_stroke(cnt)
-                    shells.append({'box': (x, y, w, h), 'type': 'zero'})
-                else:
-                    cv2.drawContours(bw, [cnt], -1, 0, thickness=-1)
-                    shells.append({'box': (x, y, w, h), 'type': 'normal'})
-
-        # 3. Final Polish: Padding + Dilation (thins the black text)
-        bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-        bw = cv2.dilate(bw, np.ones((2, 2), np.uint8), iterations=1) 
-        
-        return bw
-
-    def _encode_tesseract_cell(self, pil_cell: 'Image.Image') -> bytes:
-        processed = self._preprocess_cell(pil_cell)
-
-        success, buffer = cv2.imencode(".png", processed)
-        if not success:
-            raise ValueError("Could not encode image")
-
-        return buffer.tobytes()
-
-    def _tesseract_cell_image(self, pil_cell: 'Image.Image') -> Image.Image:
-        processed = self._preprocess_cell(pil_cell)
-        return Image.fromarray(processed)
-
-    def _ensure_tessdata_fast(self) -> None:
-        tessdata_file = os.path.join(
-            self.tessdata_path,
-            f"{TESSERACT_LANGUAGE}.traineddata",
-        )
-
-        if os.path.exists(tessdata_file) and os.path.getsize(tessdata_file) > 0:
-            return
-
-        os.makedirs(self.tessdata_path, exist_ok=True)
-        tmp_path = f"{tessdata_file}.tmp"
-
-        self.logger.info(
-            f"Downloading {TESSERACT_LANGUAGE}.traineddata to {self.tessdata_path}"
-        )
-        try:
-            with urllib.request.urlopen(self.tessdata_fast_url, timeout=30) as response:
-                status = getattr(response, "status", 200)
-                if status >= 400:
-                    raise RuntimeError(f"HTTP {status}")
-
-                with open(tmp_path, "wb") as f:
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-
-            os.replace(tmp_path, tessdata_file)
-        except Exception:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-            raise
-
-    async def tesseract_parse(
-        self,
-        pil_cell: 'Image.Image',
-        whitelist: str,
-        psm: int = 7,
-    ) -> OcrResult:
-        image_bytes = self._encode_tesseract_cell(pil_cell)
-
-        cmd = [
-            "tesseract",
-            "stdin",
-            "stdout",
-            "--tessdata-dir", self.tessdata_path,
-            "-l", TESSERACT_LANGUAGE,
-            "--psm", str(psm),
-            "--oem", "3",
-            "-c", "load_system_dawg=0",
-            "-c", "load_freq_dawg=0",
-            "-c", f"tessedit_char_whitelist={whitelist}",
-            "-c", "tessedit_create_tsv=1",
-        ]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate(input=image_bytes)
-        stderr_text = stderr.decode(errors="ignore").strip()
-        
-        if process.returncode != 0:
-            if stderr_text:
-                self.logger.error(f"tesseract: {stderr_text}")
-            # Manually raise an error so the loop/bot knows it failed
-            raise RuntimeError(
-                f"Tesseract failed with code {process.returncode}: {stderr_text}"
-            )
-
-        if stderr_text:
-            self.logger.debug(f"tesseract: {stderr_text}")
-
-        out, conf = self._parse_tesseract_tsv_stdout(stdout.decode(errors="ignore"))
-
-        res = ""
-        for char in out:
-            if char in whitelist:
-                res += char
-
-        self._save_ocr_debug('ocr_debug', image_bytes, f'{conf:.2f}c_{out}')
-
-        return res, conf
-
-    async def tesseract_parse_batch(
-        self,
-        pil_cells: list['Image.Image'],
-        whitelist: str,
-        psm: int = 7,
-    ) -> list[OcrResult]:
-        if not pil_cells:
-            return []
-
-        page_images: list[Image.Image] = [
-            self._tesseract_cell_image(pil_cell)
-            for pil_cell in pil_cells
-        ]
-
-        tiff_image = io.BytesIO()
-        page_images[0].save(
-            tiff_image,
-            format="TIFF",
-            save_all=True,
-            append_images=page_images[1:],
-        )
-
-        cmd = [
-            "tesseract",
-            "stdin",
-            "stdout",
-            "--tessdata-dir", self.tessdata_path,
-            "-l", TESSERACT_LANGUAGE,
-            "--psm", str(psm),
-            "--oem", "3",
-            "-c", "load_system_dawg=0",
-            "-c", "load_freq_dawg=0",
-            "-c", f"tessedit_char_whitelist={whitelist}",
-            "-c", "tessedit_create_tsv=1",
-        ]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate(input=tiff_image.getvalue())
-
-        stderr_text = stderr.decode(errors="ignore").strip()
-
-        if process.returncode != 0:
-            if stderr_text:
-                self.logger.error(f"tesseract: {stderr_text}")
-            raise RuntimeError(
-                f"Tesseract batch failed with code {process.returncode}: {stderr_text}"
-            )
-
-        if stderr_text:
-            self.logger.debug(f"tesseract: {stderr_text}")
-
-        parsed: list[OcrResult] = self._parse_tesseract_tsv_pages(
-            stdout.decode(errors="ignore"),
-            page_count=len(pil_cells),
-        )
-
-        results: list[OcrResult] = []
-        for page_image, (out, conf) in zip(page_images, parsed):
-            res = ""
-            for char in out:
-                if char in whitelist:
-                    res += char
-            if self.config.get("save_ocr_debug", False):
-                debug_image = io.BytesIO()
-                page_image.save(debug_image, format="PNG")
-                self._save_ocr_debug('ocr_debug', debug_image.getvalue(), f'{conf:.2f}c_{out}')
-            results.append((res, conf))
-
-        return results
-    
-    def _parse_tesseract_tsv_stdout(self, stdout: str) -> OcrResult:
-        """
-        Parse Tesseract TSV stdout and return:
-        (combined_text, confidence_0_to_1)
-
-        Confidence is averaged across non-empty text rows with valid conf values.
-        Tesseract conf is usually 0-100, with -1 for non-text structural rows.
-        """
-        rows = csv.DictReader(io.StringIO(stdout), delimiter="\t")
-        return self._parse_tesseract_tsv_rows(list(rows))
-
-    def _parse_tesseract_tsv_pages(
-        self,
-        stdout: str,
-        *,
-        page_count: int,
-    ) -> list[OcrResult]:
-        rows_by_page: list[list[dict[str, str]]] = [
-            []
-            for _ in range(page_count)
-        ]
-
-        rows = csv.DictReader(io.StringIO(stdout), delimiter="\t")
-        for row in rows:
-            try:
-                page_num = int(row.get("page_num", "1"))
-            except ValueError:
-                page_num = 1
-            page_index = page_num - 1
-            if 0 <= page_index < page_count:
-                rows_by_page[page_index].append(row)
-
-        return [
-            self._parse_tesseract_tsv_rows(rows)
-            for rows in rows_by_page
-        ]
-
-    def _parse_tesseract_tsv_rows(self, rows: list[dict[str, str]]) -> OcrResult:
-        parts: list[str] = []
-        confs: list[float] = []
-
-        for row in rows:
-            text = row.get("text") or ""
-            if not text:
-                continue
-
-            parts.append(text)
-
-            try:
-                conf = float(row.get("conf", "-1"))
-            except ValueError:
-                conf = -1.0
-
-            if conf >= 0:
-                confs.append(conf / 100.0)
-
-        combined_text = " ".join(parts)
-        avg_conf = sum(confs) / len(confs) if confs else 0.0
-
-        return combined_text, avg_conf
-    
-    def _save_ocr_debug(self, folder: str, image_data: bytes, text: str, max_files=30):
-        if not self.config.get("save_ocr_debug", False):
-            return
-
-        safe_text = "".join(c for c in text if c.isalnum() or c in (' ', '_', '-', ',')).rstrip()
-        new_filename = f"ocr_{safe_text}.png"
-        new_path = os.path.join(folder, new_filename)
-        
-        # 2. Fast Scan: Get entries and their timestamps in one go
-        files: list[os.DirEntry[str]] = []
-        with os.scandir(folder) as entries:
-            for entry in entries:
-                try:
-                    if entry.is_file() and entry.name.startswith("ocr_"):
-                        files.append(entry)
-                except FileNotFoundError:
-                    continue # Skip if file disappeared during scanning
-
-        # 3. Rotate if needed
-        if len(files) >= max_files:
-            # Find oldest via modification time
-            oldest: os.DirEntry[str] | None = None
-            oldest_mtime = float('inf')
-            for entry in files:
-                try:
-                    mtime = entry.stat().st_mtime
-                    if mtime < oldest_mtime:
-                        oldest, oldest_mtime = entry, mtime
-                except FileNotFoundError:
-                    continue # Skip if file disappeared during stat
-            if oldest:
-                try:
-                    os.remove(oldest.path)
-                except FileNotFoundError:
-                    pass
-
-        # 4. Write new file
-        with open(new_path, "wb") as f:
-            f.write(image_data)
 
     class _Setup:
         def __init__(self, outer: 'BotCore'):
