@@ -37,6 +37,7 @@ class LibTesseractOCR:
         self.logger = logger
         self._api_lock = threading.Lock()
         self._closed = False
+        self._dll_directories: list[Any] = []
 
         self._ensure_tessdata_fast()
         self._lib = self._load_libtesseract(library_path)
@@ -188,6 +189,13 @@ class LibTesseractOCR:
             ctypes.util.find_library("tesseract"),
             "libtesseract.so",
             "libtesseract.dylib",
+            "libtesseract-5.dll",
+            "libtesseract-4.dll",
+            "libtesseract.dll",
+            os.path.join(os.environ.get("ProgramFiles", ""), "Tesseract-OCR", "libtesseract-5.dll"),
+            os.path.join(os.environ.get("ProgramFiles", ""), "Tesseract-OCR", "libtesseract-4.dll"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Tesseract-OCR", "libtesseract-5.dll"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Tesseract-OCR", "libtesseract-4.dll"),
         ]
 
         errors: list[str] = []
@@ -195,6 +203,7 @@ class LibTesseractOCR:
             if not path:
                 continue
             try:
+                self._add_dll_directory(path)
                 return ctypes.CDLL(path)
             except OSError as e:
                 errors.append(f"{path}: {e}")
@@ -205,6 +214,14 @@ class LibTesseractOCR:
             "package or set libtesseract_path in config. "
             f"Tried: {details}"
         )
+
+    def _add_dll_directory(self, path: str) -> None:
+        if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+            return
+        directory = os.path.dirname(path)
+        if not directory or not os.path.isdir(directory):
+            return
+        self._dll_directories.append(os.add_dll_directory(directory))
 
     def _configure_libtesseract(self) -> None:
         self._lib.TessBaseAPICreate.argtypes = []
