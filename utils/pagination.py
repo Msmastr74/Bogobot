@@ -5,8 +5,8 @@ import discord
 
 
 StateT = TypeVar("StateT")
-DISPLAY_TEXT_LIMIT = 3500
-DISPLAY_CONTENT_LIMIT = 3000
+DISPLAY_TEXT_LIMIT = 3200
+DISPLAY_CONTENT_LIMIT = 2800
 TRUNCATION_TEXT = "\n... truncated ..."
 
 
@@ -188,7 +188,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
                 return sections, None
 
             text = self._section_text(read.section)
-            text_len = len(text) + (2 if sections else 0)
+            text_len = len(text) + (1 if sections else 0)
             if text_len > remaining and sections:
                 return sections, successful_state
 
