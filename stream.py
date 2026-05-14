@@ -32,6 +32,7 @@ class StreamHandler:
         backoff_min_s: float = 2,
         backoff_max_s: float = 120,
         cookies: list[str] | None = None,
+        http_headers: list[str] | None = None,
         logger: logging.Logger | None = None,
         loop: asyncio.AbstractEventLoop | None = None
     ):
@@ -44,6 +45,7 @@ class StreamHandler:
         self.backoff_min_s = backoff_min_s
         self.backoff_max_s = backoff_max_s
         self.cookies = cookies or []
+        self.http_headers = http_headers or []
         self.logger = logger or logging.getLogger(__name__)
         self.async_loop: asyncio.AbstractEventLoop | None = loop
         self._frame_future = None
@@ -95,6 +97,8 @@ class StreamHandler:
         ]
         for cookie in self.cookies:
             streamlink_cmd.extend(["--http-cookie", cookie])
+        for header in self.http_headers:
+            streamlink_cmd.extend(["--http-header", header])
 
         streamlink = subprocess.Popen(
             streamlink_cmd,
