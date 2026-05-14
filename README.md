@@ -5,7 +5,8 @@ Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort 
 ## Prerequisites
 
 Python 3.10+ is required. The dependency scripts install the usual system tools:
-Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
+libtesseract/Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
+Windows is not supported due to the lack of libtesseract.
 
 ## Installation
 
@@ -19,8 +20,6 @@ Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
    bash dependencies_android.sh   # For Android/Termux
    # OR
    bash dependencies_macos.sh  # For macOS with Homebrew
-   # OR
-   bash dependencies_windows.sh  # For Windows
    # OR
    bash dependencies_linux.sh  # For Linux
    ```
