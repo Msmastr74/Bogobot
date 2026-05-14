@@ -31,6 +31,7 @@ class StreamHandler:
         quick_fail_s: float = 120,
         backoff_min_s: float = 2,
         backoff_max_s: float = 120,
+        cookies: list[str] | None = None,
         logger: logging.Logger | None = None,
         loop: asyncio.AbstractEventLoop | None = None
     ):
@@ -42,6 +43,7 @@ class StreamHandler:
         self.quick_fail_s = quick_fail_s
         self.backoff_min_s = backoff_min_s
         self.backoff_max_s = backoff_max_s
+        self.cookies = cookies or []
         self.logger = logger or logging.getLogger(__name__)
         self.async_loop: asyncio.AbstractEventLoop | None = loop
         self._frame_future = None
@@ -83,8 +85,19 @@ class StreamHandler:
             self._kill_procs()
 
     def _run_once(self) -> None:
+        streamlink_cmd = [
+            "streamlink",
+            self.url,
+            self.quality,
+            "--stdout",
+            "--loglevel",
+            "error" if self.quiet else "info",
+        ]
+        for cookie in self.cookies:
+            streamlink_cmd.extend(["--http-cookie", cookie])
+
         streamlink = subprocess.Popen(
-            ["streamlink", self.url, self.quality, "--stdout", "--loglevel", "error" if self.quiet else "info"],
+            streamlink_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

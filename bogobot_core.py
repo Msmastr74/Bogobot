@@ -110,6 +110,7 @@ class BotCore(discord.Client):
             quality="720p",
             on_new_frame=self.on_new_frame,
             fps=1.1,
+            cookies=self._streamlink_cookies(),
             quiet=self.config.get(
                 "silence_stream", False) or not self.debug,
             logger=self.logger.getChild("Stream"),
@@ -213,6 +214,20 @@ class BotCore(discord.Client):
     
     def init_callback(self, callback: Callable[[], Awaitable[None]]):
         self.on_ready_callbacks.append(callback)
+
+    def _streamlink_cookies(self) -> list[str]:
+        cookies = self.config.get("cookies")
+        if cookies is None:
+            return []
+        if isinstance(cookies, dict):
+            return [
+                f"{name}={value}"
+                for name, value in cookies.items()
+            ]
+        if isinstance(cookies, list):
+            return [str(cookie) for cookie in cookies]
+        self.logger.warning("Ignoring config cookies because it is not a list or object")
+        return []
 
     def command_telemetry_callback(
         self,
