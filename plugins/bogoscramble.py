@@ -543,7 +543,7 @@ async def setup(bot: "BotCore"):
             path = urllib.parse.urlparse(url).path
             name = os.path.basename(path)
             return name or fallback
-        def embed_fetch_url(proxy: discord.embeds._EmbedMediaProxy) -> tuple[str, bool] | None:
+        def embed_fetch_url(proxy: 'discord.embeds._EmbedMediaProxy') -> tuple[str, bool] | None:
             if proxy.url and proxy.url.startswith("https://cdn.discordapp.com/"):
                 return proxy.url, False
             if proxy.proxy_url:
