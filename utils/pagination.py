@@ -88,9 +88,19 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
                 return section.accent_colour
         return None
 
-    async def load(self) -> Page:
-        sections, self.next_page_state = await self._collect_sections(self.state, "next")
+    async def load(self, direction: Literal["next", "previous"] = "next") -> Page:
+        sections, page_state = await self._collect_sections(self.state, direction)
+        if direction == "previous":
+            sections.reverse()
+            self.next_page_state = None
+            if page_state is not None:
+                self.state = page_state
+                self.next_page_state = await self._find_page_state(self.state, "next")
+        else:
+            self.next_page_state = page_state
+            
         self.previous_page_state = await self._find_page_state(self.state, "previous")
+            
         if not sections:
             sections = self.empty_sections()
         self.current_page = Page(
@@ -105,9 +115,10 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
         self,
         interaction: discord.Interaction,
         state: StateT,
+        direction: Literal["next", "previous"] = "next",
     ) -> None:
         self.state = state
-        page = await self.load()
+        page = await self.load(direction=direction)
         await interaction.response.edit_message(
             view=self,
             **page.as_edit_kwargs(),

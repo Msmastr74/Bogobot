@@ -44,8 +44,6 @@ class LogState:
 
 
 class MemoryLogHandler(logging.Handler):
-    DEFAULT_LENGTH = 30
-
     LEVEL_COLORS = {
         logging.DEBUG: discord.Color.light_grey(),
         logging.INFO: discord.Color.green(),
@@ -148,9 +146,6 @@ class MemoryLogHandler(logging.Handler):
             message = entry.message.replace("```", "`\u200b``")
             return f"{' '.join(header_parts)}\n```\n{message}\n```"
         return f"{' '.join(header_parts)}\n{discord.utils.escape_markdown(entry.message)}"
-
-    def _default_range(self, total: int) -> tuple[int, int]:
-        return max(0, total - self.DEFAULT_LENGTH), total
 
 MEMORY_LOG_HANDLER = MemoryLogHandler(500)
 MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
@@ -288,15 +283,15 @@ class LogsView(PaginatedView[LogState]):
 
     def fresh_state(self) -> LogState:
         records = self.handler.snapshot()
-        start, end = self.handler._default_range(len(records))
-        return LogState(records=records, cursor=start, end=end)
+        end = len(records)
+        return LogState(records=records, cursor=end, end=end)
 
     def start_state(self) -> LogState:
         return LogState(records=self.state.records, cursor=0, end=len(self.state.records))
 
     def end_state(self) -> LogState:
-        start, end = self.handler._default_range(len(self.state.records))
-        return LogState(records=self.state.records, cursor=start, end=end)
+        end = len(self.state.records)
+        return LogState(records=self.state.records, cursor=end, end=end)
 
     async def next_section(self, state: LogState) -> SectionRead[LogState] | None:
         section = self.handler.section_for(state.records, state.cursor, end=state.end)
@@ -329,7 +324,10 @@ class LogsView(PaginatedView[LogState]):
         self.newer.disabled = self.next_page_state is None
         self.older.disabled = self.previous_page_state is None
         self.refresh.disabled = False
-        self.jump_edge.disabled = not self.state.records or self.start_state() == self.end_state()
+        self.jump_edge.disabled = (
+            self.next_page_state is None and
+            self.previous_page_state is None
+        )
         self.jump_edge.label = "End" if self.state.cursor <= 0 else "Start"
 
     def add_controls(self) -> None:
@@ -345,14 +343,14 @@ class LogsView(PaginatedView[LogState]):
         self,
         interaction: discord.Interaction,
     ) -> None:
-        await self.set_state(interaction, self.fresh_state())
+        await self.set_state(interaction, self.fresh_state(), "previous")
 
     async def jump_edge_action(
         self,
         interaction: discord.Interaction,
     ) -> None:
         state = self.end_state() if self.state.cursor <= 0 else self.start_state()
-        await self.set_state(interaction, state)
+        await self.set_state(interaction, state, direction=self.state.cursor <= 0 and "previous" or "next")
 
     async def older_action(
         self,
@@ -457,7 +455,7 @@ async def setup(bot: "BotCore"):
             log_message = f"{interaction.user} ({interaction.user.id}): {message}"
             logger.log(log_level_mapping[level], log_message)
             records = handler.snapshot()
-            start, end = handler._default_range(len(records))
+            end = len(records)
             
             view = SingleLogView(
                 handler=handler,
@@ -478,17 +476,17 @@ async def setup(bot: "BotCore"):
             return
 
         records = handler.snapshot()
-        start, end = handler._default_range(len(records))
+        end = len(records)
         view = LogsView(
             handler=handler,
             initial_state=LogState(
                 records=records,
-                cursor=start,
+                cursor=end,
                 end=end,
             ),
             owner_id=interaction.user.id,
         )
-        page = await view.load()
+        page = await view.load(direction="previous")
         await bot.discord.send(
             **page.as_send_kwargs(),
             view=view,
@@ -538,13 +536,13 @@ async def setup_fallback(client: FallbackClient):
             log_message = f"{interaction.user} ({interaction.user.id}): {message}"
             logger.log(log_level_mapping[level], log_message)
             records = client.handler.snapshot()
-            start, end = client.handler._default_range(len(records))
+            end = len(records)
             
             view = SingleLogView(
                 handler=client.handler,
                 initial_state=LogState(
                     records=records,
-                    cursor=start,
+                    cursor=end - 1,
                     end=end,
                 ),
                 owner_id=interaction.user.id,
@@ -557,17 +555,17 @@ async def setup_fallback(client: FallbackClient):
             )
             return
         records = client.handler.snapshot()
-        start, end = client.handler._default_range(len(records))
+        end = len(records)
         view = LogsView(
             handler=client.handler,
             initial_state=LogState(
                 records=records,
-                cursor=start,
+                cursor=end,
                 end=end,
             ),
             owner_id=interaction.user.id,
         )
-        page = await view.load()
+        page = await view.load(direction="previous")
         await interaction.followup.send(
             **page.as_send_kwargs(),
             view=view,
