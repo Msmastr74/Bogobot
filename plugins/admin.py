@@ -17,7 +17,14 @@ if TYPE_CHECKING:
 
 RESTART_DELAY_SECONDS = 1.0
 FALLBACK_CLIENT_REQUESTED = False
-
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+log_level_mapping: dict[LogLevel, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 @dataclass(frozen=True)
 class LogEntry:
@@ -149,6 +156,35 @@ MEMORY_LOG_HANDLER = MemoryLogHandler(500)
 MEMORY_LOG_HANDLER.setLevel(logging.DEBUG)
 MEMORY_LOG_HANDLER.setFormatter(logging.Formatter())
 
+class SingleLogView(PaginatedView[LogState]):
+    def __init__(
+        self,
+        *,
+        handler: MemoryLogHandler,
+        initial_state: LogState,
+        owner_id: int,
+    ):
+        super().__init__(
+            initial_state=initial_state,
+            owner_id=owner_id,
+            timeout=300,
+        )
+        self.handler = handler
+
+    def page_allowed_mentions(self) -> discord.AllowedMentions | None:
+        return discord.AllowedMentions.none()
+
+    def empty_sections(self) -> list[PageSection]:
+        return [
+            PageSection(
+                title="Logs",
+                body="(no logs in that range)",
+                accent_colour=discord.Color.green(),
+            )
+        ]
+
+    def page_header(self, page: Page) -> str | None:
+        return "## Logs"
 
 class LogsView(PaginatedView[LogState]):
     def __init__(
@@ -387,8 +423,33 @@ async def setup(bot: "BotCore"):
             response=True,
         )
 
-    @manage.command(name="logs", description="Show recent bot logs")
-    async def logs(interaction: discord.Interaction):
+    @manage.command(name="logs", description="Show recent bot logs or write a log message")
+    async def logs(interaction: discord.Interaction, message: str | None = None, level: LogLevel = "INFO"):
+        if message is not None:
+            logger = bot.logger.getChild("UserLog")
+            log_message = f"{interaction.user} ({interaction.user.id}): {message}"
+            logger.log(log_level_mapping[level], log_message)
+            records = handler.snapshot()
+            start, end = handler._default_range(len(records))
+            
+            view = SingleLogView(
+                handler=handler,
+                initial_state=LogState(
+                    records=records,
+                    cursor=start,
+                    end=end,
+                ),
+                owner_id=interaction.user.id,
+            )
+            page = await view.load()
+            await bot.discord.send(
+                **page.as_send_kwargs(),
+                view=view,
+                response=True,
+                ephemeral=True,
+            )
+            return
+
         records = handler.snapshot()
         start, end = handler._default_range(len(records))
         view = LogsView(
@@ -439,12 +500,35 @@ async def setup_fallback(client: FallbackClient):
             ephemeral=True,
         )
 
-    @manage.command(name="logs", description="Show recent bot logs")
-    async def logs(interaction: discord.Interaction):
+    @manage.command(name="logs", description="Show recent bot logs or write a log message")
+    async def logs(interaction: discord.Interaction, message: str | None = None, level: LogLevel = "INFO"):
         if not client.source_bot.is_authorized(interaction.user.id, 1):
             await interaction.response.send_message("Unauthorized.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
+        if message is not None:
+            logger = client.logger.getChild("UserLog")
+            log_message = f"{interaction.user} ({interaction.user.id}): {message}"
+            logger.log(log_level_mapping[level], log_message)
+            records = client.handler.snapshot()
+            start, end = client.handler._default_range(len(records))
+            
+            view = SingleLogView(
+                handler=client.handler,
+                initial_state=LogState(
+                    records=records,
+                    cursor=start,
+                    end=end,
+                ),
+                owner_id=interaction.user.id,
+            )
+            page = await view.load()
+            await interaction.followup.send(
+                **page.as_send_kwargs(),
+                view=view,
+                ephemeral=True,
+            )
+            return
         records = client.handler.snapshot()
         start, end = client.handler._default_range(len(records))
         view = LogsView(
