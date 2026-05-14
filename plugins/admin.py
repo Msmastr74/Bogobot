@@ -182,7 +182,20 @@ class SingleLogView(PaginatedView[LogState]):
                 accent_colour=discord.Color.green(),
             )
         ]
-
+    
+    async def next_section(self, state: LogState) -> SectionRead[LogState] | None:
+        section = self.handler.section_for(state.records, state.cursor, end=state.end)
+        if section is None:
+            return None
+        return SectionRead(
+            section=section,
+            state=LogState(
+                records=state.records,
+                cursor=state.cursor + 1,
+                end=state.end,
+            ),
+        )
+    
     def page_header(self, page: Page) -> str | None:
         return "## Logs"
 

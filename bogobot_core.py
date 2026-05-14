@@ -986,7 +986,7 @@ class BotCore(discord.Client):
                 await func(interaction, *args, **kwargs)
             except Exception as e:
                 status = "error"
-                error = str(e)
+                error = f"{type(e).__name__}: {str(e)}"
                 if interaction.response.is_done():
                     await self.outer.discord.cleanup_defer_status(interaction)
                     await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
