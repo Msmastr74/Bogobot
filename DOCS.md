@@ -25,7 +25,6 @@ User-edited settings:
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
 - `libtesseract_path`: Optional explicit path to the libtesseract shared library when auto-detection cannot find it.
-- `fallback_client`: Start the fallback client after a fatal main-bot failure. Defaults to true.
 - `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 3000, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
@@ -134,15 +133,6 @@ Plugins are independent Python files located in the `/plugins` directory.
 ## Admin Commands
 The admin plugin adds `/manage state` and `/manage logs`.
 
-`/manage state` has different permission behavior depending on which client is running:
-
-- **Normal bot**: registered through the plugin command wrapper with permission level 2. `restart` restarts the process, `stop` closes the main bot and starts the fallback client, and `info` reports that the main bot is up.
-- **Fallback client**: registered directly on the fallback command tree and checks permission level 1, so authorized accounts can still recover the bot when the normal command wrapper is unavailable.
-
-In both modes, `restart` replies with `Restarting...`, waits briefly, closes the Discord client, and then replaces the current process with a fresh invocation of the same Python executable and command-line arguments.
-
-If the main bot fails, or `/manage state stop` is used, and `fallback_client` is enabled, `main.py` starts a fallback client using the same bot token. In fallback mode, `/manage state restart` is available to level 1+ accounts and restarts the fallback process the same way, giving maintainers a Discord-side recovery path even when the main command tree is unavailable.
-
 ## Management Commands
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
 
@@ -151,7 +141,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
-- `/manage state stop|restart|info`: Stops into fallback mode, restarts the current process, or reports which client is active.
+- `/manage state stop|restart|info`: Stops the bot, restarts the current process, or reports which client is active.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
 

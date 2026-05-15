@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 
 
 RESTART_DELAY_SECONDS = 1.0
-FALLBACK_CLIENT_REQUESTED = False
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 log_level_mapping: dict[LogLevel, int] = {
     "DEBUG": logging.DEBUG,
@@ -357,51 +356,14 @@ class LogsView(PaginatedView[LogState]):
     ) -> None:
         await self.show_previous_page(interaction)
 
-class FallbackClient(discord.Client):
-    def __init__(self, bot: "BotCore", handler: MemoryLogHandler):
-        super().__init__(intents=discord.Intents.default())
-        self.source_bot = bot
-        self.handler = handler
-        self.tree = app_commands.CommandTree(self)
-        self.logger = bot.logger.getChild("Fallback")
-
-    @classmethod
-    async def start_for(cls, bot: "BotCore") -> None:
-        if not bot.config.get("fallback_client", True):
-            return
-        with contextlib.suppress(Exception):
-            await bot.close()
-        fallback = cls(bot, MEMORY_LOG_HANDLER)
-        async with fallback:
-            await fallback.start(bot.config["bot_token"])
-
-    async def setup_hook(self):
-        await self._install_commands()
-        self.logger.critical("Fallback client is running.")
-
-    async def _install_commands(self) -> None:
-        await setup_fallback(self)
-
-async def start_fallback_client(bot: "BotCore") -> None:
-    await FallbackClient.start_for(bot)
-
-
-def fallback_client_requested() -> bool:
-    return FALLBACK_CLIENT_REQUESTED
-
-
-def schedule_fallback_client(bot: "BotCore") -> None:
-    global FALLBACK_CLIENT_REQUESTED
-
-    FALLBACK_CLIENT_REQUESTED = True
-
-    async def stop_for_fallback() -> None:
+def schedule_shutdown(client: discord.Client, logger: logging.Logger) -> None:
+    async def shutdown_process(client: discord.Client, logger: logging.Logger) -> None:
         await asyncio.sleep(RESTART_DELAY_SECONDS)
-        bot.logger.critical("Stopping main bot for fallback client by command request.")
+        logger.critical("Shutting down process by command request.")
         with contextlib.suppress(Exception):
-            await bot.close()
-
-    asyncio.create_task(stop_for_fallback())
+            await client.close()
+        sys.exit(0)
+    asyncio.create_task(shutdown_process(client, logger))
 
 def schedule_restart(client: discord.Client, logger: logging.Logger) -> None:
     async def restart_process(client: discord.Client, logger: logging.Logger) -> None:
@@ -427,7 +389,7 @@ async def setup(bot: "BotCore"):
     )
     async def state(
         interaction: discord.Interaction,
-        action: Literal["stop", "restart", "info"],
+        action: Literal["stop", "restart"],
     ):
         if action == "restart":
             await bot.discord.send("Restarting...", response=True)
@@ -435,17 +397,12 @@ async def setup(bot: "BotCore"):
             return
 
         if action == "stop":
-            if not bot.config.get("fallback_client", True):
-                await bot.discord.send("Fallback client is disabled.", response=True)
+            if not bot.is_authorized(interaction.user.id, 5):
+                await bot.discord.send("You are not the owner.")
                 return
-            await bot.discord.send("Stopping main bot and starting fallback client...", response=True)
-            schedule_fallback_client(bot)
+            await bot.discord.send("Stopping main bot...", response=True)
+            schedule_shutdown(bot, bot.logger)
             return
-
-        await bot.discord.send(
-            "State: main bot is up; fallback client is not active.",
-            response=True,
-        )
 
     @manage.command(name="logs", description="Show recent bot logs or write a log message")
     async def logs(interaction: discord.Interaction, message: str | None = None, level: LogLevel = "INFO"):
@@ -492,83 +449,3 @@ async def setup(bot: "BotCore"):
             response=True,
             ephemeral=True,
         )
-
-async def setup_fallback(client: FallbackClient):
-    manage = app_commands.Group(
-        name="manage", description="Bot management commands"
-    )
-
-    @manage.command(name="state", description="Show or change bot process state")
-    async def state(
-        interaction: discord.Interaction,
-        action: Literal["stop", "restart", "info"],
-    ):
-        if not client.source_bot.is_authorized(interaction.user.id, 1):
-            await interaction.response.send_message("Unauthorized.", ephemeral=True)
-            return
-
-        if action == "restart":
-            await interaction.response.send_message("Restarting...", ephemeral=True)
-            schedule_restart(client, client.logger)
-            return
-
-        if action == "stop":
-            await interaction.response.send_message(
-                "Fallback client is already active.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            "State: fallback client is active; main bot is not up.",
-            ephemeral=True,
-        )
-
-    @manage.command(name="logs", description="Show recent bot logs or write a log message")
-    async def logs(interaction: discord.Interaction, message: str | None = None, level: LogLevel = "INFO"):
-        if not client.source_bot.is_authorized(interaction.user.id, 1):
-            await interaction.response.send_message("Unauthorized.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        if message is not None:
-            logger = client.logger.getChild("UserLog")
-            log_message = f"{interaction.user} ({interaction.user.id}): {message}"
-            logger.log(log_level_mapping[level], log_message)
-            records = client.handler.snapshot()
-            end = len(records)
-            
-            view = SingleLogView(
-                handler=client.handler,
-                initial_state=LogState(
-                    records=records,
-                    cursor=end - 1,
-                    end=end,
-                ),
-                owner_id=interaction.user.id,
-            )
-            page = await view.load()
-            await interaction.followup.send(
-                **page.as_send_kwargs(),
-                view=view,
-                ephemeral=True,
-            )
-            return
-        records = client.handler.snapshot()
-        end = len(records)
-        view = LogsView(
-            handler=client.handler,
-            initial_state=LogState(
-                records=records,
-                cursor=end,
-                end=end,
-            ),
-            owner_id=interaction.user.id,
-        )
-        page = await view.load(direction="previous")
-        await interaction.followup.send(
-            **page.as_send_kwargs(),
-            view=view,
-            ephemeral=True,
-        )
-
-    client.tree.add_command(manage)
