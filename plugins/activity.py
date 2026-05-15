@@ -17,7 +17,7 @@ async def setup(bot: 'BotCore'):
         chance = random.random()
         if chance < 0.1:
             pass # unshuffled
-        elif chance < 0.4:
+        elif chance < 0.4 and tlist.count('-') > 0:
             left = tlist[0:tlist.index('-')]
             right = tlist[tlist.index('-')+1:]
             random.shuffle(left)
