@@ -36,6 +36,7 @@ Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
 - `channels`: Notification topic subscriptions by Discord channel ID. Older `channels.json` data is imported into this field when `channels` is missing.
 - `monitor_messages`: Persistent monitor message IDs by Discord channel ID.
+- `leaderboard_monitor_messages`: Persistent leaderboard monitor message IDs by Discord channel ID.
 - `milestones`: Latest confirmed value for each milestone name.
 
 Account storage:
@@ -90,6 +91,10 @@ Each coalescer belongs to one message. If several edits are queued before Discor
 
 `Tracker` is the small shared helper underneath this kind of stored Discord state. It loads raw stored IDs, normalizes them, validates live Discord access, and prunes stale entries.
 
+`PersistentChannelMonitor` in `utils.monitoring` packages the common monitor pattern: stored channel-to-message IDs, stale message pruning, start/stop handling, coalesced edits, and a periodic update loop. A monitor plugin only needs to provide an initial message payload and an update payload callback.
+
+Monitor messages use static `LayoutView` payloads. The display logic stays encapsulated in one component, and `timeout=None` keeps discord.py from registering non-interactive static views for background dispatch.
+
 ## Milestones
 `MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. Values are confirmed using a rolling window, so noisy OCR does not immediately publish a milestone.
 
@@ -140,6 +145,7 @@ If the main bot fails, or `/manage state stop` is used, and `fallback_client` is
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
 
 - `/manage monitor start|stop`: Creates or removes the persistent monitor message in the current channel.
+- `/manage leaderboard_monitor start|stop`: Creates or removes a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes.
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.

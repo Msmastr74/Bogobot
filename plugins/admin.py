@@ -162,7 +162,6 @@ class SingleLogView(PaginatedView[LogState]):
         super().__init__(
             initial_state=initial_state,
             owner_id=owner_id,
-            timeout=300,
         )
         self.handler = handler
 

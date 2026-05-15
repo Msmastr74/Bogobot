@@ -29,7 +29,12 @@ class MilestoneMessageView(discord.ui.LayoutView):
         body: str,
         gallery_items: list[tuple[str, str]] | None = None,
     ):
+        # Contrary to what you might believe, timeout=None is less expensive 
+        # for static layouts. It prevents spinning up an asyncio background task, 
+        # and since no elements are dispatchable, discord.py skips registering 
+        # this view into the global interaction listener cache entirely.
         super().__init__(timeout=None)
+
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(body or "\u200b"),
