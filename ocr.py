@@ -15,7 +15,7 @@ from PIL import Image
 
 OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
 OcrResult = tuple[str, float]
-OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int] | None
+OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int, int] | None
 
 TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
 TESSERACT_LANGUAGE = "eng_fast"
@@ -76,13 +76,14 @@ class LibTesseractOCR:
         pil_cell: Image.Image,
         whitelist: str,
         psm: int = 7,
+        scale: int = 3
     ) -> OcrResult:
         with self._state_lock:
             if self._closed:
                 raise RuntimeError("Tesseract OCR engine is closed")
 
             future: concurrent.futures.Future[OcrResult] = concurrent.futures.Future()
-            self._tasks.put((future, pil_cell, whitelist, int(psm)))
+            self._tasks.put((future, pil_cell, whitelist, int(psm), scale))
 
         return await asyncio.wrap_future(future)
 
@@ -106,18 +107,20 @@ class LibTesseractOCR:
         pil_cell: Image.Image,
         whitelist: str,
         psm: int,
+        scale: int
     ) -> OcrResult:
         self._set_variable(api, "tessedit_char_whitelist", whitelist)
         self._lib.TessBaseAPISetPageSegMode(api, int(psm))
-        return self._parse_cell_sync(api, pil_cell, whitelist)
+        return self._parse_cell_sync(api, pil_cell, whitelist, scale)
 
     def _parse_cell_sync(
         self,
         api: ctypes.c_void_p,
         pil_cell: Image.Image,
         whitelist: str,
+        scale: int,
     ) -> OcrResult:
-        processed = preprocess_cell(pil_cell)
+        processed = preprocess_cell(pil_cell, scale)
         image = np.ascontiguousarray(processed, dtype=np.uint8)
         height, width = image.shape
 
@@ -179,11 +182,11 @@ class LibTesseractOCR:
                 if task is None:
                     return
 
-                future, pil_cell, whitelist, psm = task
+                future, pil_cell, whitelist, psm, scale = task
                 if future.set_running_or_notify_cancel():
                     try:
                         future.set_result(
-                            self._parse_sync(api, pil_cell, whitelist, psm)
+                            self._parse_sync(api, pil_cell, whitelist, psm, scale)
                         )
                     except Exception as e:
                         future.set_exception(e)
@@ -403,7 +406,7 @@ class LibTesseractOCR:
 
 def preprocess_cell(
     pil_cell: Image.Image,
-    scale: int = 5,
+    scale: int = 3,
     pad: int = 10,
     stroke_thickness: int = 15,
     threshold: int = 165,

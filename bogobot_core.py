@@ -410,10 +410,14 @@ class BotCore(discord.Client):
             async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
                 async def parse_crop(crop: OcrCrop) -> OcrResult:
                     coords, whitelist, psm = crop
+                    
+                    width, height = coords[2] - coords[0], coords[3] - coords[1]
+                    area = width * height
                     return await self.ocr.parse(
                         img.crop(coords),
                         whitelist,
                         psm=7 if psm is None else psm,
+                        scale=3 if area > 1500 else 6
                     )
 
                 return await asyncio.gather(*[
