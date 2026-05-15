@@ -976,11 +976,14 @@ class BotCore(discord.Client):
             except Exception as e:
                 status = "error"
                 error = f"{type(e).__name__}: {str(e)}"
-                if interaction.response.is_done():
-                    await self.outer.discord.cleanup_defer_status(interaction)
-                    await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
-                else:
-                    await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+                try:
+                    if interaction.response.is_done():
+                        await self.outer.discord.cleanup_defer_status(interaction)
+                        await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
+                    else:
+                        await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+                except discord.HTTPException:
+                    pass
             finally:
                 await self.outer.emit_command_telemetry({
                     **base_event,
