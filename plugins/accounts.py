@@ -1,6 +1,6 @@
 import discord
 
-from typing import Literal, TYPE_CHECKING, TypedDict
+from typing import Iterable, Literal, TYPE_CHECKING, TypedDict
 if TYPE_CHECKING:
     from main import BotCore
 
@@ -16,6 +16,44 @@ RANK_NUMS: dict[Rank, int] = dict((v, k) for k, v in RANKS.items())
 
 class Account(TypedDict):
     perm_level: int
+
+class AccountListView(discord.ui.LayoutView):
+    def __init__(
+        self, *,
+        title: str = "Accounts",
+        error_text: str = "No accounts found",
+        truncated_text: str = "...",
+        accounts: Iterable[tuple[str, Account]]
+    ) -> None:
+        super().__init__(timeout=None)
+        remaining = 3900 # reserve 100
+        def count_remaining(text: str) -> bool:
+            nonlocal remaining
+            remaining -= len(text)
+            return remaining >= 0
+        title_text = f"## {title}"
+        count_remaining(title_text)
+        self.add_item(discord.ui.TextDisplay(title_text))
+        
+        accounts_container = discord.ui.Container()
+        found_account = False
+        for uid, account in accounts:
+            found_account = True
+            account_text = f"<@{uid}>: {RANKS.get(account['perm_level'], 'Unknown')}"
+            if count_remaining(account_text):
+                accounts_container.add_item(
+                    discord.ui.TextDisplay(account_text)
+                )
+            else:
+                accounts_container.add_item(
+                    discord.ui.TextDisplay(truncated_text)
+                )
+                break
+        if not found_account:
+            accounts_container.add_item(
+                discord.ui.TextDisplay(error_text)
+            )
+        self.add_item(accounts_container)
 
 async def setup(bot: "BotCore"):
     from utils import groups
@@ -90,22 +128,23 @@ async def setup(bot: "BotCore"):
     async def list_users(
         interaction: discord.Interaction, minimum_rank: Rank | None
     ):
-        text = ""
-        for uid, info in bot.accounts.items():
-            rank_num = info["perm_level"]
-            rank_name = RANKS.get(rank_num, "Unknown")
-            if minimum_rank is not None and rank_num < RANK_NUMS[minimum_rank]:
-                continue
-            new_text = text + f"<@{uid}>: {rank_name}\n"
-            if len(new_text) > 4000:
-                text += "[...truncated...]"
-                break
-            text = new_text
-        if text == "":
-            text = "No users found with the specified criteria."
-        await bot.discord.send_embed(
-            title=f"Accounts with rank {minimum_rank} or higher" if minimum_rank else "All accounts",
-            description=text,
+        filtered_accounts = bot.accounts.items()
+        is_filtered = minimum_rank is not None
+        if is_filtered:
+            minimum_rank_num = RANK_NUMS[minimum_rank]
+            filtered_accounts = filter(
+                lambda x: x[1]["perm_level"] >= minimum_rank_num,
+                bot.accounts.items()
+            )
+        view = AccountListView(
+            title=f"Accounts with rank {minimum_rank} or higher" if 
+                is_filtered else "All accounts",
+            accounts=filtered_accounts,
+            error_text="No accounts found with the specified criteria." if
+                is_filtered else "No accounts found.",
+        )
+        await bot.discord.send(
+            view=view,
             response=True, ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
         )

@@ -514,6 +514,14 @@ class BotCore(discord.Client):
             ephemeral=False,
             **kwargs,
         ):
+            """
+            Deprecated compatibility helper.
+
+            New bot-authored UI should use discord.ui.LayoutView via
+            bot.discord.send(view=...). Keep this for older plugins and
+            workflows that intentionally need Discord embeds. New code that
+            truly needs an embed should prefer bot.discord.send(embed=...).
+            """
             if embed is None:
                 embed = discord.Embed(
                     title=title,
@@ -602,6 +610,14 @@ class BotCore(discord.Client):
                 add_field=False, name=None, value=None, inline=False,
                 **kwargs,
             ):
+                """
+                Deprecated compatibility helper.
+
+                New bot-authored UI should edit LayoutView payloads through
+                message.edit(view=...). Keep this for older plugins and
+                workflows that intentionally need Discord embeds. New code
+                that truly needs an embed should prefer message.edit(embed=...).
+                """
                 if not self.message:
                     return
 

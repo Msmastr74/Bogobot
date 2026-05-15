@@ -58,13 +58,15 @@ The `info` subclass handles data extraction from the livestream using a combinat
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.
 
 ### Messages
-* `send(contents, response=True)`: Sends a plain text message. If `response` is true, it attempts to reply to the current interaction. Returns a MessageHandle object or None.
-* `message.edit(contents)`: Edits the message contents.
+* `send(contents, response=True)`: Sends a message. If `response` is true, it attempts to reply to the current interaction. Pass `view=...` for bot-authored `LayoutView` UI. Returns a MessageHandle object or None.
+* `message.edit(contents)`: Edits the message contents or kwargs such as `view=...`.
 * `message.delete()`: Deletes the message.
 
-### Embeds
-* `send_embed(description, title, color, footer, response=True)`: Initializes and sends a new embed. Returns an MessageHandle object or None.
-* `message.edit_embed(description, title, author, add_field=False, name, value, inline=False)`: Modifies the embed. Setting `add_field` to true will append a new field based on name, value, and inline.
+### Deprecated Embeds
+New bot-authored UI should use static `discord.ui.LayoutView` payloads with `bot.discord.send(view=...)`. New code that truly needs embeds should pass `embed=...` to `send(...)` or `edit(...)` directly.
+
+* `send_embed(description, title, color, footer, response=True)`: Deprecated compatibility helper for sending an embed. Returns a MessageHandle object or None.
+* `message.edit_embed(description, title, author, add_field=False, name, value, inline=False)`: Deprecated compatibility helper for modifying an embed. Setting `add_field` to true appends a new field based on name, value, and inline.
 
 ## OCR Implementation
 Bogobot utilizes libtesseract OCR for visual data extraction.

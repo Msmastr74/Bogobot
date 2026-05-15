@@ -46,6 +46,20 @@ if TYPE_CHECKING:
     from main import BotCore
 
 
+class UsageView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        title: str,
+        body: str,
+    ):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.TextDisplay(f"## {title}"))
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(body or "\u200b"),
+            accent_colour=discord.Color.blurple(),
+        ))
+
 async def setup(bot: "BotCore"):
     from utils import groups
 
@@ -481,20 +495,6 @@ async def setup(bot: "BotCore"):
             for user_id, total in top_users
         ]
         return ranked
-
-    class UsageView(discord.ui.LayoutView):
-        def __init__(
-            self,
-            *,
-            title: str,
-            body: str,
-        ):
-            super().__init__(timeout=None)
-            self.add_item(discord.ui.TextDisplay(f"## {title}"))
-            self.add_item(discord.ui.Container(
-                discord.ui.TextDisplay(body or "\u200b"),
-                accent_colour=discord.Color.blurple(),
-            ))
 
     def usage_title(requested_commands: list[str] | None) -> str:
         if requested_commands:

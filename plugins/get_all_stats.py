@@ -1,9 +1,30 @@
 import discord
-import time
+import datetime
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 if TYPE_CHECKING:
     from main import BotCore
+
+class StatsView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        fields: Iterable[tuple[str, str]],
+        updated_at: datetime.datetime | None = None
+    ):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.TextDisplay("## Bogosort Stream Statistics"))
+        field_container = discord.ui.Container()
+        for header, content in fields:
+            field_container.add_item(
+                discord.ui.TextDisplay(f"**{header}**\n{content}")
+            )
+        self.add_item(field_container)
+        
+        if updated_at is not None:
+            self.add_item(discord.ui.TextDisplay(
+                f"-# Updated at <t:{int(round(updated_at.timestamp()))}:T>"
+            ))
 
 async def setup(bot: 'BotCore'):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
@@ -19,18 +40,20 @@ async def setup(bot: 'BotCore'):
         uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = await bot.info.get_uptime()
         
-        discord_embed = discord.Embed(
-            title="Current Bogosort Statistics",
-            description=f"Fetched at: <t:{int(round(time.time()))}:T>\nUpdated at: <t:{int(round(bot._last_ocr_refresh))}:T>",
-            color=discord.Color.green()
+        view = StatsView(
+            fields=[
+                ("Shuffles", shuffles),
+                ("Comparisons", comparisons),
+                ("Best Run", best_run),
+                ("Shuffles Per Second", shuffles_sec),
+                ("Average Best Shuffle", average_best_shuffle),
+                ("Uptime [STREAM]", uptime),
+                ("Elapsed Time [STATIC]", elapsed_time),
+            ],
+            updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
         )
         
-        discord_embed.add_field(name="Shuffles", value=f"{shuffles}", inline=False)
-        discord_embed.add_field(name="Comparisons", value=f"{comparisons}", inline=False)
-        discord_embed.add_field(name="Best Run", value=f"{best_run}", inline=False)
-        discord_embed.add_field(name="Shuffles Per Second", value=f"{shuffles_sec}", inline=False)
-        discord_embed.add_field(name="Average Best Shuffle", value=f"{average_best_shuffle}", inline=False)
-        discord_embed.add_field(name="Uptime [STREAM]", value=f"{uptime}", inline=False)
-        discord_embed.add_field(name="Elapsed Time [STATIC]", value=f"{elapsed_time}", inline=False)
-        
-        await bot.discord.send_embed(embed=discord_embed, response=True)
+        await bot.discord.send(
+            view=view,
+            response=True
+        )
