@@ -482,6 +482,50 @@ async def setup(bot: "BotCore"):
         ]
         return ranked
 
+    class UsageView(discord.ui.LayoutView):
+        def __init__(
+            self,
+            *,
+            title: str,
+            body: str,
+        ):
+            super().__init__(timeout=None)
+            self.add_item(discord.ui.TextDisplay(f"## {title}"))
+            self.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(body or "\u200b"),
+                accent_colour=discord.Color.blurple(),
+            ))
+
+    def usage_title(requested_commands: list[str] | None) -> str:
+        if requested_commands:
+            return f"Usage: {', '.join('/' + command for command in requested_commands)}"
+        return "Usage"
+
+    def usage_body(
+        ranked: list[UserUsage],
+        requested_commands: list[str] | None,
+    ) -> str:
+        if not ranked:
+            return "No usage data for that query."
+
+        lines = []
+        single_command = requested_commands is not None and len(requested_commands) == 1
+        total_width = max(len(str(user.total)) for user in ranked)
+
+        for index, user in enumerate(ranked, start=1):
+            total = f"`{str(user.total).ljust(total_width)}`"
+            mention = f"<@{user.user_id}>"
+
+            if single_command:
+                lines.append(f"{index}. {total} {mention}")
+            else:
+                top_command, top_total = user.commands.most_common(1)[0]
+                lines.append(
+                    f"{index}. {total} {mention} - top: `/{top_command}` ({top_total})"
+                )
+
+        return "\n".join(lines)
+
     def parse_commands(commands: str | None) -> list[str] | None:
         if commands is None or not commands.strip():
             return None
@@ -642,36 +686,13 @@ async def setup(bot: "BotCore"):
         await interaction.response.defer()
 
         ranked = ranked_usage(requested_commands)
+        view = UsageView(
+            title=usage_title(requested_commands),
+            body=usage_body(ranked, requested_commands),
+        )
 
-        if not ranked:
-            body = "No usage data for that query."
-        else:
-            lines = []
-            single_command = requested_commands is not None and len(requested_commands) == 1
-            total_width = max(len(str(user.total)) for user in ranked)
-
-            for index, user in enumerate(ranked, start=1):
-                total = f"`{str(user.total).ljust(total_width)}`"
-                mention = f"<@{user.user_id}>"
-
-                if single_command:
-                    lines.append(f"{index}. {total} {mention}")
-                else:
-                    top_command, top_total = user.commands.most_common(1)[0]
-                    lines.append(
-                        f"{index}. {total} {mention} - top: `/{top_command}` ({top_total})"
-                    )
-
-            body = "\n".join(lines)
-
-        title = "Usage"
-        if requested_commands:
-            title = f"Usage: {', '.join('/' + command for command in requested_commands)}"
-
-        await bot.discord.send_embed(
-            title=title,
-            description=body[:4000],
-            color=discord.Color.blurple(),
+        await bot.discord.send(
+            view=view,
             allowed_mentions=discord.AllowedMentions.none(),
             response=True
         )
