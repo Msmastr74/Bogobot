@@ -417,7 +417,7 @@ async def setup(bot: "BotCore"):
     from utils import groups
 
     manage = groups.manage(bot)
-    MEMORY_LOG_HANDLER.configure_capacity(int(bot.config.get("log_capacity", 500)))
+    MEMORY_LOG_HANDLER.configure_capacity(int(bot.config.get("log_capacity", 3000)))
     handler = MEMORY_LOG_HANDLER
 
     @manage.command(

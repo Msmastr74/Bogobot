@@ -26,7 +26,7 @@ User-edited settings:
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
 - `libtesseract_path`: Optional explicit path to the libtesseract shared library when auto-detection cannot find it.
 - `fallback_client`: Start the fallback client after a fatal main-bot failure. Defaults to true.
-- `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 500, minimum 100.
+- `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 3000, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
