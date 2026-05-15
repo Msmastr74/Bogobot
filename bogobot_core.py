@@ -118,7 +118,7 @@ class BotCore(discord.Client):
             url="https://www.youtube.com/live/DgfiqGPmGWY",
             quality="720p",
             on_new_frame=self.on_new_frame,
-            fps=1,
+            fps=float(self.config.get("fps", 1)),
             cookies=self._streamlink_cookies(),
             http_headers=self._streamlink_http_headers(),
             quiet=self.config.get(
