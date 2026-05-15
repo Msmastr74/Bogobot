@@ -1,5 +1,4 @@
 from collections import deque
-import asyncio
 import contextlib
 from dataclasses import dataclass
 import logging
@@ -8,14 +7,12 @@ import sys
 from typing import Literal, TYPE_CHECKING
 
 import discord
-from discord import app_commands
 from utils.pagination import Page, PageSection, PaginatedView, SectionRead
 
 if TYPE_CHECKING:
     from main import BotCore
 
 
-RESTART_DELAY_SECONDS = 1.0
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 log_level_mapping: dict[LogLevel, int] = {
     "DEBUG": logging.DEBUG,
@@ -356,24 +353,6 @@ class LogsView(PaginatedView[LogState]):
     ) -> None:
         await self.show_previous_page(interaction)
 
-def schedule_shutdown(client: discord.Client, logger: logging.Logger) -> None:
-    async def shutdown_process(client: discord.Client, logger: logging.Logger) -> None:
-        await asyncio.sleep(RESTART_DELAY_SECONDS)
-        logger.critical("Shutting down process by command request.")
-        with contextlib.suppress(Exception):
-            await client.close()
-        sys.exit(0)
-    asyncio.create_task(shutdown_process(client, logger))
-
-def schedule_restart(client: discord.Client, logger: logging.Logger) -> None:
-    async def restart_process(client: discord.Client, logger: logging.Logger) -> None:
-        await asyncio.sleep(RESTART_DELAY_SECONDS)
-        logger.critical("Restarting process by command request.")
-        with contextlib.suppress(Exception):
-            await client.close()
-        os.execv(sys.executable, [sys.executable, *sys.argv])
-    asyncio.create_task(restart_process(client, logger))
-
 # Admin commands installed on the normal BotCore client.
 async def setup(bot: "BotCore"):
     from utils import groups
@@ -393,12 +372,18 @@ async def setup(bot: "BotCore"):
     ):
         if action == "restart":
             await bot.discord.send("Restarting...", response=True)
-            schedule_restart(bot, bot.logger)
+            bot.logger.critical("Restarting process by command request.")
+            with contextlib.suppress(Exception):
+                await bot.close()
+            os.execv(sys.executable, [sys.executable, *sys.argv])
             return
 
         if action == "stop":
             await bot.discord.send("Stopping main bot...", response=True)
-            schedule_shutdown(bot, bot.logger)
+            bot.logger.critical("Shutting down process by command request.")
+            with contextlib.suppress(Exception):
+                await bot.close()
+            os._exit(0)
             return
 
     @manage.command(name="logs", description="Show recent bot logs or write a log message")
