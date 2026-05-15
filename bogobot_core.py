@@ -95,7 +95,6 @@ class BotCore(discord.Client):
             "comparisons": (331, 610, 551, 640),
             "best_run": (645, 610, 730, 640, "0123456789/.dhm "),
             "shuffles_sec": (819, 610, 1043, 640),
-            "elapsed_time": (1166, 0, 1180, 75),
             "average_best_shuffle": (80, 670, 115, 685, "0123456789/.dhm "),
             "uptime": (1160, 10, 1260, 30, "0123456789/.dhm ")
         }
