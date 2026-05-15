@@ -1,7 +1,9 @@
 import asyncio
+import concurrent.futures
 import ctypes
 import ctypes.util
 import os
+import queue
 import threading
 import urllib.request
 from typing import Any
@@ -12,6 +14,7 @@ from PIL import Image
 
 OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
 OcrResult = tuple[str, float]
+OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int] | None
 
 TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
 TESSERACT_LANGUAGE = "eng_fast"
@@ -28,6 +31,7 @@ class LibTesseractOCR:
         debug_folder: str = "ocr_debug",
         logger: Any = None,
         library_path: str | None = None,
+        max_workers: int = 1,
     ):
         self.tessdata_path = os.path.abspath(tessdata_path)
         self.tessdata_fast_url = tessdata_fast_url
@@ -35,84 +39,89 @@ class LibTesseractOCR:
         self.save_debug = save_debug
         self.debug_folder = debug_folder
         self.logger = logger
-        self._api_lock = threading.Lock()
+        self.max_workers = max(1, int(max_workers))
+        self._state_lock = threading.Lock()
         self._closed = False
         self._dll_directories: list[Any] = []
+        self._tasks: queue.Queue[OcrTask] = queue.Queue()
+        self._workers: list[threading.Thread] = []
 
         self._ensure_tessdata_fast()
         self._lib = self._load_libtesseract(library_path)
         self._configure_libtesseract()
-        self._api = self._lib.TessBaseAPICreate()
-        if not self._api:
-            raise RuntimeError("Could not create Tesseract API")
 
-        rc = self._lib.TessBaseAPIInit3(
-            self._api,
-            self.tessdata_path.encode(),
-            self.language.encode(),
-        )
-        if rc != 0:
-            self._lib.TessBaseAPIDelete(self._api)
-            self._api = None
-            raise RuntimeError(
-                f"Could not initialize Tesseract language {self.language!r} "
-                f"from {self.tessdata_path}"
+        ready_futures: list[concurrent.futures.Future[None]] = []
+        for index in range(self.max_workers):
+            ready: concurrent.futures.Future[None] = concurrent.futures.Future()
+            worker = threading.Thread(
+                target=self._worker_main,
+                args=(ready,),
+                name=f"BogobotOCR-{index + 1}",
+                daemon=True,
             )
+            worker.start()
+            self._workers.append(worker)
+            ready_futures.append(ready)
 
-        self._set_variable("load_system_dawg", "0")
-        self._set_variable("load_freq_dawg", "0")
+        try:
+            for ready in ready_futures:
+                ready.result()
+        except Exception:
+            self.close()
+            raise
 
-    async def parse_batch(
+    async def parse(
         self,
-        pil_cells: list[Image.Image],
+        pil_cell: Image.Image,
         whitelist: str,
         psm: int = 7,
-    ) -> list[OcrResult]:
-        if not pil_cells:
-            return []
+    ) -> OcrResult:
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("Tesseract OCR engine is closed")
 
-        return await asyncio.to_thread(
-            self._parse_batch_sync,
-            pil_cells,
-            whitelist,
-            psm,
-        )
+            future: concurrent.futures.Future[OcrResult] = concurrent.futures.Future()
+            self._tasks.put((future, pil_cell, whitelist, int(psm)))
+
+        return await asyncio.wrap_future(future)
 
     def close(self) -> None:
-        with self._api_lock:
+        with self._state_lock:
             if self._closed:
                 return
             self._closed = True
-            api = getattr(self, "_api", None)
-            if api:
-                self._lib.TessBaseAPIDelete(api)
-                self._api = None
 
-    def _parse_batch_sync(
+            for _ in self._workers:
+                self._tasks.put(None)
+
+        for worker in self._workers:
+            worker.join()
+
+        self._workers.clear()
+
+    def _parse_sync(
         self,
-        pil_cells: list[Image.Image],
+        api: ctypes.c_void_p,
+        pil_cell: Image.Image,
         whitelist: str,
         psm: int,
-    ) -> list[OcrResult]:
-        with self._api_lock:
-            if self._closed or not self._api:
-                raise RuntimeError("Tesseract OCR engine is closed")
+    ) -> OcrResult:
+        self._set_variable(api, "tessedit_char_whitelist", whitelist)
+        self._lib.TessBaseAPISetPageSegMode(api, int(psm))
+        return self._parse_cell_sync(api, pil_cell, whitelist)
 
-            self._set_variable("tessedit_char_whitelist", whitelist)
-            self._lib.TessBaseAPISetPageSegMode(self._api, int(psm))
-
-            return [
-                self._parse_cell_sync(pil_cell, whitelist)
-                for pil_cell in pil_cells
-            ]
-
-    def _parse_cell_sync(self, pil_cell: Image.Image, whitelist: str) -> OcrResult:
+    def _parse_cell_sync(
+        self,
+        api: ctypes.c_void_p,
+        pil_cell: Image.Image,
+        whitelist: str,
+    ) -> OcrResult:
         processed = preprocess_cell(pil_cell)
         image = np.ascontiguousarray(processed, dtype=np.uint8)
         height, width = image.shape
 
         self._lib.TessBaseAPISetImage(
-            self._api,
+            api,
             image.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
             width,
             height,
@@ -121,25 +130,83 @@ class LibTesseractOCR:
         )
 
         if hasattr(self._lib, "TessBaseAPISetSourceResolution"):
-            self._lib.TessBaseAPISetSourceResolution(self._api, 300)
+            self._lib.TessBaseAPISetSourceResolution(api, 300)
 
-        raw_text = self._lib.TessBaseAPIGetUTF8Text(self._api)
+        raw_text = self._lib.TessBaseAPIGetUTF8Text(api)
         try:
             text = ctypes.string_at(raw_text).decode(errors="ignore") if raw_text else ""
         finally:
             if raw_text:
                 self._lib.TessDeleteText(raw_text)
 
-        conf = self._lib.TessBaseAPIMeanTextConf(self._api) / 100.0
-        self._lib.TessBaseAPIClear(self._api)
+        conf = self._lib.TessBaseAPIMeanTextConf(api) / 100.0
+        self._lib.TessBaseAPIClear(api)
 
         out = "".join(char for char in text if char in whitelist)
         self._save_ocr_debug(processed, f"{conf:.2f}c_{out or text.strip()}")
         return out, conf
 
-    def _set_variable(self, name: str, value: str) -> None:
+    def _create_api(self) -> ctypes.c_void_p:
+        api = self._lib.TessBaseAPICreate()
+        if not api:
+            raise RuntimeError("Could not create Tesseract API")
+
+        rc = self._lib.TessBaseAPIInit3(
+            api,
+            self.tessdata_path.encode(),
+            self.language.encode(),
+        )
+        if rc != 0:
+            self._lib.TessBaseAPIDelete(api)
+            raise RuntimeError(
+                f"Could not initialize Tesseract language {self.language!r} "
+                f"from {self.tessdata_path}"
+            )
+
+        self._set_variable(api, "load_system_dawg", "0")
+        self._set_variable(api, "load_freq_dawg", "0")
+        return api
+
+    def _worker_main(self, ready: concurrent.futures.Future[None]) -> None:
+        api: ctypes.c_void_p | None = None
+        try:
+            api = self._create_api()
+            ready.set_result(None)
+
+            while True:
+                task = self._tasks.get()
+                if task is None:
+                    return
+
+                future, pil_cell, whitelist, psm = task
+                if future.set_running_or_notify_cancel():
+                    try:
+                        future.set_result(
+                            self._parse_sync(api, pil_cell, whitelist, psm)
+                        )
+                    except Exception as e:
+                        future.set_exception(e)
+        except Exception as e:
+            if not ready.done():
+                ready.set_exception(e)
+
+            if self.logger:
+                self.logger.exception("OCR worker failed")
+
+            while True:
+                try:
+                    task = self._tasks.get_nowait()
+                except queue.Empty:
+                    break
+                if task is not None:
+                    task[0].set_exception(e)
+        finally:
+            if api:
+                self._lib.TessBaseAPIDelete(api)
+
+    def _set_variable(self, api: ctypes.c_void_p, name: str, value: str) -> None:
         if self._lib.TessBaseAPISetVariable(
-            self._api,
+            api,
             name.encode(),
             value.encode(),
         ) == 0:

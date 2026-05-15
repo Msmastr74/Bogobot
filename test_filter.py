@@ -24,7 +24,7 @@ async def test_on_file(
     cv2.imshow("Processed OCR Input", cleaned_img)
 
     print(f"Testing file: {file_path}, coords={coords}")
-    print(await ocr.parse_batch([cell_img], whitelist, psm=7))
+    print(await ocr.parse(cell_img, whitelist, psm=7))
 
     print("Press any key to continue...")
     cv2.waitKey(0)

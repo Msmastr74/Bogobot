@@ -56,9 +56,6 @@ if TYPE_CHECKING:
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
     from plugins.accounts import Account
 
-TesseractGroupKey = tuple[str, int]
-TesseractGroupItems = list[tuple[int, tuple[int, int, int, int]]]
-
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
@@ -84,7 +81,6 @@ class BotCore(discord.Client):
         self.CELL_OFFSET = 37 # x offset per historical cell
         self.SORT_AREA_COORDS = (75, 60, 1205, 575)
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.1)
-        self.OCR_CONCURRENCY: int = max(1, int(self.config.get("ocr_concurrency", 1)))
         self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
 
         self.STATS_COORDS: dict[str, 
@@ -115,6 +111,7 @@ class BotCore(discord.Client):
             save_debug=self.config.get("save_ocr_debug", False),
             logger=self.logger.getChild("OCR"),
             library_path=self.config.get("libtesseract_path"),
+            max_workers=max(1, int(self.config.get("ocr_concurrency", 4))),
         )
 
         self.stream_handler = StreamHandler(
@@ -404,42 +401,19 @@ class BotCore(discord.Client):
     
     async def update_ocr_data(self, img: Image.Image, *, sort_changed: bool = True) -> None:
         try:
-            semaphore = asyncio.Semaphore(self.OCR_CONCURRENCY)
-
             async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
-                results: list[OcrResult | None] = [None] * len(crops)
-                groups: dict[TesseractGroupKey, TesseractGroupItems] = {}
+                async def parse_crop(crop: OcrCrop) -> OcrResult:
+                    coords, whitelist, psm = crop
+                    return await self.ocr.parse(
+                        img.crop(coords),
+                        whitelist,
+                        psm=7 if psm is None else psm,
+                    )
 
-                for index, (coords, whitelist, psm) in enumerate(crops):
-                    key: TesseractGroupKey = (whitelist, 7 if psm is None else psm)
-                    groups.setdefault(key, []).append((index, coords))
-
-                async def parse_group(
-                    key: TesseractGroupKey,
-                    items: TesseractGroupItems,
-                ) -> None:
-                    whitelist, psm = key
-                    cells: list[Image.Image] = [img.crop(coords) for _, coords in items]
-                    if len(cells) < 1:
-                        return
-                    async with semaphore:
-                        group_results: list[OcrResult] = await self.ocr.parse_batch(
-                            cells,
-                            whitelist,
-                            psm=psm,
-                        )
-                    for (index, _), result in zip(items, group_results):
-                        results[index] = result
-
-                await asyncio.gather(*[
-                    parse_group(key, items)
-                    for key, items in groups.items()
+                return await asyncio.gather(*[
+                    parse_crop(crop)
+                    for crop in crops
                 ])
-
-                return [
-                    result if result is not None else ("", 0.0)
-                    for result in results
-                ]
 
             crops: list[OcrCrop] = []
             stats_specs: list[tuple[int, str, str]] = []

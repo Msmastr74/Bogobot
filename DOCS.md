@@ -20,7 +20,7 @@ User-edited settings:
 - `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
-- `ocr_concurrency`: Maximum number of concurrent OCR groups to schedule. The libtesseract engine serializes access to its persistent API instance internally. Defaults to 1.
+- `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 1.
 - `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
@@ -68,11 +68,11 @@ The `discord` subclass provides a simplified interface for interacting with the 
 ## OCR Implementation
 Bogobot utilizes libtesseract OCR for visual data extraction.
 - **Coordinates**: Stats are extracted from defined regions of a 720p frame.
-- **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and passed to a persistent libtesseract API instance as raw grayscale image data.
-- **OCR model**: The bot ensures `eng_fast.traineddata` exists in `tessdata_path`, downloading it from `tessdata_fast` on first startup when missing. libtesseract is initialized once with that tessdata directory and `eng_fast`.
+- **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and passed to persistent libtesseract API instances as raw grayscale image data.
+- **OCR model**: The bot ensures `eng_fast.traineddata` exists in `tessdata_path`, downloading it from `tessdata_fast` on first startup when missing. Each OCR worker initializes libtesseract with that tessdata directory and `eng_fast`.
 - **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
-- **Batch mode**: Crops with the same whitelist and page segmentation mode are still grouped together, but the persistent libtesseract engine reads them one at a time without subprocess startup or TIFF/PNG piping.
-- **Parallelism**: `ocr_concurrency` limits how many OCR groups are scheduled. The current libtesseract engine uses one API instance and a lock, so recognition itself is serialized for stability.
+- **OCR calls**: Each crop is sent directly to an OCR worker with its own whitelist and page segmentation mode. There is no subprocess startup or TIFF/PNG piping.
+- **Parallelism**: `ocr_concurrency` controls how many OCR workers are started. Workers run in threads, and each thread keeps its own initialized libtesseract API instance.
 - **Latest cells**: When the sort visualization changes, `ocr_cell_count` controls how many recent history cells are read for monitor updates.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
