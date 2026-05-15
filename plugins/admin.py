@@ -397,9 +397,6 @@ async def setup(bot: "BotCore"):
             return
 
         if action == "stop":
-            if not bot.is_authorized(interaction.user.id, 5):
-                await bot.discord.send("You are not the owner.")
-                return
             await bot.discord.send("Stopping main bot...", response=True)
             schedule_shutdown(bot, bot.logger)
             return
