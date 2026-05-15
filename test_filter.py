@@ -20,6 +20,7 @@ async def test_on_file(
     width, height = x2 - x1, y2 - y1
     area = width * height
     cleaned_img = preprocess_cell(cell_img, scale=3 if area > 1500 else 6)
+    print(cleaned_img.shape)
     original_cv = cv2.cvtColor(np.array(cell_img), cv2.COLOR_RGB2BGR)
 
     cv2.imshow("Original (Cropped)", original_cv)

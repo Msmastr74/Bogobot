@@ -20,6 +20,9 @@ OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int, int
 TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
 TESSERACT_LANGUAGE = "eng_fast"
 
+os.environ["OMP_THREAD_LIMIT"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
 
 class LibTesseractOCR:
     def __init__(

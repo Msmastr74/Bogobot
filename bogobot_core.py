@@ -111,7 +111,7 @@ class BotCore(discord.Client):
             save_debug=self.config.get("save_ocr_debug", False),
             logger=self.logger.getChild("OCR"),
             library_path=self.config.get("libtesseract_path"),
-            max_workers=max(1, int(self.config.get("ocr_concurrency", 4))),
+            max_workers=max(1, int(self.config.get("ocr_concurrency", 2))),
         )
 
         self.stream_handler = StreamHandler(
