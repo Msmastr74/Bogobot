@@ -19,8 +19,8 @@ from utils.notifications import NotificationBroadcaster
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
-CONSOLE_LOG_FORMAT = '[%(asctime)s %(levelname)-8s | %(name)-15s ] %(message)s'
-LOG_DATE_FORMAT = '%b %d %H:%M:%S.%3f'
+CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s'
+LOG_DATE_FORMAT = '%b %d %H:%M:%S'
 
 class ColorFormatter(logging.Formatter):
     LEVEL_COLORS = {
