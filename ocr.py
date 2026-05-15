@@ -7,6 +7,7 @@ import queue
 import threading
 import urllib.request
 from typing import Any
+import logging
 
 import cv2
 import numpy as np
@@ -29,7 +30,7 @@ class LibTesseractOCR:
         language: str = TESSERACT_LANGUAGE,
         save_debug: bool = False,
         debug_folder: str = "ocr_debug",
-        logger: Any = None,
+        logger: logging.Logger | None = None,
         library_path: str | None = None,
         max_workers: int = 1,
     ):
