@@ -131,7 +131,7 @@ class BotCore(discord.Client):
         self.setup = self._Setup(self)
         self.command_telemetry_callbacks: list[Callable[["CommandTelemetryEvent"], Awaitable[None] | None]] = []
         self._last_ocr_refresh: float = 0.0
-        self._last_frame_ms = time.monotonic()
+        self._last_frame_monotonic = time.monotonic()
         
         channel_data = self._load_channels_config()
         async def save_channels(data: dict[str, Any]):
@@ -272,18 +272,23 @@ class BotCore(discord.Client):
         frame_received_at = time.time()
 
         frame_received_monotonic = time.monotonic()
-        dt = frame_received_monotonic - self._last_frame_ms
-        self._last_frame_ms = frame_received_monotonic
+        dt = frame_received_monotonic - self._last_frame_monotonic
+        self._last_frame_monotonic = frame_received_monotonic
         self.logger.debug(f"New frame received (dt={dt:.2f}s)")
         
         if self.config.get("save_live_frame", False):
             img.save("live_720p.png", format="PNG")
+        
+        sort_changed_start = time.monotonic()
         sort_changed = self._sort_visual_changed(img)
+        self.logger.debug(f"Sort changed test (dt={time.monotonic() - sort_changed_start:.2f}s)")
+        
+        update_ocr_start = time.monotonic()
         await self.update_ocr_data(img, sort_changed=sort_changed)
-        dt = time.monotonic() - self._last_frame_ms
-        self.logger.debug(f"OCR data updated (dt={dt:.2f}s)")
+        self.logger.debug(f"OCR data updated (dt={time.monotonic() - update_ocr_start:.2f}s)")
         
         if self.milestones:
+            milestones_start = time.monotonic()
             frame_timestamp = int(frame_received_at)
             best_run = self.stats_cache.get("best_run")
             if best_run:
@@ -316,6 +321,7 @@ class BotCore(discord.Client):
                     timestamp=frame_timestamp,
                     img=img
                 )
+            self.logger.debug(f"Milestones updated (dt={time.monotonic() - milestones_start:.2f}s)")
 
     async def _update_non_decreasing_milestone(
         self,

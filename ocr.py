@@ -203,6 +203,7 @@ class LibTesseractOCR:
                     task[0].set_exception(e)
         finally:
             if api:
+                self._lib.TessBaseAPIEnd(api)
                 self._lib.TessBaseAPIDelete(api)
 
     def _set_variable(self, api: ctypes.c_void_p, name: str, value: str) -> None:
@@ -294,6 +295,9 @@ class LibTesseractOCR:
     def _configure_libtesseract(self) -> None:
         self._lib.TessBaseAPICreate.argtypes = []
         self._lib.TessBaseAPICreate.restype = ctypes.c_void_p
+
+        self._lib.TessBaseAPIEnd.argtypes = [ctypes.c_void_p]
+        self._lib.TessBaseAPIEnd.restype = None
 
         self._lib.TessBaseAPIDelete.argtypes = [ctypes.c_void_p]
         self._lib.TessBaseAPIDelete.restype = None
