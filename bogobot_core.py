@@ -89,10 +89,10 @@ class BotCore(discord.Client):
                                 tuple[int, int, int, int, tuple[str | None, int | None]]] = {
             "shuffles": (81, 610, 312, 640),
             "comparisons": (331, 610, 551, 640),
-            "best_run": (645, 610, 730, 640, "0123456789/.dhm "),
+            "best_run": (645, 610, 730, 640, "0123456789/"),
             "shuffles_sec": (819, 610, 1043, 640),
-            "average_best_shuffle": (80, 670, 115, 685, "0123456789/.dhm "),
-            "uptime": (1160, 10, 1260, 30, "0123456789/.dhm ")
+            "average_best_shuffle": (80, 670, 115, 685, "0123456789."),
+            "uptime": (1160, 10, 1260, 30, "0123456789dhm ")
         }
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
