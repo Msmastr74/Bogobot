@@ -31,6 +31,6 @@ async def setup(bot: 'BotCore'):
         discord_embed.add_field(name="Shuffles Per Second", value=f"{shuffles_sec}", inline=False)
         discord_embed.add_field(name="Average Best Shuffle", value=f"{average_best_shuffle}", inline=False)
         discord_embed.add_field(name="Uptime [STREAM]", value=f"{uptime}", inline=False)
-        discord_embed.add_field(name="Elapsed Time [API]", value=f"{elapsed_time}", inline=False)
+        discord_embed.add_field(name="Elapsed Time [STATIC]", value=f"{elapsed_time}", inline=False)
         
         await bot.discord.send_embed(embed=discord_embed, response=True)
