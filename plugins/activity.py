@@ -19,10 +19,16 @@ async def setup(bot: 'BotCore'):
             pass # unshuffled
         elif chance < 0.4 and tlist.count('-') > 0:
             left = tlist[0:tlist.index('-')]
-            right = tlist[tlist.index('-')+1:]
+            right = tlist[tlist.index('-'):]
             random.shuffle(left)
             random.shuffle(right)
             tlist = left + ['-'] + right
+        elif chance < 0.4 and text == 'Bogobot':
+            left = tlist[0:4]
+            right = tlist[4:]
+            random.shuffle(left)
+            random.shuffle(right)
+            tlist = left + right
         else:
             random.shuffle(tlist)
         shuffled_text = ''.join(tlist)
