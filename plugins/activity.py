@@ -14,7 +14,17 @@ async def setup(bot: 'BotCore'):
             return
         text = bot.user.name
         tlist = list(text)
-        random.shuffle(tlist)
+        chance = random.random()
+        if chance < 0.1:
+            pass # unshuffled
+        elif chance < 0.4:
+            left = tlist[0:tlist.index('-')]
+            right = tlist[tlist.index('-')+1:]
+            random.shuffle(left)
+            random.shuffle(right)
+            tlist = left + ['-'] + right
+        else:
+            random.shuffle(tlist)
         shuffled_text = ''.join(tlist)
         if bot.is_closed():
             return
