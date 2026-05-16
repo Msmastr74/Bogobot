@@ -30,6 +30,7 @@ class MessageEditCoalescer:
         self._changed = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
         self._closed = False
+        self.NotFound_or_Forbidden = False
 
     def start(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -77,6 +78,7 @@ class MessageEditCoalescer:
                 try:
                     result = await self.message.edit(**pending.kwargs)
                 except (discord.NotFound, discord.Forbidden):
+                    self.NotFound_or_Forbidden = True
                     result = None
                 except Exception as exc:
                     if pending.future is not None and not pending.future.done():
