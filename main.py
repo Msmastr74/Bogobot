@@ -1,6 +1,5 @@
 from bogobot_core import BotCore
 import asyncio
-import contextlib
 import os
 import sys
 
