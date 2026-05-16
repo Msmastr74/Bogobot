@@ -433,7 +433,7 @@ class BotCore(discord.Client):
                 self.current_vals = []
 
             for name, coords in self.STATS_COORDS.items():
-                whitelist = "0123456789"
+                whitelist = "0123456789,"
                 psm: int | None = None
                 if len(coords) >= 5:
                     extra = coords[4]
@@ -467,10 +467,7 @@ class BotCore(discord.Client):
                 if not text or conf < 0:
                     continue
 
-                if whitelist != "0123456789":
-                    self.stats_cache[name] = text
-                else:
-                    self.stats_cache[name] = f"{int(text):,}"
+                self.stats_cache[name] = text
 
             if sort_changed:
                 self.current_vals = [results[index] for index in cell_indexes]

@@ -11,7 +11,7 @@ async def test_on_file(
     ocr: LibTesseractOCR,
     file_path: str,
     coords: tuple[int, int, int, int],
-    whitelist: str = "0123456789",
+    whitelist: str = "0123456789,",
 ) -> None:
     x1, y1, x2, y2 = coords
     full_img = Image.open(file_path)

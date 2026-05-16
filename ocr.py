@@ -172,6 +172,9 @@ class LibTesseractOCR:
 
         self._set_variable(api, "load_system_dawg", "0")
         self._set_variable(api, "load_freq_dawg", "0")
+        self._set_variable(api, "load_punc_dawg", "0")
+        self._set_variable(api, "load_number_dawg", "0")
+        self._set_variable(api, "invert_threshold", "0.0")
         return api
 
     def _worker_main(self, ready: concurrent.futures.Future[None]) -> None:
@@ -410,8 +413,8 @@ class LibTesseractOCR:
 def preprocess_cell(
     pil_cell: Image.Image,
     scale: int = 3,
-    pad: int = 10,
-    stroke_thickness: int = 15,
+    pad: int = 15,
+    stroke_thickness: int = 13,
     threshold: int = 165,
 ) -> np.ndarray:
     # Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
@@ -478,4 +481,11 @@ def preprocess_cell(
                 shells.append({"box": (x, y, w, h), "type": "normal"})
 
     bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-    return cv2.dilate(bw, np.ones((2, 2), np.uint8), iterations=1)
+    return cv2.dilate(bw, np.array(
+        dtype=np.uint8,
+        object=[
+            [2, 1, 1, 2],
+            [2, 1, 1, 2],
+            [2, 1, 1, 2]
+        ]
+    ), iterations=1)
