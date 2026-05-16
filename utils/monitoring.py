@@ -39,7 +39,6 @@ class PersistentChannelMonitor:
         self.display_name = display_name
         self.initial_payload = initial_payload
         self.update_payload = update_payload
-        self._stale_message_ids: set[int] = set()
         self.tracker = Tracker[int, int](
             load=self._load_messages,
             save=self._save_messages,
@@ -149,7 +148,8 @@ class PersistentChannelMonitor:
             if coalescer is None:
                 continue
             if coalescer.NotFound_or_Forbidden:
-                self._stale_message_ids.add(message_id)
+                await self.tracker.remove(channel_id)
+                await self.bot.edits.delete(message_id)
                 continue
             await coalescer.edit(wait=False, **dict(payload))
 
@@ -172,15 +172,8 @@ class PersistentChannelMonitor:
             return None
 
     async def _validate_message(self, channel_id: int, message_id: int) -> bool:
-        if message_id in self._stale_message_ids:
-            return False
-
         coalescer = await self._ensure_message(channel_id, message_id)
         if coalescer is None:
-            return False
-
-        if coalescer.NotFound_or_Forbidden:
-            self._stale_message_ids.add(message_id)
             return False
 
         return True
