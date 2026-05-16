@@ -199,7 +199,7 @@ class PersistentChannelMonitor:
         self,
         channel_id: int,
         message_id: int,
-    ) -> discord.PartialMessage | None:
+    ) -> discord.PartialMessage:
         channel = self.bot.get_partial_messageable(channel_id)
 
         return channel.get_partial_message(message_id)
