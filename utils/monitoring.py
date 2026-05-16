@@ -192,8 +192,6 @@ class PersistentChannelMonitor:
             return existing
 
         message = self._partial_message(channel_id, message_id)
-        if message is None:
-            return None
 
         return self.bot.edits.register(message)
 
@@ -202,12 +200,9 @@ class PersistentChannelMonitor:
         channel_id: int,
         message_id: int,
     ) -> discord.PartialMessage | None:
-        channel = self.bot.get_channel(channel_id)
+        channel = self.bot.get_partial_messageable(channel_id)
 
-        if channel is None or not hasattr(channel, "get_partial_message"):
-            return None
-
-        return cast(Any, channel).get_partial_message(message_id)
+        return channel.get_partial_message(message_id)
 
     async def _delete_message(self, channel_id: int, message_id: int) -> None:
         if await self.bot.edits.delete(message_id):
