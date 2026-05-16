@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
-import time
 
 import discord
 

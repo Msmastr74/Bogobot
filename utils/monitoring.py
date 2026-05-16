@@ -176,6 +176,10 @@ class PersistentChannelMonitor:
         if coalescer is None:
             return False
 
+        if coalescer.NotFound_or_Forbidden:
+            await self.bot.edits.delete(message_id)
+            return False
+
         return True
 
     async def _ensure_message(
