@@ -8,14 +8,13 @@ from utils.tracker import Tracker
 if TYPE_CHECKING:
     from logging import Logger
 
-
 class NotificationBroadcaster:
     def __init__(
         self,
         bot: discord.Client,
         *,
         subscriptions: dict[str, Any],
-        save_subscriptions: Callable[[dict[str, Any]], Awaitable[None]],
+        save_subscriptions: Callable[[dict[str, list[str]]], Awaitable[None]],
         logger: "Logger | None" = None,
     ):
         self.bot = bot
@@ -124,13 +123,14 @@ class NotificationBroadcaster:
             if channel is None or not hasattr(channel, "send"):
                 stale_channel_ids.append(channel_id)
                 continue
+            channel = cast(discord.abc.MessageableChannel, channel)
             try:
                 send_kwargs = kwargs.copy()
                 if create_files is not None:
                     send_kwargs["files"] = create_files()
                 if create_view is not None:
                     send_kwargs["view"] = create_view()
-                await cast(Any, channel).send(**send_kwargs)
+                await channel.send(**send_kwargs)
             except (discord.NotFound, discord.Forbidden):
                 stale_channel_ids.append(channel_id)
             except Exception as exc:

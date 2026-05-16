@@ -1,10 +1,9 @@
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal
+from utils.type import T
 
 import discord
 
-
-StateT = TypeVar("StateT")
 DISPLAY_TEXT_LIMIT = 3200
 DISPLAY_CONTENT_LIMIT = 2800
 TRUNCATION_TEXT = "\n... truncated ..."
@@ -42,16 +41,16 @@ class Page:
 
 
 @dataclass
-class SectionRead(Generic[StateT]):
+class SectionRead(Generic[T]):
     section: PageSection
-    state: StateT
+    state: T
 
 
-class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
+class PaginatedView(discord.ui.LayoutView, Generic[T]):
     def __init__(
         self,
         *,
-        initial_state: StateT,
+        initial_state: T,
         owner_id: int,
         timeout: float | None = 300,
     ):
@@ -59,13 +58,13 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
         self.state = initial_state
         self.owner_id = owner_id
         self.current_page: Page | None = None
-        self.previous_page_state: StateT | None = None
-        self.next_page_state: StateT | None = None
+        self.previous_page_state: T | None = None
+        self.next_page_state: T | None = None
 
-    async def next_section(self, state: StateT) -> SectionRead[StateT] | None:
+    async def next_section(self, state: T) -> SectionRead[T] | None:
         raise NotImplementedError
 
-    async def previous_section(self, state: StateT) -> SectionRead[StateT] | None:
+    async def previous_section(self, state: T) -> SectionRead[T] | None:
         raise NotImplementedError
 
     def page_allowed_mentions(self) -> discord.AllowedMentions | None:
@@ -114,7 +113,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
     async def set_state(
         self,
         interaction: discord.Interaction,
-        state: StateT,
+        state: T,
         direction: Literal["next", "previous"] = "next",
     ) -> None:
         self.state = state
@@ -138,7 +137,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
         if self.next_page_state is not None:
             await self.set_state(interaction, self.next_page_state)
 
-    async def refresh_page(self, interaction: discord.Interaction, state: StateT | None = None) -> None:
+    async def refresh_page(self, interaction: discord.Interaction, state: T | None = None) -> None:
         await self.set_state(interaction, self.state if state is None else state)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -182,9 +181,9 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
 
     async def _collect_sections(
         self,
-        state: StateT,
+        state: T,
         direction: Literal["next", "previous"],
-    ) -> tuple[list[PageSection], StateT | None]:
+    ) -> tuple[list[PageSection], T | None]:
         sections: list[PageSection] = []
         current_state = state
         successful_state = state
@@ -217,8 +216,8 @@ class PaginatedView(discord.ui.LayoutView, Generic[StateT]):
 
     async def _find_page_state(
         self,
-        state: StateT,
+        state: T,
         direction: Literal["next", "previous"],
-    ) -> StateT | None:
+    ) -> T | None:
         _sections, page_state = await self._collect_sections(state, direction)
         return page_state

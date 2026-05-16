@@ -1,5 +1,5 @@
 import time
-from typing import Any, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import aiohttp
 import discord
@@ -9,6 +9,16 @@ from utils.monitoring import PersistentChannelMonitor
 if TYPE_CHECKING:
     from main import BotCore
 
+class Player(TypedDict, total=False):
+    pos: int
+    name: str
+    elo: int
+    peak_elo: int
+    rank: str
+    games_played: int
+    win_rate: int
+    current_streak: int
+    max_win_streak: int
 
 LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
 LEADERBOARD_LIMIT = 10
@@ -32,7 +42,7 @@ class LeaderboardView(discord.ui.LayoutView):
         *,
         title: str,
         subtitle: str,
-        rows: list[dict[str, Any]],
+        rows: list[Player],
         updated_at: int | None = None,
         limit: int = LEADERBOARD_LIMIT,
     ):
@@ -50,7 +60,7 @@ class LeaderboardView(discord.ui.LayoutView):
             footer = f"{footer} - Updated <t:{updated_at}:R>"
         self.add_item(discord.ui.TextDisplay(f"-# {footer}"))
 
-    def _body(self, rows: list[dict[str, Any]], *, limit: int) -> str:
+    def _body(self, rows: list[Player], *, limit: int) -> str:
         if not rows:
             return "No leaderboard data available."
 
@@ -59,7 +69,7 @@ class LeaderboardView(discord.ui.LayoutView):
             for player in rows[:limit]
         )
 
-    def _row(self, player: dict[str, Any]) -> str:
+    def _row(self, player: Player) -> str:
         rank_emoji = RANK_EMOJIS.get(str(player.get("rank", "")).lower(), "-")
         pos = player.get("pos", "?")
         name = player.get("name", "Unknown")
@@ -85,13 +95,12 @@ class LeaderboardView(discord.ui.LayoutView):
 class LeaderboardPayload(TypedDict):
     view: LeaderboardView
 
-
 async def setup(bot: "BotCore"):
     from utils import groups
 
     manage = groups.manage(bot)
 
-    async def fetch_leaderboard() -> list[dict[str, Any]]:
+    async def fetch_leaderboard() -> list[Player]:
         try:
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -106,7 +115,7 @@ async def setup(bot: "BotCore"):
         return []
 
     def leaderboard_payload(
-        rows: list[dict[str, Any]],
+        rows: list[Player],
         *,
         title: str = "Leaderboard",
         subtitle: str = "Top players ranked by ELO",

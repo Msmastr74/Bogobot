@@ -12,11 +12,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageSequence
 
-from typing import Any, Optional, overload
-from types import CoroutineType
+from typing import Optional, overload, TYPE_CHECKING
 from bogobot_core import current_interaction
 from utils.logger_pipe import log_subprocess_pipe
-from typing import TYPE_CHECKING
+from utils.type import Coro
 if TYPE_CHECKING:
     from main import BotCore
 
@@ -26,6 +25,8 @@ MAXIMUM_SCRAMBLE_SHAPE = (30, 30)
 
 class BogoUserError(Exception):
     pass
+
+FileList = list[Coro[discord.File | None]]
 
 async def setup(bot: "BotCore"):
     def get_scramble_shape(rows: int | None, columns: int | None) -> tuple[int, int]:
@@ -42,7 +43,7 @@ async def setup(bot: "BotCore"):
         return rows or 1, columns or 1
     def message_bogoscramble_inputs(
         message: discord.Message,
-    ) -> tuple[str, list[discord.Embed], list[Any]]:
+    ) -> tuple[str, list[discord.Embed], list[discord.Attachment]]:
         sources: list[discord.Message | discord.MessageSnapshot] = [
             message,
             *message.message_snapshots
@@ -68,7 +69,7 @@ async def setup(bot: "BotCore"):
         *,
         content: str | None = None,
         embeds: list[discord.Embed] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[discord.Attachment] | None = None,
         scramble_shape: tuple[int, int] = DEFAULT_SCRAMBLE_SHAPE
     ):
         upload_limit = interaction.filesize_limit
@@ -720,7 +721,7 @@ async def setup(bot: "BotCore"):
                 raise BogoUserError(attachment_too_big_message(file.filename, output_size))
             return file
         async def gather_bogo_files(
-            tasks: list[CoroutineType[Any, Any, discord.File | None]]
+            tasks: FileList
         ) -> list[discord.File]:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             files: list[discord.File] = []
@@ -762,7 +763,7 @@ async def setup(bot: "BotCore"):
             for index, (_, scrambled) in enumerate(embed_pairs)
             if index not in omit_embed_indexes
         ]
-        attachment_tasks = [
+        attachment_tasks: FileList = [
             bogo_attachment(attachment)
             for attachment in attachments
         ]
@@ -783,7 +784,7 @@ async def setup(bot: "BotCore"):
                 for kind, url, use_discord_headers in embed_media_jobs(original)
             ]
             available_file_slots = max(0, 10 - len(files))
-            embed_gifv_tasks = [
+            embed_gifv_tasks: FileList = [
                 bogo_embed_gifv(index, url, use_discord_headers)
                 for index, url, use_discord_headers in embed_gifv_candidates[:available_file_slots]
             ]
@@ -791,7 +792,7 @@ async def setup(bot: "BotCore"):
             available_file_slots = max(0, 10 - len(files))
             for _, embed, kind, _, _ in embed_image_candidates[available_file_slots:]:
                 set_embed_media(embed, kind, None)
-            embed_image_tasks = [
+            embed_image_tasks: FileList = [
                 bogo_embed_image(index, embed, kind, url, use_discord_headers)
                 for index, embed, kind, url, use_discord_headers in embed_image_candidates[:available_file_slots]
             ]
@@ -861,7 +862,7 @@ async def setup(bot: "BotCore"):
             *,
             content: str,
             embeds: list[discord.Embed],
-            attachments: list[Any],
+            attachments: list[discord.Attachment],
         ):
             super().__init__()
             self.content = content

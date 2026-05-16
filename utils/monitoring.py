@@ -1,6 +1,7 @@
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, TYPE_CHECKING
+from utils.type import ObjectWithCommandDecorator, P, R, T
 
 import discord
 from discord.ext import tasks
@@ -11,13 +12,11 @@ if TYPE_CHECKING:
     from bogobot_core import BotCore
     from utils.edit_coalescer import MessageEditCoalescer
 
-
 MessagePayload = Mapping[str, Any]
 PayloadFactory = Callable[[], MessagePayload | Awaitable[MessagePayload]]
 UpdateFactory = Callable[[], MessagePayload | None | Awaitable[MessagePayload | None]]
 
-
-async def _resolve(value: Any) -> Any:
+async def _resolve(value: Awaitable[T] | T) -> T:
     if inspect.isawaitable(value):
         return await value
     return value
@@ -57,17 +56,17 @@ class PersistentChannelMonitor:
 
     def command(
         self,
-        group: Any,
-        *,
-        name: str,
-        description: str,
-    ) -> None:
-        @group.command(name=name, description=description)
+        root: ObjectWithCommandDecorator[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs
+    ):
+        @root.command(*args, **kwargs)
         async def monitor_command(
             interaction: discord.Interaction,
             action: Literal["start", "stop"],
         ):
             await self.handle_command(interaction, action)
+        return monitor_command
 
     async def handle_command(
         self,
@@ -108,7 +107,7 @@ class PersistentChannelMonitor:
             )
             return
 
-        payload: MessagePayload = dict(await _resolve(self.initial_payload()))
+        payload = await _resolve(self.initial_payload())
 
         try:
             message = await self.bot.discord.send(
@@ -139,7 +138,7 @@ class PersistentChannelMonitor:
         if not stored_messages:
             return
 
-        payload: MessagePayload | None = await _resolve(self.update_payload())
+        payload = await _resolve(self.update_payload())
         if payload is None:
             return
 

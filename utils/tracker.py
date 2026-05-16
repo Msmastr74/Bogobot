@@ -1,10 +1,8 @@
 import asyncio
-from collections.abc import Awaitable, Callable, Hashable, Mapping
-from typing import Any, Generic, TypeVar
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Generic
+from utils.type import K, T
 
-
-K = TypeVar("K", bound=Hashable)
-T = TypeVar("T")
 RawItems = Mapping[str, Any]
 
 

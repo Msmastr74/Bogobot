@@ -11,11 +11,12 @@ import asyncio
 import importlib
 import contextvars
 import time
-from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, Coroutine, ParamSpec, TypeVar, cast
+from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, cast
 from ocr import LibTesseractOCR, OcrCrop, OcrResult, TESSDATA_FAST_URL
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
+from utils.type import P, T, Coro
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -816,9 +817,7 @@ class BotCore(discord.Client):
             self.outer = outer
             self.groups: dict[str, discord.app_commands.Group] = {}
         
-        T = TypeVar('T')
-        P = ParamSpec('P')
-        _Callable = Callable[Concatenate[discord.Interaction, P], Coroutine[Any, Any, T]]
+        _Callable = Callable[Concatenate[discord.Interaction, P], Coro[T]]
         _Command = discord.app_commands.Command[discord.app_commands.Group, P, T]
         
         def command(
@@ -889,11 +888,11 @@ class BotCore(discord.Client):
             self, name: str, *, perm_requirement=1,
             eph=True, defer=True
         ) -> Callable[[
-                Callable[[discord.Interaction, discord.Member], Coroutine[Any, Any, Any]] |
-                Callable[[discord.Interaction, discord.User], Coroutine[Any, Any, Any]] |
-                Callable[[discord.Interaction, discord.Message], Coroutine[Any, Any, Any]] |
+                Callable[[discord.Interaction, discord.Member], Coro[Any]] |
+                Callable[[discord.Interaction, discord.User], Coro[Any]] |
+                Callable[[discord.Interaction, discord.Message], Coro[Any]] |
                 Callable[[discord.Interaction, discord.Member | discord.User],
-                         Coroutine[Any, Any, Any]]
+                         Coro[Any]]
             ], discord.app_commands.ContextMenu]:
             def decorator(func):
                 @self.outer.tree.context_menu(name=name)
@@ -939,7 +938,7 @@ class BotCore(discord.Client):
         async def _run_command(
             self,
             interaction: discord.Interaction,
-            func: Callable[..., Coroutine[Any, Any, Any]],
+            func: Callable[Concatenate[discord.Interaction, ...], Coro[Any]],
             args,
             kwargs,
             *,
