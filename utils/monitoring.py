@@ -147,10 +147,6 @@ class PersistentChannelMonitor:
             coalescer = await self._ensure_message(channel_id, message_id)
             if coalescer is None:
                 continue
-            if coalescer.NotFound_or_Forbidden:
-                await self.tracker.remove(channel_id)
-                await self.bot.edits.delete(message_id)
-                continue
             await coalescer.edit(wait=False, **dict(payload))
 
     async def _load_messages(self) -> dict[str, Any]:
