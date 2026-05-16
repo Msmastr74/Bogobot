@@ -1,6 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Literal, TYPE_CHECKING, cast
+from typing import Any, Literal, TYPE_CHECKING
 
 import discord
 from discord.ext import tasks
