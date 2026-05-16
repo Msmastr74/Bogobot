@@ -75,7 +75,7 @@ class NotificationBroadcaster:
         if not self._can_send_to(channel_id):
             return False
         store = await self.tracker.items()
-        topics = store.setdefault(channel_id, [])
+        topics = list(store.get(channel_id, []))
         if topic not in topics:
             topics.append(topic)
             topics.sort()
@@ -84,10 +84,13 @@ class NotificationBroadcaster:
 
     async def unsubscribe(self, topic: str, channel_id: int) -> bool:
         store = await self.tracker.items()
-        topics = store.get(channel_id)
-        if topics is None or topic not in topics:
+        existing_topics = store.get(channel_id)
+
+        if existing_topics is None or topic not in existing_topics:
             return False
+        topics = list(existing_topics)
         topics.remove(topic)
+
         if topics:
             await self.tracker.set(channel_id, topics)
         else:
