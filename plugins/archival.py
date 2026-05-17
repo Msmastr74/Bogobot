@@ -7,14 +7,14 @@ from pathlib import Path
 import discord
 
 from bogobot_core import BotCore
-from utils.pagination import Page, PageSection, PaginatedView, SectionRead
+from utils.pagination import PageSection, PaginatedView, SectionRead
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
 DEFAULT_FLUSH_INTERVAL_SECONDS = 60.0
 DEFAULT_CHUNK_EVENT_LIMIT = 200
 ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
-ARCHIVE_PAGE_EVENT_LIMIT = 40
+ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
 ARCHIVE_WINDOW_CHUNK_LIMIT = 4
 
@@ -31,8 +31,7 @@ class ArchiveEvent:
 
 @dataclass(frozen=True)
 class ArchiveState:
-    start: int
-    end: int
+    cursor: int
     snapshot_end: int
 
 
@@ -273,32 +272,18 @@ async def setup(bot: BotCore):
 
         return events
 
-    def event_state(
-        events: list[ArchiveEvent],
+    def read_events_before(
+        end: int,
         snapshot_end: int,
-        *,
-        empty_position: int,
-    ) -> ArchiveState:
-        if not events:
-            return ArchiveState(
-                start=empty_position,
-                end=empty_position,
-                snapshot_end=snapshot_end,
-            )
-        return ArchiveState(
-            start=events[0].start,
-            end=events[-1].end,
-            snapshot_end=snapshot_end,
-        )
-
-    def read_events_before(end: int, snapshot_end: int) -> list[ArchiveEvent]:
+        limit: int = ARCHIVE_BUFFER_EVENT_LIMIT,
+    ) -> list[ArchiveEvent]:
         events_descending: list[ArchiveEvent] = []
         cursor = min(end, snapshot_end)
         chunks_read = 0
 
         while (
             cursor > 0
-            and len(events_descending) < ARCHIVE_PAGE_EVENT_LIMIT
+            and len(events_descending) < limit
             and chunks_read < ARCHIVE_WINDOW_CHUNK_LIMIT
         ):
             chunk_start, chunk_end = read_chunk_before(cursor)
@@ -308,11 +293,11 @@ async def setup(bot: BotCore):
             chunk_events = parse_chunk(chunk_start, chunk_end)
             eligible_events = [
                 event for event in chunk_events
-                if event.end <= cursor
+                if event.start < cursor
             ]
             for event in reversed(eligible_events):
                 events_descending.append(event)
-                if len(events_descending) >= ARCHIVE_PAGE_EVENT_LIMIT:
+                if len(events_descending) >= limit:
                     break
 
             cursor = chunk_start
@@ -320,14 +305,18 @@ async def setup(bot: BotCore):
 
         return list(reversed(events_descending))
 
-    def read_events_after(start: int, snapshot_end: int) -> list[ArchiveEvent]:
+    def read_events_after(
+        start: int,
+        snapshot_end: int,
+        limit: int = ARCHIVE_BUFFER_EVENT_LIMIT,
+    ) -> list[ArchiveEvent]:
         events: list[ArchiveEvent] = []
         cursor = max(0, start)
         chunks_read = 0
 
         while (
             cursor < snapshot_end
-            and len(events) < ARCHIVE_PAGE_EVENT_LIMIT
+            and len(events) < limit
             and chunks_read < ARCHIVE_WINDOW_CHUNK_LIMIT
         ):
             chunk_start, chunk_end = chunk_bounds_containing_or_after(
@@ -340,40 +329,12 @@ async def setup(bot: BotCore):
             chunk_events = parse_chunk(chunk_start, chunk_end)
             eligible_events = [
                 event for event in chunk_events
-                if event.start >= cursor
+                if event.start > cursor
             ]
             for event in eligible_events:
                 events.append(event)
-                if len(events) >= ARCHIVE_PAGE_EVENT_LIMIT:
+                if len(events) >= limit:
                     break
-
-            cursor = chunk_end
-            chunks_read += 1
-
-        return events
-
-    def read_events_between(start: int, end: int, snapshot_end: int) -> list[ArchiveEvent]:
-        events: list[ArchiveEvent] = []
-        cursor = start
-        chunks_read = 0
-
-        while (
-            cursor < end
-            and cursor < snapshot_end
-            and chunks_read < ARCHIVE_WINDOW_CHUNK_LIMIT
-        ):
-            chunk_start, chunk_end = chunk_bounds_containing_or_after(
-                cursor,
-                snapshot_end,
-            )
-            if chunk_start == chunk_end:
-                break
-
-            chunk_events = parse_chunk(chunk_start, min(chunk_end, snapshot_end))
-            events.extend(
-                event for event in chunk_events
-                if start <= event.start and event.end <= end
-            )
 
             cursor = chunk_end
             chunks_read += 1
@@ -469,6 +430,7 @@ async def setup(bot: BotCore):
     class ArchiveView(PaginatedView[ArchiveState]):
         def __init__(self, *, initial_state: ArchiveState):
             super().__init__(initial_state=initial_state, timeout=300)
+            self.cached_events: list[ArchiveEvent] = []
             self.newer = discord.ui.Button(
                 label="Newer",
                 style=discord.ButtonStyle.secondary,
@@ -510,31 +472,32 @@ async def setup(bot: BotCore):
             ]
 
         def page_header(self, page) -> str | None:
-            if self.state.start == self.state.end:
+            indexes = [
+                section.index for section in page.sections
+                if section.index is not None
+            ]
+            if not indexes:
                 return "## Monitor Archive"
             return (
                 "## Monitor Archive\n"
                 f"Archive snapshot: `{self.state.snapshot_end}` bytes\n"
-                f"Showing event bytes `{self.state.start}` to `{self.state.end}`"
+                f"Showing event starts `{min(indexes)}` to `{max(indexes)}`"
             )
 
         def add_controls(self) -> None:
             self.add_item(self.controls)
 
         def sync_controls(self) -> None:
-            self.newer.disabled = self.state.end >= self.state.snapshot_end
-            self.older.disabled = self.state.start <= 0
+            self.newer.disabled = self.next_page_state is None
+            self.older.disabled = self.previous_page_state is None
             self.refresh.disabled = False
 
-        def section_for(self, events: list[ArchiveEvent]) -> PageSection:
-            lines: list[str] = []
-            for event in reversed(events):
-                lines.append(self.event_line(event))
-            body = "\n".join(lines) if lines else "No archived monitor values yet."
+        def section_for(self, event: ArchiveEvent) -> PageSection:
             return PageSection(
                 title="Monitor Archive",
-                body=body,
+                body=self.event_line(event),
                 accent_colour=discord.Color.dark_teal(),
+                index=event.start,
             )
 
         def event_line(self, event: ArchiveEvent) -> str:
@@ -550,110 +513,100 @@ async def setup(bot: BotCore):
                 f"`value={event.value}/{event.section_count}`"
             )
 
-        async def load_archive_page(self, state: ArchiveState) -> Page:
-            self.state = state
-            if state.start == state.end:
-                sections = self.empty_sections()
-            else:
-                events = await asyncio.to_thread(
-                    read_events_between,
-                    state.start,
-                    state.end,
-                    state.snapshot_end,
-                )
-                sections = [self.section_for(events)] if events else self.empty_sections()
+        def replace_cache(self, events: list[ArchiveEvent]) -> None:
+            self.cached_events = sorted(events, key=lambda event: event.start)
 
-            page = Page(
-                sections=sections,
-                allowed_mentions=self.page_allowed_mentions(),
-            )
-            self.current_page = page
-            self._render_page(page)
-            self.sync_controls()
-            return page
+        async def event_before(self, cursor: int, snapshot_end: int) -> ArchiveEvent | None:
+            candidates = [
+                event for event in self.cached_events
+                if event.start < cursor
+            ]
+            if not candidates:
+                self.replace_cache(await asyncio.to_thread(
+                    read_events_before,
+                    cursor,
+                    snapshot_end,
+                ))
+                candidates = [
+                    event for event in self.cached_events
+                    if event.start < cursor
+                ]
+            if not candidates:
+                return None
+            return max(candidates, key=lambda event: event.start)
 
-        async def newest_state(self, snapshot_end: int) -> ArchiveState:
-            events = await asyncio.to_thread(
-                read_events_before,
-                snapshot_end,
-                snapshot_end,
-            )
-            return event_state(
-                events,
-                snapshot_end,
-                empty_position=snapshot_end,
-            )
-
-        async def older_state(self) -> ArchiveState:
-            events = await asyncio.to_thread(
-                read_events_before,
-                self.state.start,
-                self.state.snapshot_end,
-            )
-            return event_state(
-                events,
-                self.state.snapshot_end,
-                empty_position=0,
-            )
-
-        async def newer_state(self) -> ArchiveState:
-            events = await asyncio.to_thread(
-                read_events_after,
-                self.state.end,
-                self.state.snapshot_end,
-            )
-            return event_state(
-                events,
-                self.state.snapshot_end,
-                empty_position=self.state.snapshot_end,
-            )
+        async def event_after(self, cursor: int, snapshot_end: int) -> ArchiveEvent | None:
+            candidates = [
+                event for event in self.cached_events
+                if event.start > cursor
+            ]
+            if not candidates:
+                self.replace_cache(await asyncio.to_thread(
+                    read_events_after,
+                    cursor,
+                    snapshot_end,
+                ))
+                candidates = [
+                    event for event in self.cached_events
+                    if event.start > cursor
+                ]
+            if not candidates:
+                return None
+            return min(candidates, key=lambda event: event.start)
 
         async def next_section(
             self,
             state: ArchiveState,
         ) -> SectionRead[ArchiveState] | None:
-            return None
+            event = await self.event_after(state.cursor, state.snapshot_end)
+            if event is None:
+                return None
+            return SectionRead(
+                section=self.section_for(event),
+                state=ArchiveState(
+                    cursor=event.start,
+                    snapshot_end=state.snapshot_end,
+                ),
+            )
 
         async def previous_section(
             self,
             state: ArchiveState,
         ) -> SectionRead[ArchiveState] | None:
-            return None
+            event = await self.event_before(state.cursor, state.snapshot_end)
+            if event is None:
+                return None
+            return SectionRead(
+                section=self.section_for(event),
+                state=ArchiveState(
+                    cursor=event.start,
+                    snapshot_end=state.snapshot_end,
+                ),
+            )
 
         async def newer_action(
             self,
             interaction: discord.Interaction,
         ) -> None:
-            state = await self.newer_state()
-            page = await self.load_archive_page(state)
-            await interaction.response.edit_message(
-                view=self,
-                **page.as_edit_kwargs(),
-            )
+            await self.show_next_page(interaction)
 
         async def refresh_action(
             self,
             interaction: discord.Interaction,
         ) -> None:
             snapshot_end = await archive_snapshot_end()
-            page = await self.load_archive_page(
-                await self.newest_state(snapshot_end)
-            )
-            await interaction.response.edit_message(
-                view=self,
-                **page.as_edit_kwargs(),
+            self.replace_cache([])
+            await self.set_state(
+                interaction,
+                ArchiveState(cursor=snapshot_end, snapshot_end=snapshot_end),
+                direction="previous",
             )
 
         async def older_action(
             self,
             interaction: discord.Interaction,
         ) -> None:
-            state = await self.older_state()
-            page = await self.load_archive_page(state)
-            await interaction.response.edit_message(
-                view=self,
-                **page.as_edit_kwargs(),
-            )
+            await self.show_previous_page(interaction)
 
         async def close_action(
             self,
@@ -671,14 +624,11 @@ async def setup(bot: BotCore):
         snapshot_end = await archive_snapshot_end()
         view = ArchiveView(
             initial_state=ArchiveState(
-                start=snapshot_end,
-                end=snapshot_end,
+                cursor=snapshot_end,
                 snapshot_end=snapshot_end,
             ),
         )
-        page = await view.load_archive_page(
-            await view.newest_state(snapshot_end)
-        )
+        page = await view.load(direction="previous")
         await bot.discord.send(
             **page.as_send_kwargs(),
             view=view,
