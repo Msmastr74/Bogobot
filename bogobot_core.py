@@ -490,7 +490,7 @@ class BotCore(discord.Client):
                     return
                 
                 if not self.outer.user:
-                    self.outer.logger.warning(f"Attempted to remove reaction while `bot.user` is None.")
+                    self.outer.logger.warning("Attempted to remove reaction while `bot.user` is None.")
                     return
                 
                 emoji = self._resolve_emoji(emoji_data)

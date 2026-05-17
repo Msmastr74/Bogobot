@@ -454,6 +454,14 @@ async def setup(bot: "BotCore"):
         message = messageable.get_partial_message(message_id)
         try:
             if action == 'delete':
+                # Make sure message is from the bot
+                msg = await message.fetch()
+                if msg.author != bot.user:
+                    await bot.discord.send(
+                        contents=f"You can only delete messages sent by {bot.user.mention if bot.user else 'this bot'}!",
+                        response=True
+                    )
+                    return
                 await message.delete()
             elif action == 'react':
                 if emoji is None:

@@ -351,7 +351,7 @@ async def setup(bot: BotCore):
     @manage.command(
         name='announce',
         description='Send a message through the bot.',
-        perm_requirement=2,
+        perm_requirement=3,
         defer=False
     )
     async def announce(
