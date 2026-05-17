@@ -227,7 +227,7 @@ async def setup(bot: BotCore):
         ]
         random.shuffle(items)
         def format():
-            return ''.join(map(lambda t: t[1], items))
+            return '`' + ''.join(map(lambda t: t[1], items)) + '`'
         def is_sorted():
             last_v: int | None = None
             for v, _char in items:
