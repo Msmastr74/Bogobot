@@ -33,11 +33,11 @@ class LeaderboardView(discord.ui.LayoutView):
         rows: list[Player],
         updated_at: int | None = None,
         limit: int = LEADERBOARD_LIMIT,
-        get_emoji: Callable[[str], discord.Emoji | None]
+        bot: BotCore
     ):
         super().__init__(timeout=None)
         
-        self.get_emoji = get_emoji
+        self.bot = bot
 
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
         self.add_item(discord.ui.TextDisplay(subtitle))
@@ -63,7 +63,7 @@ class LeaderboardView(discord.ui.LayoutView):
     def _row(self, player: Player) -> str:
         pos = player.get("pos", "?")
         rank = "grandchampion" if pos == 1 else player.get("rank", "")
-        rank_emoji = self.get_emoji(rank) or "-"
+        rank_emoji = self.bot.discord.get_emoji(rank)
         name = player.get("name", "Unknown")
         elo = player.get("elo", 0)
         win_rate = player.get("win_rate", 0)
@@ -120,7 +120,7 @@ async def setup(bot: BotCore):
                 subtitle=subtitle,
                 rows=rows,
                 updated_at=updated_at,
-                get_emoji=get_emoji
+                bot=bot
             )
         }
 

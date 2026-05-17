@@ -501,6 +501,11 @@ class BotCore(discord.Client):
             @property
             def emoji(self) -> discord.Emoji | None:
                 return self.outer.discord._get_emoji(self.name)
+            
+            def __str__(self) -> str:
+                if not self.emoji:
+                    return f":{self.name}:"
+                return str(self.emoji)
         
         def _get_emoji(self, app_emoji_name: str):
             if self._app_emoji_cache is None:
