@@ -954,13 +954,20 @@ async def setup(bot: BotCore):
             )
             if attachment is not None
         ]
+        if not interaction.permissions.attach_files and attachments:
+            await bot.discord.send(
+                "You don't have permission to attach files, so the attachments couldn't be scrambled.",
+                response=True,
+                ephemeral=True,
+            )
+            return
         try:
             await send_bogoscramble(
                 interaction,
                 content=text,
                 attachments=attachments,
                 scramble_shape=scramble_shape,
-                suppress_embeds=True
+                suppress_embeds=not interaction.permissions.embed_links
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
