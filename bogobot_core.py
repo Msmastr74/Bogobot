@@ -557,8 +557,8 @@ class BotCore(discord.Client):
 
         try:
             await self.notifications.initialize()
-        except Exception as e:
-            self.logger.warning(f"Failed initializing notifications: {e}")
+        except Exception:
+            self.logger.exception("Failed initializing notifications")
         
         await self.callbacks.execute_async('init')
         guild_count = 0
@@ -591,14 +591,33 @@ class BotCore(discord.Client):
         self.logger.info(f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers")
 
     async def load_plugins(self, folder_name="plugins"):
+        logger = self.logger.getChild("Plugins")
+        logger.info("Loading plugins...")
         if not os.path.exists(folder_name):
             os.makedirs(folder_name)
         for filename in os.listdir(folder_name):
             if filename.endswith(".py"):
-                mod = importlib.import_module(f"{folder_name}.{filename[:-3]}")
-                if hasattr(mod, "setup"):
-                    await mod.setup(self)
-                self.logger.info(f"Loaded Plugin: {filename}")
+                module_name = f"{folder_name}.{filename[:-3]}"
+
+                try:
+                    mod = importlib.import_module(module_name)
+                except Exception:
+                    logger.exception(
+                        f"Importing plugin {module_name} failed with error"
+                    )
+                else:
+                    if hasattr(mod, "setup"):
+                        setup: Callable[[BotCore], Coro[None]] = mod.setup
+                        try:
+                            await setup(self)
+                            logger.info(f"Loaded Plugin: {filename}")
+                        except Exception:
+                            logger.exception(
+                                f"Executing {setup.__qualname__} failed with error"
+                            )
+                    else:
+                        logger.info(f"Loaded Plugin: {filename} (no setup function)")
+        logger.info("Finished loading plugins.")
     
     async def save_config(self):
         async with self._config_lock:
@@ -653,7 +672,7 @@ class BotCore(discord.Client):
                     )
                 return self.outer.tree.command(
                     name=name, description=description
-                )(cast('BotCore._Setup._Callable', wrapper))
+                )(cast(BotCore._Setup._Callable, wrapper))
             return decorator
 
         class _CommandGroup:
@@ -685,7 +704,7 @@ class BotCore(discord.Client):
                         )
                     return self.group.command(
                         name=name, description=description
-                    )(cast('BotCore._Setup._Callable', wrapper))
+                    )(cast(BotCore._Setup._Callable, wrapper))
                 return decorator
 
         def group(

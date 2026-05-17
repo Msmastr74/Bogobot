@@ -131,11 +131,11 @@ class NotificationBroadcaster:
                 await channel.send(**send_kwargs)
             except (discord.NotFound, discord.Forbidden):
                 stale_channel_ids.append(channel_id)
-            except Exception as exc:
+            except Exception:
                 if self.logger is not None:
                     self.logger.warning(
                         f"Notification failed for topic {topic!r} in channel {channel_id}",
-                        exc_info=exc,
+                        exc_info=True,
                     )
             else:
                 sent += 1

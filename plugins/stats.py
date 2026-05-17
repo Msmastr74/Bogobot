@@ -81,8 +81,8 @@ async def setup(bot: BotCore):
                 bot._current_vals_updated = True
 
             bot._last_ocr_refresh = time.time()
-        except Exception as e:
-            bot.logger.warning(f"OCR processing error: {e}")
+        except Exception:
+            bot.logger.exception("OCR processing error")
 
     async def update_milestones(img: Image.Image, frame_received_at: float):
         if bot.milestones is None:

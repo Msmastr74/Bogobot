@@ -87,7 +87,7 @@ class MessageEditCoalescer:
                     elif self.logger is not None:
                         self.logger.warning(
                             f"Coalesced edit failed for message {self.message.id}",
-                            exc_info=exc,
+                            exc_info=True
                         )
                     continue
                 edit_duration = loop.time() - edit_start_time
