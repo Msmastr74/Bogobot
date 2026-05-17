@@ -33,16 +33,16 @@ async def setup(bot: BotCore):
         if len(choices_list) == 0:
             await bot.discord.send(contents="You must provide at least one choice.", response=True, ephemeral=True)
             return
-        c = random.choice(choices_list).replace('`', ' ')
+        c = random.choice(choices_list)
         if not c:
             c = '\u200d'
-        await bot.discord.send(contents=f"`{c}`", response=True)
+        await bot.discord.send(contents=c, response=True, allowed_mentions=discord.AllowedMentions.none())
 
     @bot.setup.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
     async def bogo(interaction: discord.Interaction, text: str):
         char_list = list(text)
         random.shuffle(char_list)
-        await bot.discord.send(contents=f"{''.join(char_list)}", response=True)
+        await bot.discord.send(contents=f"{''.join(char_list)}", response=True, allowed_mentions=discord.AllowedMentions.none())
     
     @bot.setup.command(name="shuffle", description="shuffles", defer=False, perm_requirement=0)
     async def shuffle(
@@ -54,10 +54,9 @@ async def setup(bot: BotCore):
             items_list = [item.strip() for item in items_list]
         random.shuffle(items_list)
         contents = f"{output_delimiter.join(items_list)}"
-        contents = contents.replace('`', '')
         if not contents:
             contents = '\u200d'
-        await bot.discord.send(contents=f'`{contents}`', response=True)
+        await bot.discord.send(contents=contents, response=True, allowed_mentions=discord.AllowedMentions.none())
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", 
                        defer=False, perm_requirement=0)
