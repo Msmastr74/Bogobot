@@ -119,7 +119,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(
             contents=f"<@{user.id}>'s current rank is {current_rank_name}",
             response=True, ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none()
+            safety_filter=True
         )
     
     @accounts.command(name="list_users", description="List users in the accounts database")
@@ -144,5 +144,5 @@ async def setup(bot: BotCore):
         await bot.discord.send(
             view=view,
             response=True, ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none()
+            safety_filter=True
         )

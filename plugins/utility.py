@@ -264,7 +264,7 @@ async def setup(bot: BotCore):
                 gateway_latency=gateway_latency,
             ),
             response=True,
-            allowed_mentions=discord.AllowedMentions.none()
+            safety_filter=True
         )
         if message is None:
             return
@@ -296,7 +296,7 @@ async def setup(bot: BotCore):
                         user_latency,
                     ),
                 ),
-                allowed_mentions=discord.AllowedMentions.none()
+                safety_filter=True
             )
 
     class AnnounceModal(discord.ui.Modal, title="Announcement Message Contents"):

@@ -36,13 +36,13 @@ async def setup(bot: BotCore):
         c = random.choice(choices_list)
         if not c:
             c = '\u200d'
-        await bot.discord.send(contents=c, response=True, allowed_mentions=discord.AllowedMentions.none())
+        await bot.discord.send(contents=c, response=True, safety_filter=True)
 
     @bot.setup.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
     async def bogo(interaction: discord.Interaction, text: str):
         char_list = list(text)
         random.shuffle(char_list)
-        await bot.discord.send(contents=f"{''.join(char_list)}", response=True, allowed_mentions=discord.AllowedMentions.none())
+        await bot.discord.send(contents=f"{''.join(char_list)}", response=True, safety_filter=True)
     
     @bot.setup.command(name="shuffle", description="shuffles", defer=False, perm_requirement=0)
     async def shuffle(
@@ -56,7 +56,7 @@ async def setup(bot: BotCore):
         contents = f"{output_delimiter.join(items_list)}"
         if not contents:
             contents = '\u200d'
-        await bot.discord.send(contents=contents, response=True, allowed_mentions=discord.AllowedMentions.none())
+        await bot.discord.send(contents=contents, response=True, safety_filter=True)
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", 
                        defer=False, perm_requirement=0)

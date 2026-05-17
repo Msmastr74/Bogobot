@@ -270,10 +270,14 @@ class BotCore(discord.Client):
             *,
             response=False,
             ephemeral=False,
+            safety_filter=False,
             **kwargs,
         ):
             if contents is not None and "content" not in kwargs:
                 kwargs["content"] = contents
+            if safety_filter:
+                kwargs["allowed_mentions"] = discord.AllowedMentions.none()
+                kwargs["suppress_embeds"] = True
 
             message = await self._send(
                 response=response,
@@ -372,12 +376,16 @@ class BotCore(discord.Client):
             def message_id(self):
                 return self.message.id if self.message else None
 
-            async def edit(self, contents=None, **kwargs):
+            async def edit(self, contents=None, safety_filter=False, **kwargs):
                 if not self.message:
                     return
 
                 if contents is not None and "content" not in kwargs:
                     kwargs["content"] = contents
+                
+                if safety_filter:
+                    kwargs["allowed_mentions"] = discord.AllowedMentions.none()
+                    kwargs["suppress"] = True
 
                 try:
                     self.content = kwargs.get("content", self.content)

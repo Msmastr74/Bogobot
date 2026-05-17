@@ -69,7 +69,8 @@ async def setup(bot: BotCore):
         content: str | None = None,
         embeds: list[discord.Embed] | None = None,
         attachments: list[discord.Attachment] | None = None,
-        scramble_shape: tuple[int, int] = DEFAULT_SCRAMBLE_SHAPE
+        scramble_shape: tuple[int, int] = DEFAULT_SCRAMBLE_SHAPE,
+        suppress_embeds: bool
     ):
         upload_limit = interaction.filesize_limit
         @overload
@@ -801,6 +802,7 @@ async def setup(bot: BotCore):
             send_kwargs = {
                 "content": content or None,
                 "allowed_mentions": discord.AllowedMentions.none(),
+                "suppress_embeds": suppress_embeds,
                 "response": True,
             }
             if embeds:
@@ -824,7 +826,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(
             str(error),
             response=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+            safety_filter=True,
             ephemeral=True
         )
     @bot.setup.context_menu(
@@ -840,6 +842,7 @@ async def setup(bot: BotCore):
                 content=content,
                 embeds=embeds,
                 attachments=attachments,
+                suppress_embeds=False
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
@@ -882,6 +885,7 @@ async def setup(bot: BotCore):
                     embeds=self.embeds,
                     attachments=self.attachments,
                     scramble_shape=get_scramble_shape(rows, columns),
+                    suppress_embeds=False
                 )
             except BogoUserError as e:
                 await send_bogo_error(interaction, e)
@@ -955,7 +959,8 @@ async def setup(bot: BotCore):
                 interaction,
                 content=text,
                 attachments=attachments,
-                scramble_shape=scramble_shape
+                scramble_shape=scramble_shape,
+                suppress_embeds=True
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
