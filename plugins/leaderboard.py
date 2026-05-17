@@ -1,5 +1,5 @@
 import time
-from typing import Callable, TypedDict
+from typing import TypedDict
 
 import aiohttp
 import discord
