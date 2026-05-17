@@ -156,11 +156,9 @@ class SingleLogView(PaginatedView[LogState]):
         *,
         handler: MemoryLogHandler,
         initial_state: LogState,
-        owner_id: int,
     ):
         super().__init__(
             initial_state=initial_state,
-            owner_id=owner_id,
         )
         self.handler = handler
 
@@ -212,11 +210,9 @@ class LogsView(PaginatedView[LogState]):
         *,
         handler: MemoryLogHandler,
         initial_state: LogState,
-        owner_id: int,
     ):
         super().__init__(
             initial_state=initial_state,
-            owner_id=owner_id,
             timeout=300,
         )
         self.handler = handler
@@ -403,7 +399,6 @@ async def setup(bot: "BotCore"):
                     cursor=end - 1,
                     end=end,
                 ),
-                owner_id=interaction.user.id,
             )
             page = await view.load()
             await bot.discord.send(
@@ -423,7 +418,6 @@ async def setup(bot: "BotCore"):
                 cursor=end,
                 end=end,
             ),
-            owner_id=interaction.user.id,
         )
         page = await view.load(direction="previous")
         await bot.discord.send(

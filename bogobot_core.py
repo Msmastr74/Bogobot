@@ -258,13 +258,16 @@ class BotCore(discord.Client):
 
     def new_value_callback(
         self,
-        callback: AsyncCallback[[int]]
+        callback: AsyncCallback[[int, float]]
     ):
         self.callbacks.register('new_value', callback)
         return callback
 
-    async def new_value(self, value: int):
-        await self.callbacks.execute_async('new_value', value)
+    async def new_value(self, value: int, timestamp: float | None = None):
+        if timestamp is None:
+            timestamp = time.time()
+
+        await self.callbacks.execute_async('new_value', value, timestamp)
     
     class _Discord:
         def __init__(self, outer: 'BotCore'):

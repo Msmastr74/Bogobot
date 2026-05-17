@@ -51,12 +51,10 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
         self,
         *,
         initial_state: T,
-        owner_id: int,
         timeout: float | None = 300,
     ):
         super().__init__(timeout=timeout)
         self.state = initial_state
-        self.owner_id = owner_id
         self.current_page: Page | None = None
         self.previous_page_state: T | None = None
         self.next_page_state: T | None = None
@@ -139,16 +137,6 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
 
     async def refresh_page(self, interaction: discord.Interaction, state: T | None = None) -> None:
         await self.set_state(interaction, self.state if state is None else state)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_id:
-            return True
-
-        await interaction.response.send_message(
-            "This view is not yours.",
-            ephemeral=True,
-        )
-        return False
 
     def _render_page(self, page: Page) -> None:
         self.clear_items()

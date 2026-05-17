@@ -61,9 +61,6 @@ async def setup(bot: BotCore):
 
                 bot.stats[name] = text
 
-            if sort_changed:
-                await bot.new_value(read_best_shuffle_count(img))
-
             bot._last_ocr_refresh = time.time()
         except Exception:
             bot.logger.exception("OCR processing error")
@@ -236,6 +233,22 @@ async def setup(bot: BotCore):
         sort_changed_start = time.monotonic()
         sort_changed = test_sort_changed(img)
         bot.logger.debug(f"Sort changed test (dt={time.monotonic() - sort_changed_start:.2f}s)")
+
+        if sort_changed:
+            read_best_shuffle_count_start = time.monotonic()
+            best_shuffle_count = read_best_shuffle_count(img)
+            bot.logger.debug(
+                f"Best shuffle count read (dt={time.monotonic() - read_best_shuffle_count_start:.2f}s)"
+            )
+
+            new_value_start = time.monotonic()
+            await bot.new_value(
+                best_shuffle_count,
+                timestamp=frame_received_at,
+            )
+            bot.logger.debug(
+                f"New value callbacks executed (dt={time.monotonic() - new_value_start:.2f}s)"
+            )
         
         update_ocr_start = time.monotonic()
         await update_ocr_data(img, sort_changed=sort_changed)

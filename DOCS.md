@@ -34,6 +34,8 @@ User-edited settings:
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
+- `archive_path`: Path to the compact monitor archive. Defaults to `archive/monitor.bga`.
+- `archive_flush_interval`: Seconds to batch monitor archive records before flushing to disk. Defaults to 60.
 - `fps`: Frames received per second.
 
 Bot-managed storage:
@@ -164,13 +166,14 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
 - `@bot.close_callback`: Runs during bot shutdown.
 - `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
-- `@bot.new_value_callback`: Runs when `stats.py` detects a new sort value. The callback receives the classified green-section count as an `int`.
+- `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives the classified green-section count as an `int` and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 
 Current plugin responsibilities:
 
 - `accounts.py`: `/accounts` permission commands.
 - `admin.py`: `/manage state`, `/manage logs`, and `/manage message`.
+- `archival.py`: compact append-only archive for observed monitor values and `/archive`.
 - `bogoscramble.py`: Bogoscramble message/media utilities.
 - `get_stats.py`: `/get_stats` display command.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
@@ -198,6 +201,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
+- `/archive`: Shows archived monitor values with a public paginated view.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
 - `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available.

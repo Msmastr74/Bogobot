@@ -332,11 +332,9 @@ async def setup(bot: BotCore):
             initial_state: TelemetryState,
             requested: set[str],
             requested_commands: list[str] | None,
-            owner_id: int,
         ):
             super().__init__(
                 initial_state=initial_state,
-                owner_id=owner_id,
                 timeout=300,
             )
             self.requested = requested
@@ -648,7 +646,6 @@ async def setup(bot: BotCore):
             initial_state=initial_state,
             requested=requested,
             requested_commands=requested_commands,
-            owner_id=interaction.user.id,
         )
         page = await view.load()
 

@@ -39,6 +39,8 @@ Go into `config.json` and provide the main credentials:
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
+ * `archive_path`: Optional compact monitor archive path. Defaults to `archive/monitor.bga`.
+ * `archive_flush_interval`: Optional seconds between archive flushes. Defaults to `60`.
 
 `DOCS.md` lists every supported user setting and every bot-managed storage field.
 
@@ -85,6 +87,7 @@ Your terminal output should look similar to this:
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
+ * /archive: Shows archived monitor values.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts or stops a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts or stops a persistent top leaderboard message.
@@ -98,6 +101,10 @@ Bogobot implements several slash commands for stream management and data retriev
  * /avatar and /ping: Small Discord utility commands.
  * /roll and friends: Random number, choice, sort, shuffle, text bogo, and small bogosort utilities.
  * /accounts: Manages account permission ranks.
+
+Bogobot also writes an append-only monitor archive when observed sort values are available.
+Each chunk starts with a JSON header line, then compact `dt,value;` records where `dt`
+is centiseconds since the previous archived value.
 
 ## Documentation
 For technical details regarding the internal API, OCR configuration, channel proxies, and plugin development, refer to `DOCS.md`.
