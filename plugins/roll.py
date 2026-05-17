@@ -11,7 +11,12 @@ from bogobot_core import BotCore
 async def setup(bot: BotCore):
     unsorted_emoji = bot.discord.get_emoji('unsorted')
     sorted_emoji = bot.discord.get_emoji('sorted')
-    def split(text: str, delim: str): return list(filter(bool, text.split(delim)))
+    def split(text: str, delim: str):
+        return list(
+            filter(bool, 
+                map(lambda t: t.strip(), text.split(delim))
+            )
+        )
     @bot.setup.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     async def roll(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.randint(1, 100)}", response=True)
@@ -50,8 +55,6 @@ async def setup(bot: BotCore):
     ):
         items_list = split(items, delimiter)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
-        if delimiter != " ":
-            items_list = [item.strip() for item in items_list]
         random.shuffle(items_list)
         contents = f"{output_delimiter.join(items_list)}"
         if not contents:
@@ -112,6 +115,38 @@ async def setup(bot: BotCore):
         output_delimiter = output_delimiter.replace('`', ' ')
         def text():
             return f"`{output_delimiter.join(map(str, arr)) or ' '}`"
+
+        message = await bot.discord.send(
+            contents=f"Sorting: {text()}", response=True
+        )
+        if not message:
+            return
+        counter = 25
+        while arr != sorted(arr):
+            await asyncio.sleep(0.5)
+            await message.edit(contents=f"Sorting: {text()}")
+            random.shuffle(arr)
+            counter -= 1
+            if counter <= 0 and arr != sorted(arr):
+                await asyncio.sleep(1.5)
+                await message.edit(contents=f"Sort failed: {text()}")
+                await message.add_reaction(unsorted_emoji)
+                return
+
+        await asyncio.sleep(1.5)
+        await message.edit(contents=f"Sorted: {text()}")
+        await message.add_reaction(sorted_emoji)
+        return
+
+    @bot.setup.command(name="bogosort-lexiographic", description="Bogosorts a list of strings", defer=False, perm_requirement=0)
+    async def bogosort_lexiographic(interaction: discord.Interaction, items: str, delimiter: str = " "):
+        arr = split(items, delimiter)
+        random.shuffle(arr)
+        output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+        def text():
+            contents = output_delimiter.join(arr) or '\u200d'
+            contents = contents.replace('`', ' ')
+            return f"`{contents}`"
 
         message = await bot.discord.send(
             contents=f"Sorting: {text()}", response=True

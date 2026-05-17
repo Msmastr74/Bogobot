@@ -200,7 +200,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/avatar [user]`: Shows a user's avatar.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/choice`, `/shuffle`, `/bogo`: Randomization and text/list utilities.
-- `/bogosort`, `/bogosort-list`, `/bogosort-listr`: Small animated bogosort commands.
+- `/bogosort`, `/bogosort-list`, `/bogosort-lexiographic`, `/bogosort-listr`: Small animated bogosort commands.
 
 Account commands live under `/accounts`:
 
