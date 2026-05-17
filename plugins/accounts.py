@@ -2,6 +2,7 @@ import discord
 
 from typing import Iterable, Literal, TypedDict
 from bogobot_core import BotCore
+from utils import groups
 
 Rank = Literal['basic', 'authorized', 'mod', 'admin', 'owner']
 RANKS: dict[int, Rank] = {
@@ -55,8 +56,6 @@ class AccountListView(discord.ui.LayoutView):
         self.add_item(accounts_container)
 
 async def setup(bot: BotCore):
-    from utils import groups
-    
     accounts = groups.accounts(bot)
     
     @accounts.command(name="perm_edit", description="Edits a user's rank")

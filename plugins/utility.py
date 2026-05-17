@@ -4,6 +4,7 @@ from discord import app_commands
 
 from utils.transformers import ColourTransformer
 from bogobot_core import BotCore, current_interaction
+from utils import groups
 
 class AvatarView(discord.ui.LayoutView):
     def __init__(
@@ -119,7 +120,6 @@ class AnnounceView(discord.ui.LayoutView):
             self.add_item(discord.ui.TextDisplay(message))
 
 async def setup(bot: BotCore):
-    from utils import groups
     manage = groups.manage(bot)
 
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)

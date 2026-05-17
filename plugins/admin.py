@@ -8,6 +8,7 @@ from typing import Literal, TYPE_CHECKING
 
 import discord
 from utils.pagination import Page, PageSection, PaginatedView, SectionRead
+from utils import groups
 
 if TYPE_CHECKING:
     from bogobot_core import BotCore
@@ -355,8 +356,6 @@ class LogsView(PaginatedView[LogState]):
 
 # Admin commands installed on the normal BotCore client.
 async def setup(bot: "BotCore"):
-    from utils import groups
-
     manage = groups.manage(bot)
     MEMORY_LOG_HANDLER.configure_capacity(int(bot.config.get("log_capacity", 3000)))
     handler = MEMORY_LOG_HANDLER

@@ -5,6 +5,7 @@ import aiohttp
 import discord
 
 from utils.monitoring import PersistentChannelMonitor
+from utils import groups
 
 from bogobot_core import BotCore
 
@@ -95,8 +96,6 @@ class LeaderboardPayload(TypedDict):
     view: LeaderboardView
 
 async def setup(bot: BotCore):
-    from utils import groups
-
     manage = groups.manage(bot)
 
     async def fetch_leaderboard() -> list[Player]:

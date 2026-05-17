@@ -6,7 +6,7 @@ import discord
 from utils.monitoring import PersistentChannelMonitor
 
 from bogobot_core import BotCore
-
+from utils import groups
 
 num_matrix: list[list[tuple[str, float]]] = [[] for _ in range(30)]
 
@@ -28,8 +28,6 @@ class MonitorPayload(TypedDict):
 
 
 async def setup(bot: BotCore):
-    from utils import groups
-
     manage = groups.manage(bot)
 
     def initial_payload() -> MonitorPayload:

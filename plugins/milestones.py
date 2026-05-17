@@ -8,6 +8,7 @@ import discord
 from PIL import Image
 
 from bogobot_core import BotCore
+from utils import groups
 
 
 MILESTONE_USAGE_TYPE = "milestones"
@@ -387,8 +388,6 @@ class MilestoneTracker:
 
 
 async def setup(bot: BotCore):
-    from utils import groups
-
     manage = groups.manage(bot)
     milestone_tracker = MilestoneTracker(bot)
     bot.milestones = milestone_tracker

@@ -11,6 +11,7 @@ import discord
 from test.test_typing import TypeAlias
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
+from utils import groups
 
 class CommandTelemetryBase(TypedDict):
     interaction_id: int
@@ -60,8 +61,6 @@ class UsageView(discord.ui.LayoutView):
         ))
 
 async def setup(bot: BotCore):
-    from utils import groups
-
     manage = groups.manage(bot)
     accounts = groups.accounts(bot)
     hidden_commands: list[str] = [
