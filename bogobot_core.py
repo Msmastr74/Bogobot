@@ -262,6 +262,7 @@ class BotCore(discord.Client):
     class _Discord:
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
+            self._app_emoji_cache: dict[str, discord.Emoji] | None = None
 
         async def send(
             self,
@@ -461,10 +462,12 @@ class BotCore(discord.Client):
                 finally:
                     self.message = None
             
-            async def add_reaction(self, emoji_data: int | discord.Emoji | str):
+            async def add_reaction(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
                 if not self.message:
                     return
 
+                if isinstance(emoji_data, BotCore._Discord.Emoji):
+                    emoji_data = emoji_data.emoji
                 emoji = self.outer.get_emoji(emoji_data) if isinstance(emoji_data, int) else emoji_data
                 if not emoji:
                     self.outer.logger.warning(f"Emoji with ID {emoji_data} not found.")
@@ -489,6 +492,32 @@ class BotCore(discord.Client):
                         await interaction.delete_original_response()
                 except discord.HTTPException:
                     pass
+        
+        class Emoji:
+            def __init__(self, outer: "BotCore", app_emoji_name: str):
+                self.name = app_emoji_name
+                self.outer = outer
+            
+            @property
+            def emoji(self) -> discord.Emoji | None:
+                return self.outer.discord._get_emoji(self.name)
+        
+        def _get_emoji(self, app_emoji_name: str):
+            if self._app_emoji_cache is None:
+                raise RuntimeError("Emoji cache not initialized")
+            return self._app_emoji_cache.get(app_emoji_name.lower())
+        
+        def get_emoji(self, app_emoji_name: str):
+            return self.Emoji(self.outer, app_emoji_name)
+        
+        async def init(self):
+            if self._app_emoji_cache is not None:
+                return
+            
+            self._app_emoji_cache = {}
+            emojis = await self.outer.fetch_application_emojis()
+            for emoji in emojis:
+                self._app_emoji_cache[emoji.name.lower()] = emoji
 
     async def setup_hook(self):
         command_tree_hash = self._command_tree_hash()
@@ -518,6 +547,8 @@ class BotCore(discord.Client):
         if self._connected:
             return # Prevent multiple on_ready calls from causing issues
         self._connected = True
+        
+        await self.discord.init()
 
         try:
             await self.notifications.initialize()

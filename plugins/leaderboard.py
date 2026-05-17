@@ -1,5 +1,5 @@
 import time
-from typing import TypedDict
+from typing import Callable, TypedDict
 
 import aiohttp
 import discord
@@ -24,18 +24,6 @@ LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
 LEADERBOARD_LIMIT = 10
 LEADERBOARD_MONITOR_INTERVAL_SECONDS = 120
 
-RANK_EMOJIS = {
-    "champion": "<:champion:1498536682046357644>",
-    "grandmaster": "<:grandmaster:1498536634164051978>",
-    "master": "<:master:1498537542104907858>",
-    "diamond": "<:diamond:1498537469124018186>",
-    "platinum": "<:platinum:1498537400828166194>",
-    "gold": "<:gold:1498537254895878295>",
-    "silver": "<:silver:1498535347834060800>",
-    "bronze": "<:bronze:1498896875728666654>",
-}
-
-
 class LeaderboardView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -45,8 +33,11 @@ class LeaderboardView(discord.ui.LayoutView):
         rows: list[Player],
         updated_at: int | None = None,
         limit: int = LEADERBOARD_LIMIT,
+        get_emoji: Callable[[str], discord.Emoji | None]
     ):
         super().__init__(timeout=None)
+        
+        self.get_emoji = get_emoji
 
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
         self.add_item(discord.ui.TextDisplay(subtitle))
@@ -70,8 +61,9 @@ class LeaderboardView(discord.ui.LayoutView):
         )
 
     def _row(self, player: Player) -> str:
-        rank_emoji = RANK_EMOJIS.get(str(player.get("rank", "")).lower(), "-")
         pos = player.get("pos", "?")
+        rank = "grandchampion" if pos == 1 else player.get("rank", "")
+        rank_emoji = self.get_emoji(rank) or "-"
         name = player.get("name", "Unknown")
         elo = player.get("elo", 0)
         win_rate = player.get("win_rate", 0)
@@ -111,6 +103,9 @@ async def setup(bot: BotCore):
         except Exception as e:
             bot.logger.warning(f"Error fetching leaderboard: {e}")
         return []
+    
+    def get_emoji(name: str):
+        return bot.discord.get_emoji(name).emoji
 
     def leaderboard_payload(
         rows: list[Player],
@@ -125,6 +120,7 @@ async def setup(bot: BotCore):
                 subtitle=subtitle,
                 rows=rows,
                 updated_at=updated_at,
+                get_emoji=get_emoji
             )
         }
 
