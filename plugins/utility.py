@@ -211,14 +211,20 @@ async def setup(bot: BotCore):
                         ephemeral=True
                     )
                     return
+                view=AnnounceView(
+                    title=self.message_title,
+                    message=self.message.value or None,
+                    message_container=self.message_container,
+                    accent_colour=self.accent_colour,
+                )
+                try:
+                    await bot.discord.send(view=view)
+                except discord.Forbidden:
+                    await bot.discord.send(view=view, response=True)
                 await bot.discord.send(
-                    view=AnnounceView(
-                        title=self.message_title,
-                        message=self.message.value or None,
-                        message_container=self.message_container,
-                        accent_colour=self.accent_colour,
-                    ),
+                    contents="The announcement message was successfully sent.",
                     response=True,
+                    ephemeral=True
                 )
             finally:
                 current_interaction.reset(token)
@@ -252,12 +258,18 @@ async def setup(bot: BotCore):
                 ephemeral=True
             )
             return
+        view = AnnounceView(
+            title=title,
+            message=message,
+            message_container=message_container,
+            accent_colour=accent_colour,
+        )
+        try:
+            await bot.discord.send(view=view)
+        except discord.Forbidden:
+            await bot.discord.send(view=view, response=True)
         await bot.discord.send(
-            view=AnnounceView(
-                title=title,
-                message=message,
-                message_container=message_container,
-                accent_colour=accent_colour,
-            ),
+            contents="The announcement message was successfully sent.",
             response=True,
+            ephemeral=True
         )
