@@ -233,13 +233,15 @@ async def setup(bot: BotCore):
             return
         counter = 25
         while not is_sorted():
+            await asyncio.sleep(0.5)
             if counter <= 0:
+                await asyncio.sleep(0.5)
                 await message.add_reaction(unsorted_emoji)
                 return
-            await message.edit(contents=format())
             random.shuffle(items)
+            await message.edit(contents=format())
             counter -= 1
-            await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)
 
         await message.add_reaction(sorted_emoji)
         return
