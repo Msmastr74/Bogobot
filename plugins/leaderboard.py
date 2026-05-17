@@ -128,10 +128,11 @@ async def setup(bot: BotCore):
             )
         }
 
-    async def top_payload():
+    async def monitor_payload():
         return leaderboard_payload(
             await fetch_leaderboard(),
             updated_at=int(time.time()),
+            title="Leaderboard Monitor"
         )
 
     @bot.setup.command(
@@ -143,7 +144,10 @@ async def setup(bot: BotCore):
     async def top(interaction: discord.Interaction):
         await bot.discord.send(
             response=True,
-            **await top_payload(),
+            **leaderboard_payload(
+                await fetch_leaderboard(),
+                updated_at=int(time.time())
+            )
         )
 
     @bot.setup.command(
@@ -186,8 +190,8 @@ async def setup(bot: BotCore):
         bot,
         storage_key="leaderboard_monitor_messages",
         display_name="Leaderboard monitor",
-        initial_payload=top_payload,
-        update_payload=top_payload,
+        initial_payload=monitor_payload,
+        update_payload=monitor_payload,
         interval_seconds=LEADERBOARD_MONITOR_INTERVAL_SECONDS,
     )
     leaderboard_monitor.command(
