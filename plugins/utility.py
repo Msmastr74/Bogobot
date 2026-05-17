@@ -106,7 +106,8 @@ class AnnounceView(discord.ui.LayoutView):
         accent_colour: discord.Colour | None = None,
     ):
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay(f"{title}"))
+        if title is not None:
+            self.add_item(discord.ui.TextDisplay(f"{title}"))
         if not message:
             return
         if message_container:
