@@ -102,27 +102,28 @@ async def setup(bot: BotCore):
                 return
         random.shuffle(arr)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
-        def text(): return output_delimiter.join(map(str, arr))
+        def text():
+            return f"`{output_delimiter.join(map(str, arr)) or ' '}`"
 
         message = await bot.discord.send(
-            contents=f"Sorting: `{text()}`", response=True
+            contents=f"Sorting: {text()}", response=True
         )
         if not message:
             return
         counter = 25
         while arr != sorted(arr):
             await asyncio.sleep(0.5)
-            await message.edit(contents=f"Sorting: `{text()}`")
+            await message.edit(contents=f"Sorting: {text()}")
             random.shuffle(arr)
             counter -= 1
             if counter <= 0 and arr != sorted(arr):
                 await asyncio.sleep(1.5)
-                await message.edit(contents=f"Sort failed: `{text()}`")
+                await message.edit(contents=f"Sort failed: {text()}")
                 await message.add_reaction(unsorted_emoji)
                 return
 
         await asyncio.sleep(1.5)
-        await message.edit(contents=f"Sorted: `{text()}`")
+        await message.edit(contents=f"Sorted: {text()}")
         await message.add_reaction(sorted_emoji)
         return
     
@@ -158,7 +159,7 @@ async def setup(bot: BotCore):
 
         if not should_succeed and len(set(arr)) <= 1:
             message = await bot.discord.send(
-                contents=f"Sorting: `{text()}`",
+                contents=f"Sorting: {text()}",
                 response=True
             )
 
@@ -166,7 +167,7 @@ async def setup(bot: BotCore):
                 return
 
             await asyncio.sleep(1.5)
-            await message.edit(contents=f"Sort failed: `{text()}`")
+            await message.edit(contents=f"Sort failed: {text()}")
             await message.add_reaction(unsorted_emoji)
             return
 
@@ -181,7 +182,7 @@ async def setup(bot: BotCore):
         else:
             shuffle_unsorted(arr)
         message = await bot.discord.send(
-            contents=f"Sorting: `{text()}`",
+            contents=f"Sorting: {text()}",
             response=True
         )
         if not message:
@@ -191,7 +192,7 @@ async def setup(bot: BotCore):
         succeed_count = random.randint(0, counter // 2) if should_succeed else 0
         while arr != sorted_arr:
             await asyncio.sleep(0.5)
-            await message.edit(contents=f"Sorting: `{text()}`")
+            await message.edit(contents=f"Sorting: {text()}")
             counter -= 1
             if should_succeed and counter <= succeed_count:
                 arr = sorted_arr.copy()
@@ -202,11 +203,11 @@ async def setup(bot: BotCore):
                 shuffle_unsorted(arr)
             if counter <= 0:
                 await asyncio.sleep(1.5)
-                await message.edit(contents=f"Sort failed: `{text()}`")
+                await message.edit(contents=f"Sort failed: {text()}")
                 await message.add_reaction(unsorted_emoji)
                 return
         await asyncio.sleep(1.5)
-        await message.edit(contents=f"Sorted: `{text()}`")
+        await message.edit(contents=f"Sorted: {text()}")
         await message.add_reaction(sorted_emoji)
         return
 
