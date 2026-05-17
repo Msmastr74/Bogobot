@@ -434,13 +434,14 @@ async def setup(bot: "BotCore"):
         )
 
 
-    @manage.command(name="message", description="React to or delete a bot message", perm_requirement=3)
+    @manage.command(name="message", description="React to, pin, edit, reply to, or delete a message", perm_requirement=3)
     async def message(
         interaction: discord.Interaction,
-        action: Literal['delete', 'react'],
+        action: Literal['delete', 'react', 'unreact', 'pin', 'unpin', 'edit'],
         message_id: app_commands.Transform[int, IntTransformer],
         channel_id: app_commands.Transform[int, IntTransformer] | None = None,
         emoji: str | None = None,
+        content: str | None = None
     ):
         channel_id = channel_id or interaction.channel_id
         if not channel_id:
@@ -462,6 +463,41 @@ async def setup(bot: "BotCore"):
                     )
                     return
                 await message.add_reaction(emoji)
+            elif action == 'unreact':
+                if emoji is None:
+                    await bot.discord.send(
+                        contents="You must provide an emoji to remove.",
+                        response=True
+                    )
+                    return
+                if bot.user is None:
+                    await bot.discord.send(
+                        contents="Error: `bot.user` is None.",
+                        response=True
+                    )
+                    return
+                await message.remove_reaction(emoji, bot.user)
+            elif action == 'pin':
+                await message.pin()
+            elif action == 'unpin':
+                await message.unpin()
+            elif action == 'edit':
+                if content is None:
+                    await bot.discord.send(
+                        contents="You must provide content to edit to.",
+                        response=True
+                    )
+                    return
+                await message.edit(content=content)
+            elif action == 'reply':
+                if content is None:
+                    await bot.discord.send(
+                        contents="You must provide content to reply with.",
+                        response=True
+                    )
+                    return
+                await message.reply(content=content)
+            
             await bot.discord.send(
                 contents=f"Action `{action}` succeeded.",
                 response=True

@@ -89,7 +89,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage leaderboard_monitor: Starts or stops a persistent top leaderboard message.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /manage announce: Sends a simple bot-authored announcement.
- * /manage message: Deletes or reacts to a message by ID.
+ * /manage message: Deletes, pins, edits, replies to, or reacts to a message by ID.
  * /manage state: Stops or restarts the bot process.
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.

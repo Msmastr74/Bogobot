@@ -795,14 +795,18 @@ class BotCore(discord.Client):
             except Exception as e:
                 status = "error"
                 error = f"{type(e).__qualname__}: {str(e)}"
-                try:
-                    if interaction.response.is_done():
-                        await self.outer.discord.cleanup_defer_status(interaction)
-                        await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
-                    else:
-                        await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
-                except discord.HTTPException:
-                    pass
+                if isinstance(e, discord.NotFound) and e.code == 10062:
+                    status = "error"
+                    error = f"Interaction timed out or was deleted. ({error})"
+                else:
+                    try:
+                        if interaction.response.is_done():
+                            await self.outer.discord.cleanup_defer_status(interaction)
+                            await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
+                        else:
+                            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+                    except discord.HTTPException:
+                        pass
             finally:
                 await self.outer.callbacks.execute_async('command_telemetry', {
                     **base_event,

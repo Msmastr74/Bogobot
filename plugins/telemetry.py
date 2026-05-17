@@ -150,8 +150,11 @@ async def setup(bot: BotCore):
                 f.write(line)
                 f.write("\n")
 
-    async def flush_pending_locked() -> None:
-        nonlocal pending_lines
+    async def flush_pending_locked(clear_flush_task: bool) -> None:
+        nonlocal pending_lines, flush_task
+        
+        if clear_flush_task:
+            flush_task = None
 
         if not pending_lines:
             return
@@ -165,9 +168,10 @@ async def setup(bot: BotCore):
             pending_lines = lines + pending_lines
             bot.logger.warning(f"Could not save telemetry file: {e}")
 
-    async def flush_pending() -> None:
+    async def flush_pending(clear_flush_task: bool) -> None:
+        nonlocal flush_task
         async with telemetry_lock:
-            await flush_pending_locked()
+            await flush_pending_locked(clear_flush_task)
 
     def schedule_flush() -> None:
         nonlocal flush_task
@@ -179,8 +183,7 @@ async def setup(bot: BotCore):
             nonlocal flush_task
 
             await asyncio.sleep(flush_interval)
-            await flush_pending()
-            flush_task = None
+            await flush_pending(True)
 
         flush_task = asyncio.create_task(delayed_flush())
 
@@ -196,7 +199,7 @@ async def setup(bot: BotCore):
 
     async def fresh_telemetry_state() -> TelemetryState:
         async with telemetry_lock:
-            await flush_pending_locked()
+            await flush_pending_locked(False)
             eof = await asyncio.to_thread(telemetry_eof_from_file)
         return TelemetryState(cursor=eof, snapshot_end=eof)
 
