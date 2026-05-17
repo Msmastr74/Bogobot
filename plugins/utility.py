@@ -204,6 +204,13 @@ async def setup(bot: BotCore):
         async def on_submit(self, interaction: discord.Interaction) -> None:
             token = current_interaction.set(interaction)
             try:
+                if not self.message.value and not self.message_title:
+                    await bot.discord.send(
+                        contents="The message cannot be empty.",
+                        response=True,
+                        ephemeral=True
+                    )
+                    return
                 await bot.discord.send(
                     view=AnnounceView(
                         title=self.message_title,
@@ -236,6 +243,13 @@ async def setup(bot: BotCore):
                     message_container=message_container,
                     accent_colour=accent_colour
                 )
+            )
+            return
+        if not message and not title:
+            await bot.discord.send(
+                contents="The message cannot be empty.",
+                response=True,
+                ephemeral=True
             )
             return
         await bot.discord.send(
