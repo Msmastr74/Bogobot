@@ -19,8 +19,8 @@ User-edited settings:
 - `http_headers`: Optional Streamlink HTTP headers. Use either a list of `Name=value` strings or an object whose keys and values are converted to `Name=value`. Each entry is passed as `--http-header`. Useful for `User-Agent` or `Referer`.
 - `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
-- `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.05.
-- `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 1.
+- `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.1.
+- `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 2.
 - `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
@@ -45,14 +45,6 @@ Account storage:
 - On ready, the bot creates basic accounts for visible guild members and saves the configured `owner_uid` at permission level 4.
 
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
-
-## Info Subclass
-The `info` subclass handles data extraction from the livestream using a combination of OCR and API requests.
-
-### Methods
-* `get_stats_all()`: Returns a dictionary containing the most recent values for shuffles, comparisons, and calculated shuffles per minute.
-* `get_uptime()`: Returns the current calculated stream uptime as a formatted `DD:HH:MM:SS` string.
-* `format_to_ddhhmmss(total_seconds)`: Converts raw seconds into a standardized duration string.
 
 ## Discord Subclass
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.
@@ -79,15 +71,41 @@ Bogobot utilizes libtesseract OCR for visual data extraction.
 - **Latest cells**: When the sort visualization changes, `ocr_cell_count` controls how many recent history cells are read for monitor updates.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
+## Stream Stats Pipeline
+`plugins/stats.py` owns the live stream data pipeline. It registers an `@bot.on_new_frame_callback`, so every decoded stream frame flows through the same update path.
+
+For each frame, `stats.py`:
+
+- Records frame timing in debug logs.
+- Optionally writes `live_720p.png` when `save_live_frame` is true.
+- Runs the sort-change detector over `bot.SORT_AREA_COORDS`.
+- OCRs the configured stat crops from `bot.STATS_COORDS`.
+- OCRs recent history cells only when the sort visualization changed.
+- Updates `bot.stats`, `bot.current_vals`, `bot._current_vals_updated`, and `bot._last_ocr_refresh`.
+- Feeds milestone candidates to `MilestoneTracker` when milestones are enabled.
+
+`bot.stats` is the current text cache for stream-wide values such as `shuffles`, `comparisons`, `best_run`, `shuffles_sec`, `average_best_shuffle`, and `uptime`. Commands like `/get_stats` read from this cache instead of OCRing on demand.
+
+`bot.current_vals` stores the most recent OCR results for the history cells as `(text, confidence)` tuples. These values are updated only when the sort-change detector says the bar chart actually changed. That lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
+
+`bot._last_ocr_refresh` is the UNIX timestamp of the latest successful OCR refresh. Display commands can use it to show when the current stats cache was last updated.
+
+### Stream Helpers
+`BotCore.get_stream_uptime()` returns a calculated static uptime string in `DD:HH:MM:SS` format. It is based on the known stream start timestamp, not on OCR, so `/get_stats` can show it beside the OCR-read stream uptime.
+
+`BotCore.get_best_shuffles()` returns `(current_vals, is_new)`. `is_new` is true only once for each detected sort change; calling this helper clears the pending-new flag. Persistent monitors should use `is_new` to avoid reposting the same history cells on every monitor tick.
+
 ## Stream Change Detection
 The monitor does not rely only on OCR to decide whether the sort changed. The bot also crops the bar chart area, reduces it to approximate red/green/other pixels, and compares that signature with the previous frame.
 
 `sort_change_threshold` controls how much of that signature must change before the latest cell OCR is treated as new monitor data. A higher value ignores small effects like confetti or compression noise.
 
 ## Bot Message Helpers
-`EditCoalescer` is used for persistent bot-managed messages such as monitor embeds.
+`EditCoalescer` is used for persistent bot-managed messages such as monitor and leaderboard `LayoutView` messages.
 
 Each coalescer belongs to one message. If several edits are queued before Discord receives them, only the newest pending edit is sent.
+
+If Discord reports `NotFound` or `Forbidden` while editing a persistent message, the coalescer records that with `NotFound_or_Forbidden`. `PersistentChannelMonitor` treats that as stale state, removes the stored message ID, and closes the coalescer.
 
 `NotificationBroadcaster` handles topic subscriptions and sends notifications to every channel subscribed to a topic. It stores subscriptions in the `channels` section of `config.json`.
 
@@ -96,6 +114,12 @@ Each coalescer belongs to one message. If several edits are queued before Discor
 `PersistentChannelMonitor` in `utils.monitoring` packages the common monitor pattern: stored channel-to-message IDs, stale message pruning, start/stop handling, coalesced edits, and a periodic update loop. A monitor plugin only needs to provide an initial message payload and an update payload callback.
 
 Monitor messages use static `LayoutView` payloads. The display logic stays encapsulated in one component, and `timeout=None` keeps discord.py from registering non-interactive static views for background dispatch.
+
+`PersistentChannelMonitor.command(root, *args, **kwargs)` forwards its arguments to `root.command(...)` and registers a standard `action: Literal["start", "stop"]` command. This lets monitor plugins use either a `bot.setup` command group or any compatible command-decorator object.
+
+The monitor loop uses `utils.tasks.loop`, a relative async loop helper. Each next run is scheduled relative to the start time of the previous run; if a tick takes longer than its interval, the next iteration runs immediately instead of drifting farther behind.
+
+The stream monitor updates only after the sort-change test reports a real visual change. Repeated stale stream frames are ignored for monitor history, which keeps the monitor closer to actual state transitions than to the currently displayed stream frame.
 
 ## Milestones
 `MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. Values are confirmed using a rolling window, so noisy OCR does not immediately publish a milestone.
@@ -131,6 +155,28 @@ The plugin keeps a small recent-action buffer for `/manage telemetry` and builds
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.
 
+Plugins can register lifecycle callbacks through decorators on `BotCore`:
+
+- `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
+- `@bot.close_callback`: Runs during bot shutdown.
+- `@bot.on_new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
+- `@bot.command_telemetry_callback`: Runs for command telemetry events.
+
+Current plugin responsibilities:
+
+- `accounts.py`: `/accounts` permission commands.
+- `admin.py`: `/manage state` and `/manage logs`.
+- `bogoscramble.py`: Bogoscramble message/media utilities.
+- `get_stats.py`: `/get_stats` display command.
+- `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
+- `milestones.py`: milestone tracking, notifications, and `/manage milestones`.
+- `monitor.py`: `/manage monitor`.
+- `roll.py`: random utility commands.
+- `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
+- `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
+- `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
+- `utils/transformers.py`: Slash-command transformers such as `ColourTransformer`.
+
 ## Admin Commands
 The admin plugin adds `/manage state` and `/manage logs`.
 
@@ -142,15 +188,22 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
-- `/manage state stop|restart|info`: Stops the bot, restarts the current process, or reports which client is active.
+- `/manage announce title message [message_container] [accent_colour]`: Sends a bot-authored announcement. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`.
+- `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
+- `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
+- `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
+- `/usage [commands]`: Shows command usage totals from telemetry.
+- `/avatar [user]`: Shows a user's avatar.
+- `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 
 Account commands live under `/accounts`:
 
 - `/accounts perm_info user`: Shows a user's current account rank.
 - `/accounts perm_edit promote|demote user`: Moves a user up or down by one rank.
 - `/accounts perm_edit set user level`: Sets a user to `basic`, `authorized`, `mod`, or `admin`.
+- `/accounts list_users [minimum_rank]`: Lists accounts, optionally filtered to users at or above a rank.
 
 ### Creating a Plugin
 Each plugin must include a `setup` function to register commands with the `BotCore` instance:

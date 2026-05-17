@@ -39,7 +39,7 @@ async def setup(bot: "BotCore"):
     async def update_payload() -> MonitorPayload | None:
         global num_matrix
 
-        new_vars, is_new = await bot.info.get_best_shuffles()
+        new_vars, is_new = await bot.get_best_shuffles()
 
         if not is_new:
             return None

@@ -31,6 +31,10 @@ Go into `config.json` and provide the main credentials:
  * `accounts_path`: Optional account database path. Defaults to `accounts.json`.
  * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.
+ * `sort_change_threshold`: Optional monitor sensitivity for stream visual changes. Defaults to `0.1`.
+ * `ocr_concurrency`: Optional number of persistent libtesseract worker threads. Defaults to `2`.
+ * `ocr_cell_count`: Optional number of latest history cells to OCR after a detected sort change. Defaults to `2`.
+ * `tessdata_path`: Optional directory for bot-managed `eng_fast.traineddata`. Defaults to `tessdata`.
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
@@ -51,31 +55,46 @@ Milestone templates use Python's `string.Template` syntax:
 python main.py
 ```
 
-In your terminal output, you should see this:
+Your terminal output should look similar to this:
 ```log
-[08 22:17:05.832 WARNING  | discord.client  ] PyNaCl is not installed, voice will NOT be supported
-[08 22:17:05.832 WARNING  | discord.client  ] davey is not installed, voice will NOT be supported
-[08 22:17:05.837 INFO     | Bogobot         ] Loaded Plugin: monitor.py
-[08 22:17:05.837 INFO     | Bogobot         ] Loaded Plugin: top10.py
-[08 22:17:05.838 INFO     | Bogobot         ] Loaded Plugin: getinfo.py
-[08 22:17:05.838 INFO     | Bogobot         ] Loaded Plugin: milestones.py
-[08 22:17:05.838 INFO     | Bogobot         ] Loaded Plugin: authorize.py
-[08 22:17:05.839 INFO     | Bogobot         ] Loaded Plugin: get_all_stats.py
-[08 22:17:05.839 INFO     | Bogobot         ] Loaded Plugin: activity.py
-[08 22:17:05.843 INFO     | Bogobot         ] Loaded Plugin: telemetry.py
-[08 22:17:05.843 INFO     | Bogobot         ] Loaded Plugin: roll.py
-[08 22:17:05.844 INFO     | Bogobot         ] Loaded Plugin: contextmenu.py
-[08 22:17:05.844 INFO     | discord.client  ] logging in using static token
-[08 22:17:06.541 INFO     | discord.gateway ] Shard ID None has connected to Gateway (Session ID: e971cb07a3df4800a5201371544de28f).
-[08 22:17:08.545 INFO     | Bogobot         ] Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
+[May 16 20:50:06.115 WARNING  | discord.client  ] PyNaCl is not installed, voice will NOT be supported
+[May 16 20:50:06.115 WARNING  | discord.client  ] davey is not installed, voice will NOT be supported
+[May 16 20:50:06.206 INFO     | Bogobot         ] Loaded Plugin: monitor.py
+[May 16 20:50:06.207 INFO     | Bogobot         ] Loaded Plugin: leaderboard.py
+[May 16 20:50:06.208 INFO     | Bogobot         ] Loaded Plugin: accounts.py
+[May 16 20:50:06.209 INFO     | Bogobot         ] Loaded Plugin: milestones.py
+[May 16 20:50:06.212 INFO     | Bogobot         ] Loaded Plugin: utility.py
+[May 16 20:50:06.212 INFO     | Bogobot         ] Loaded Plugin: activity.py
+[May 16 20:50:06.216 INFO     | Bogobot         ] Loaded Plugin: telemetry.py
+[May 16 20:50:06.216 INFO     | Bogobot         ] Loaded Plugin: get_stats.py
+[May 16 20:50:06.216 INFO     | Bogobot         ] Loaded Plugin: admin.py
+[May 16 20:50:06.217 INFO     | Bogobot         ] Loaded Plugin: stats.py
+[May 16 20:50:06.219 INFO     | Bogobot         ] Loaded Plugin: bogoscramble.py
+[May 16 20:50:06.220 INFO     | Bogobot         ] Loaded Plugin: roll.py
+[May 16 20:50:06.220 INFO     | discord.client  ] logging in using static token
+[May 16 20:50:06.627 INFO     | Bogobot         ] Syncing Discord command tree (command tree changed)
+[May 16 20:50:09.059 INFO     | discord.gateway ] Shard ID None has connected to Gateway (Session ID: 8ff64b2579a47b99a34bf6fec71c6a00).
+[May 16 20:50:11.064 INFO     | Bogobot         ] Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
+[May 16 20:50:11.065 INFO     | Bogobot         ] Beginning automatic account creation...
+[May 16 20:50:11.065 INFO     | Bogobot         ] Automatically created 0 accounts out of 4 members from REDACTED
+[May 16 20:50:11.065 INFO     | Bogobot         ] Automatically created 0 accounts out of 16 members from Bogobot development (1495827707085197385)
+[May 16 20:50:11.067 INFO     | Bogobot         ] Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 20 members from 2 servers
 ```
 
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
+ * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts or stops a persistent tracking system for stream serial numbers.
+ * /manage leaderboard_monitor: Starts or stops a persistent top leaderboard message.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
+ * /manage announce: Sends a simple bot-authored announcement.
+ * /manage state: Stops or restarts the bot process.
+ * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
+ * /usage: Shows command usage totals.
+ * /avatar and /ping: Small Discord utility commands.
  * /roll: A random number generation utility.
  * /accounts: Manages account permission ranks.
+
 ## Documentation
 For technical details regarding the internal API, OCR configuration, channel proxies, and plugin development, refer to `DOCS.md`.

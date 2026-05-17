@@ -42,4 +42,5 @@ class CallbackRegistry:
             if isinstance(result, Exception):
                 print(f"Error in {event} callback {callback}: {result}")
 
-Callback: TypeAlias = Callable[P, Awaitable[None] | None]
+AsyncCallback: TypeAlias = Callable[P, Awaitable[None] | None]
+SyncCallback: TypeAlias = Callable[P, None]

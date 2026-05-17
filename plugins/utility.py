@@ -1,7 +1,10 @@
 import asyncio
 import discord
+from discord import app_commands
 
 from typing import TYPE_CHECKING
+
+from utils.transformers import ColourTransformer
 if TYPE_CHECKING:
     from main import BotCore
 
@@ -96,7 +99,31 @@ class PingView(discord.ui.LayoutView):
             for start_channel, end_channel in zip(start_rgb, end_rgb)
         ])
 
+class AnnounceView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        title: str | None,
+        message: str | None,
+        message_container: bool,
+        accent_colour: discord.Colour | None = None,
+    ):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.TextDisplay(f"{title}"))
+        if not message:
+            return
+        if message_container:
+            self.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(message),
+                accent_colour=accent_colour,
+            ))
+        else:
+            self.add_item(discord.ui.TextDisplay(message))
+
 async def setup(bot: 'BotCore'):
+    from utils import groups
+    manage = groups.manage(bot)
+
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
     async def avatar(interaction: discord.Interaction, user: discord.Member | discord.User | None = None) -> None:
         if user is None:
@@ -156,3 +183,25 @@ async def setup(bot: 'BotCore'):
                 ),
                 allowed_mentions=discord.AllowedMentions.none()
             )
+
+    @manage.command(
+        name='announce',
+        description='Send a message through the bot.',
+        perm_requirement=2,
+    )
+    async def announce(
+        interaction: discord.Interaction,
+        title: str,
+        message: str,
+        message_container: bool = False,
+        accent_colour: app_commands.Transform[discord.Colour, ColourTransformer] | None = None
+    ):
+        await bot.discord.send(
+            view=AnnounceView(
+                title=title,
+                message=message,
+                message_container=message_container,
+                accent_colour=accent_colour,
+            ),
+            response=True,
+        )

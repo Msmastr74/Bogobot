@@ -29,7 +29,7 @@ class StatsView(discord.ui.LayoutView):
 async def setup(bot: 'BotCore'):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
     async def get_stats(interaction: discord.Interaction):
-        stats_list = await bot.info.get_stats_all()
+        stats_list = bot.stats
         
         # Use .get() to prevent future KeyErrors if the cache is empty
         shuffles = stats_list.get("shuffles", "Loading...")
@@ -38,7 +38,7 @@ async def setup(bot: 'BotCore'):
         shuffles_sec = stats_list.get("shuffles_sec", "Loading...")
         average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
         uptime = stats_list.get("uptime", "Loading...")
-        elapsed_time = await bot.info.get_uptime()
+        elapsed_time = await bot.get_stream_uptime()
         
         view = StatsView(
             fields=[

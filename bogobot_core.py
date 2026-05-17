@@ -2,9 +2,7 @@ import discord
 from discord import app_commands
 import json
 import hashlib
-import numpy as np
 from PIL import Image
-import cv2
 import os
 import functools
 import asyncio
@@ -12,12 +10,12 @@ import importlib
 import contextvars
 import time
 from typing import Any, Callable, TYPE_CHECKING, Concatenate, cast
-from ocr import LibTesseractOCR, OcrCrop, OcrResult, TESSDATA_FAST_URL
+from ocr import LibTesseractOCR, TESSDATA_FAST_URL
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
-from utils.callbacks import CallbackRegistry, Callback
+from utils.callbacks import CallbackRegistry, AsyncCallback
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -99,8 +97,7 @@ class BotCore(discord.Client):
         self.THRESHOLD = 165
         self.current_vals: list[tuple[str, float]] = []
         self._current_vals_updated: bool = False
-        self._last_sort_signature: np.ndarray | None = None
-        self.stats_cache: dict[str, str] = {}
+        self.stats: dict[str, str] = {}
         self.monitor_message = None
         
         self.debug: bool = self.config.get("debug", False)
@@ -128,11 +125,9 @@ class BotCore(discord.Client):
             logger=self.logger.getChild("Stream"),
         )
         
-        self.info = self._Info(self)
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)
         self._last_ocr_refresh: float = 0.0
-        self._last_frame_monotonic = time.monotonic()
         
         channel_data = self._load_channels_config()
         async def save_channels(data: dict[str, Any]):
@@ -152,6 +147,22 @@ class BotCore(discord.Client):
         self.callbacks = CallbackRegistry()
         
         self.milestones: 'MilestoneTracker | None' = None
+    
+    async def get_stream_uptime(self):
+        raw_seconds = round(time.time())
+        seconds_since = int(raw_seconds) - 1776273017
+        minutes = seconds_since // 60
+        seconds_since = seconds_since % 60
+        hours = minutes // 60
+        minutes = minutes % 60
+        days = hours // 24
+        hours = hours % 24
+        return f"{days:02}:{hours:02}:{minutes:02}:{seconds_since:02}"
+
+    async def get_best_shuffles(self):
+        is_new = self._current_vals_updated
+        self._current_vals_updated = False
+        return self.current_vals, is_new
 
     def _save_config_sync(self):
         tmp_path = f"{self.config_path}.tmp"
@@ -193,11 +204,11 @@ class BotCore(discord.Client):
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
         return self.authorization_level(user_id) >= perm_requirement
     
-    def init_callback(self, callback: Callback[[]]):
+    def init_callback(self, callback: AsyncCallback[[]]):
         self.callbacks.register('init', callback)
         return callback
 
-    def close_callback(self, callback: Callback[[]]):
+    def close_callback(self, callback: AsyncCallback[[]]):
         self.callbacks.register('close', callback)
         return callback
 
@@ -233,248 +244,21 @@ class BotCore(discord.Client):
 
     def command_telemetry_callback(
         self,
-        callback: Callback[["CommandTelemetryEvent"]],
+        callback: AsyncCallback[["CommandTelemetryEvent"]],
     ):
         self.callbacks.register('command_telemetry', callback)
         return callback
 
-    class _Info:
-        def __init__(self, outer: 'BotCore'):
-            self.outer = outer
-        
-        # FIX: Added 'self' as the first argument
-        def format_to_ddhhmmss(self, total_seconds):
-            seconds = int(total_seconds) - 1776273017
-            minutes = seconds // 60
-            seconds = seconds % 60
-            hours = minutes // 60
-            minutes = minutes % 60
-            days = hours // 24
-            hours = hours % 24
-            return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
-
-        async def get_uptime(self):
-            raw_seconds = round(time.time())
-            return self.format_to_ddhhmmss(raw_seconds)
-
-        async def get_best_shuffles(self):
-            is_new = self.outer._current_vals_updated
-            self.outer._current_vals_updated = False
-            return self.outer.current_vals, is_new
-
-        async def get_stats_all(self):
-            return self.outer.stats_cache
+    def on_new_frame_callback(
+        self,
+        callback: AsyncCallback[[Image.Image]]
+    ):
+        self.callbacks.register('on_new_frame', callback)
+        return callback
     
     async def on_new_frame(self, img: Image.Image):
-        frame_received_at = time.time()
-
-        frame_received_monotonic = time.monotonic()
-        dt = frame_received_monotonic - self._last_frame_monotonic
-        self._last_frame_monotonic = frame_received_monotonic
-        self.logger.debug(f"New frame received (dt={dt:.2f}s)")
-        
-        if self.config.get("save_live_frame", False):
-            img.save("live_720p.png", format="PNG")
-        
-        sort_changed_start = time.monotonic()
-        sort_changed = self._sort_visual_changed(img)
-        self.logger.debug(f"Sort changed test (dt={time.monotonic() - sort_changed_start:.2f}s)")
-        
-        update_ocr_start = time.monotonic()
-        await self.update_ocr_data(img, sort_changed=sort_changed)
-        self.logger.debug(f"OCR data updated (dt={time.monotonic() - update_ocr_start:.2f}s)")
-        
-        if self.milestones:
-            milestones_start = time.monotonic()
-            frame_timestamp = int(frame_received_at)
-            best_run = self.stats_cache.get("best_run")
-            if best_run:
-                await self.milestones.update("Best run", best_run, timestamp=frame_timestamp, img=img)
-
-            for milestone_name, stat_name in (
-                ("Shuffles", "shuffles"),
-                ("Comparisons", "comparisons"),
-            ):
-                stat_value = self._round_stat_down_to_power(self.stats_cache.get(stat_name))
-                if stat_value:
-                    await self.milestones.update(milestone_name, stat_value, timestamp=frame_timestamp, img=img)
-
-            shuffles_sec = self._round_stat_down_to_power(self.stats_cache.get("shuffles_sec"))
-            if shuffles_sec:
-                await self._update_non_decreasing_milestone(
-                    "Shuffles each second record",
-                    shuffles_sec,
-                    timestamp=frame_timestamp,
-                    img=img,
-                )
-
-            average_best_shuffle = self._round_stat_down_to_int(
-                self.stats_cache.get("average_best_shuffle")
-            )
-            if average_best_shuffle:
-                await self._update_non_decreasing_milestone(
-                    "Average best shuffle record",
-                    average_best_shuffle,
-                    timestamp=frame_timestamp,
-                    img=img
-                )
-            self.logger.debug(f"Milestones updated (dt={time.monotonic() - milestones_start:.2f}s)")
-
-    async def _update_non_decreasing_milestone(
-        self,
-        milestone_name: str,
-        milestone_value: str,
-        timestamp: int,
-        img: Image.Image | None = None,
-    ) -> str | None:
-        if self.milestones is None:
-            return None
-
-        current_value = await self.milestones.get(milestone_name)
-        current_number = self._parse_stat_value(current_value)
-        next_number = self._parse_stat_value(milestone_value)
-
-        if (
-            current_number is not None
-            and next_number is not None
-            and next_number < current_number
-        ):
-            return None
-
-        return await self.milestones.update(milestone_name, milestone_value, timestamp=timestamp, img=img)
-
-    def _parse_stat_value(self, value: str | None) -> float | None:
-        if not value:
-            return None
-
-        try:
-            return float(value.replace(",", ""))
-        except ValueError:
-            return None
-
-    def _round_stat_down_to_power(self, value: str | None) -> str | None:
-        number = self._parse_stat_value(value)
-        if number is None:
-            return None
-
-        number = int(number)
-        if number <= 0:
-            return None
-
-        power = 10 ** (len(str(number)) - 1)
-        return f"{number // power * power:,}"
-
-    def _round_stat_down_to_int(self, value: str | None) -> str | None:
-        number = self._parse_stat_value(value)
-        if number is None:
-            return None
-
-        return f"{int(number):,}"
+        await self.callbacks.execute_async('on_new_frame', img)
     
-    def _sort_visual_changed(self, img: Image.Image) -> bool:
-        crop = img.crop(self.SORT_AREA_COORDS).convert("RGB")
-        rgb = np.array(crop)
-        small = cv2.resize(rgb, (160, 72), interpolation=cv2.INTER_AREA).astype(np.int16)
-
-        red = (
-            (small[:, :, 0] > small[:, :, 1] + 25) &
-            (small[:, :, 0] > small[:, :, 2] + 25) &
-            (small[:, :, 0] > 80)
-        )
-        green = (
-            (small[:, :, 1] > small[:, :, 0] + 15) &
-            (small[:, :, 1] > small[:, :, 2] + 15) &
-            (small[:, :, 1] > 80)
-        )
-
-        signature = np.zeros(small.shape[:2], dtype=np.uint8)
-        signature[red] = 1
-        signature[green] = 2
-
-        if self._last_sort_signature is None:
-            self._last_sort_signature = signature
-            return True
-
-        changed_ratio = np.count_nonzero(signature != self._last_sort_signature) / signature.size
-        self._last_sort_signature = signature
-
-        changed = changed_ratio >= self.SORT_CHANGE_THRESHOLD
-        self.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
-        return changed.item()
-    
-    async def update_ocr_data(self, img: Image.Image, *, sort_changed: bool = True) -> None:
-        try:
-            async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
-                async def parse_crop(crop: OcrCrop) -> OcrResult:
-                    coords, whitelist, psm = crop
-                    
-                    width, height = coords[2] - coords[0], coords[3] - coords[1]
-                    area = width * height
-                    return await self.ocr.parse(
-                        img.crop(coords),
-                        whitelist,
-                        psm=7 if psm is None else psm,
-                        scale=3 if area > 1500 else 6
-                    )
-
-                return await asyncio.gather(*[
-                    parse_crop(crop)
-                    for crop in crops
-                ])
-
-            crops: list[OcrCrop] = []
-            stats_specs: list[tuple[int, str, str]] = []
-            cell_indexes: list[int] = []
-
-            if sort_changed:
-                self.current_vals = []
-
-            for name, coords in self.STATS_COORDS.items():
-                whitelist = "0123456789,"
-                psm: int | None = None
-                if len(coords) >= 5:
-                    extra = coords[4]
-                    if isinstance(extra, str):
-                        whitelist = extra
-                    else:
-                        w, psm = extra
-                        if w is not None:
-                            whitelist = w
-                        if psm is not None:
-                            psm = int(psm)
-                crop_coords = cast(tuple[int, int, int, int], coords[:4])
-
-                stats_specs.append((len(crops), name, whitelist))
-                crops.append((crop_coords, whitelist, psm))
-
-            if sort_changed:
-                coords = self.CELL_COORDS
-                for _ in range(self.OCR_CELL_COUNT):
-                    cell_indexes.append(len(crops))
-                    crops.append((coords, "0123456789", None))
-                    coords = (
-                        coords[0] - self.CELL_OFFSET, coords[1],
-                        coords[2] - self.CELL_OFFSET, coords[3]
-                    )
-
-            results = await parse_crops(crops)
-
-            for index, name, whitelist in stats_specs:
-                text, conf = results[index]
-                if not text or conf < 0:
-                    continue
-
-                self.stats_cache[name] = text
-
-            if sort_changed:
-                self.current_vals = [results[index] for index in cell_indexes]
-                self.current_vals.reverse()
-                self._current_vals_updated = True
-
-            self._last_ocr_refresh = time.time()
-        except Exception as e:
-            self.logger.warning(f"OCR processing error: {e}")
-
     class _Discord:
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
