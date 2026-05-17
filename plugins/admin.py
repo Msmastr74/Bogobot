@@ -437,7 +437,7 @@ async def setup(bot: "BotCore"):
     @manage.command(name="message", description="React to, pin, edit, reply to, or delete a message", perm_requirement=3)
     async def message(
         interaction: discord.Interaction,
-        action: Literal['delete', 'react', 'unreact', 'pin', 'unpin', 'edit'],
+        action: Literal['delete', 'edit', 'reply',  'react', 'unreact', 'pin', 'unpin'],
         message_id: app_commands.Transform[int, IntTransformer],
         channel_id: app_commands.Transform[int, IntTransformer] | None = None,
         emoji: str | None = None,
