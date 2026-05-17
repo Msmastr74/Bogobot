@@ -188,6 +188,7 @@ async def setup(bot: 'BotCore'):
         name='announce',
         description='Send a message through the bot.',
         perm_requirement=2,
+        defer=False
     )
     async def announce(
         interaction: discord.Interaction,
