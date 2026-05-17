@@ -33,7 +33,10 @@ async def setup(bot: BotCore):
         if len(choices_list) == 0:
             await bot.discord.send(contents="You must provide at least one choice.", response=True, ephemeral=True)
             return
-        await bot.discord.send(contents=f"{random.choice(choices_list)}", response=True)
+        c = random.choice(choices_list).replace('`', ' ')
+        if not c:
+            c = '\u200d'
+        await bot.discord.send(contents=f"`{c}`", response=True)
 
     @bot.setup.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
     async def bogo(interaction: discord.Interaction, text: str):
@@ -50,7 +53,11 @@ async def setup(bot: BotCore):
         if delimiter != " ":
             items_list = [item.strip() for item in items_list]
         random.shuffle(items_list)
-        await bot.discord.send(contents=f"{output_delimiter.join(items_list)}", response=True)
+        contents = f"{output_delimiter.join(items_list)}"
+        contents = contents.replace('`', '')
+        if not contents:
+            contents = '\u200d'
+        await bot.discord.send(contents=f'`{contents}`', response=True)
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", 
                        defer=False, perm_requirement=0)
@@ -66,8 +73,9 @@ async def setup(bot: BotCore):
             return
         if delimiter != " ":
             delimiter = f"{delimiter} "
+        delimiter = delimiter.replace('`', ' ')
         rand_list = [random.randint(min, max) for _ in range(length)]
-        await bot.discord.send(contents=f"{delimiter.join(map(str, rand_list))}", response=True)
+        await bot.discord.send(contents=f"`{delimiter.join(map(str, rand_list))}`", response=True)
 
     @bot.setup.command(name="randfloat", description="Rolls a random float from user specified range", 
                        defer=False, perm_requirement=0)
@@ -102,6 +110,7 @@ async def setup(bot: BotCore):
                 return
         random.shuffle(arr)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+        output_delimiter = output_delimiter.replace('`', ' ')
         def text():
             return f"`{output_delimiter.join(map(str, arr)) or ' '}`"
 
@@ -152,6 +161,7 @@ async def setup(bot: BotCore):
                 )
                 return
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+        output_delimiter = output_delimiter.replace('`', ' ')
         def text(): return output_delimiter.join(map(str, arr))
 
         should_succeed = random.random() < (percent / 100)
