@@ -430,3 +430,42 @@ async def setup(bot: "BotCore"):
             response=True,
             ephemeral=True,
         )
+
+
+    @manage.command(name="message", description="React to or delete a bot message", perm_requirement=3)
+    async def message(
+        interaction: discord.Interaction,
+        action: Literal['delete', 'react'],
+        message_id: int,
+        channel_id: int | None = None,
+        emoji: str | None = None,
+    ):
+        channel_id = channel_id or interaction.channel_id
+        if not channel_id:
+            await bot.discord.send(
+                contents="Failed to get channel id.",
+                response=True
+            )
+            return
+        messageable = bot.get_partial_messageable(channel_id)
+        message = messageable.get_partial_message(message_id)
+        try:
+            if action == 'delete':
+                await message.delete()
+            elif action == 'react':
+                if emoji is None:
+                    await bot.discord.send(
+                        contents="You must provide an emoji to react with.",
+                        response=True
+                    )
+                    return
+                await message.add_reaction(emoji)
+            await bot.discord.send(
+                contents=f"Action `{action}` succeeded.",
+                response=True
+            )
+        except discord.HTTPException as e:
+            await bot.discord.send(
+                contents=f"Action `{action}` failed with error:\n```{type(e).__name__}: {e}```",
+                response=True
+            )
