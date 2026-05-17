@@ -12,6 +12,7 @@ from utils.pagination import PageSection, PaginatedView, SectionRead
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
 DEFAULT_FLUSH_INTERVAL_SECONDS = 60.0
+ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,22 @@ async def setup(bot: BotCore):
     flush_task: asyncio.Task[None] | None = None
     last_event_time: float | None = None
     chunk_started = False
+
+    class PersistentArchiveCloseView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=None)
+
+        @discord.ui.button(
+            label="Close",
+            style=discord.ButtonStyle.danger,
+            custom_id=ARCHIVE_CLOSE_CUSTOM_ID,
+        )
+        async def close(
+            self,
+            interaction: discord.Interaction,
+            button: discord.ui.Button,
+        ) -> None:
+            await interaction.delete_original_response()
 
     def append_text(text: str) -> None:
         if archive_path.parent != Path("."):
@@ -156,6 +173,8 @@ async def setup(bot: BotCore):
     async def init():
         nonlocal flush_task
 
+        bot.add_view(PersistentArchiveCloseView())
+
         if flush_task is None or flush_task.done():
             flush_task = asyncio.create_task(flush_loop())
 
@@ -209,6 +228,11 @@ async def setup(bot: BotCore):
                 label="Older",
                 style=discord.ButtonStyle.secondary,
             )
+            self.close = discord.ui.Button(
+                label="Close",
+                style=discord.ButtonStyle.danger,
+                custom_id=ARCHIVE_CLOSE_CUSTOM_ID,
+            )
             self.newer.callback = self.newer_action
             self.refresh.callback = self.refresh_action
             self.older.callback = self.older_action
@@ -216,6 +240,7 @@ async def setup(bot: BotCore):
                 self.newer,
                 self.refresh,
                 self.older,
+                self.close,
             )
 
         def page_allowed_mentions(self) -> discord.AllowedMentions | None:
