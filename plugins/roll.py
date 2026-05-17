@@ -210,7 +210,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
 
-    @bot.setup.command(name="bogosort", description="Bogosorts", perm_requirement=0)
+    @bot.setup.command(name="bogosort", description="Bogosorts", defer=False, perm_requirement=0)
     async def bogosort(interaction: discord.Interaction, item_count: Literal[1, 2, 3, 4, 5, 6, 7, 8]):
         items: list[tuple[int, str]] = [
             (i, chr(0x2580 + i)) for i in range(1, item_count + 1)
