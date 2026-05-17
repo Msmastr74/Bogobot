@@ -15,7 +15,7 @@ pkg install opencv-python -y
 
 # Install Python libraries
 # Pillow may require a moment to compile on mobile devices
-pip install discord.py numpy Pillow aiohttp streamlink
+pip install discord.py numpy Pillow aiohttp streamlink pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python - <<'PY'

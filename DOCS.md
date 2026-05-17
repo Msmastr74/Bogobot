@@ -199,8 +199,8 @@ Several management commands use an explicit action parameter instead of separate
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
-- `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/choice`, `/shuffle`, `/bogo`: Randomization and text/list utilities.
-- `/bogosort`, `/bogosort-list`, `/bogosort-lexiographic`, `/bogosort-listr`: Small animated bogosort commands.
+- `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/choice`, `/shuffle`, `/sort`, `/bogo`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexiographic` modes.
+- `/bogosort`, `/bogosort-list`, `/bogosort-lexiographic`, `/bogosort-listr`: Small animated bogosort commands. `/bogosort-lexiographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
 
 Account commands live under `/accounts`:
 

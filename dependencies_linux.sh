@@ -16,7 +16,7 @@ sudo apt install python3 python3-pip tesseract-ocr libtesseract-dev ffmpeg -y
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # streamlink: Livestream data extraction
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py numpy Pillow aiohttp streamlink opencv-python
+python3 -m pip install discord.py numpy Pillow aiohttp streamlink opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'

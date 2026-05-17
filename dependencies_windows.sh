@@ -10,7 +10,7 @@ winget install -e --id Gyan.FFmpeg
 
 # Install Python libraries.
 py -3 -m pip install --upgrade pip
-py -3 -m pip install discord.py numpy Pillow aiohttp streamlink opencv-python
+py -3 -m pip install discord.py numpy Pillow aiohttp streamlink opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 py -3 - <<'PY'

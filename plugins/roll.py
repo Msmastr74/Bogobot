@@ -3,6 +3,8 @@ from typing import Literal
 import discord
 import random
 import asyncio
+import unicodedata
+from pyuca import Collator
 
 # here because Chat asked for it
 
@@ -11,6 +13,7 @@ from bogobot_core import BotCore
 async def setup(bot: BotCore):
     unsorted_emoji = bot.discord.get_emoji('unsorted')
     sorted_emoji = bot.discord.get_emoji('sorted')
+    collator = Collator()
     def split(text: str, delim: str):
         return list(
             filter(bool, 
@@ -56,9 +59,45 @@ async def setup(bot: BotCore):
         items_list = split(items, delimiter)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         random.shuffle(items_list)
-        contents = f"{output_delimiter.join(items_list)}"
-        if not contents:
-            contents = '\u200d'
+        contents = f"{output_delimiter.join(items_list)}" or '\u200d'
+        await bot.discord.send(contents=contents, response=True, safety_filter=True)
+
+    @bot.setup.command(name="sort", description="Sorts a list of items", defer=False, perm_requirement=0)
+    async def sort(
+        interaction: discord.Interaction,
+        mode: Literal["numerical", "lexiographic"],
+        items: str,
+        delimiter: str = " ",
+    ):
+        items_list = split(items, delimiter)
+        output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
+
+        if mode == "numerical":
+            parsed_items: list[float | int] = []
+            for item in items_list:
+                try:
+                    try:
+                        parsed_items.append(int(item))
+                    except ValueError:
+                        parsed_items.append(float(item))
+                except ValueError:
+                    await bot.discord.send(
+                        contents=f"Invalid item: {item}. All items must be numbers.",
+                        response=True,
+                        ephemeral=True
+                    )
+                    return
+            sorted_items = list(map(str, sorted(parsed_items)))
+        else:
+            sorted_items = sorted(
+                [
+                    unicodedata.normalize("NFC", item)
+                    for item in items_list
+                ],
+                key=collator.sort_key,
+            )
+
+        contents = output_delimiter.join(sorted_items) or '\u200d'
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", 
@@ -114,7 +153,7 @@ async def setup(bot: BotCore):
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         output_delimiter = output_delimiter.replace('`', ' ')
         def text():
-            return f"`{output_delimiter.join(map(str, arr)) or ' '}`"
+            return f"`{output_delimiter.join(map(str, arr)) or '\u200d'}`"
 
         message = await bot.discord.send(
             contents=f"Sorting: {text()}", response=True
@@ -140,13 +179,18 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(name="bogosort-lexiographic", description="Bogosorts a list of strings", defer=False, perm_requirement=0)
     async def bogosort_lexiographic(interaction: discord.Interaction, items: str, delimiter: str = " "):
-        arr = split(items, delimiter)
+        arr = [
+            unicodedata.normalize("NFC", item)
+            for item in split(items, delimiter)
+        ]
         random.shuffle(arr)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         def text():
             contents = output_delimiter.join(arr) or '\u200d'
             contents = contents.replace('`', ' ')
             return f"`{contents}`"
+        def sorted_arr():
+            return sorted(arr, key=collator.sort_key)
 
         message = await bot.discord.send(
             contents=f"Sorting: {text()}", response=True
@@ -154,12 +198,12 @@ async def setup(bot: BotCore):
         if not message:
             return
         counter = 25
-        while arr != sorted(arr):
+        while arr != sorted_arr():
             await asyncio.sleep(0.5)
             await message.edit(contents=f"Sorting: {text()}")
             random.shuffle(arr)
             counter -= 1
-            if counter <= 0 and arr != sorted(arr):
+            if counter <= 0 and arr != sorted_arr():
                 await asyncio.sleep(1.5)
                 await message.edit(contents=f"Sort failed: {text()}")
                 await message.add_reaction(unsorted_emoji)
@@ -196,7 +240,8 @@ async def setup(bot: BotCore):
                 return
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         output_delimiter = output_delimiter.replace('`', ' ')
-        def text(): return output_delimiter.join(map(str, arr))
+        def text():
+            return f"`{output_delimiter.join(map(str, arr)) or '\u200d'}`"
 
         should_succeed = random.random() < (percent / 100)
         sorted_arr = sorted(arr)

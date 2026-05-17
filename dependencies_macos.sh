@@ -21,7 +21,7 @@ brew install python tesseract ffmpeg streamlink
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # opencv-python: image preprocessing
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py numpy Pillow aiohttp opencv-python
+python3 -m pip install discord.py numpy Pillow aiohttp opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'
