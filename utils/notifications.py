@@ -121,7 +121,7 @@ class NotificationBroadcaster:
             if channel is None or not hasattr(channel, "send"):
                 stale_channel_ids.append(channel_id)
                 continue
-            channel = cast(discord.abc.MessageableChannel, channel)
+            channel = cast('discord.abc.MessageableChannel', channel)
             try:
                 send_kwargs = kwargs.copy()
                 if create_files is not None:
