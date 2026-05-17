@@ -104,46 +104,138 @@ class AnnounceView(discord.ui.LayoutView):
         title: str | None,
         message: str | None,
         message_container: bool,
+        attachment_files: list[tuple[discord.Attachment, discord.File]],
+        attachments_container: bool,
         accent_colour: discord.Colour | None = None,
     ):
         super().__init__(timeout=None)
+        attachment_components = self._attachment_components(attachment_files)
         if title is not None:
             self.add_item(discord.ui.TextDisplay(f"{title}"))
-        if not message:
+        if not message and not attachment_components:
             return
         if message_container:
+            children = []
+            if message:
+                children.append(discord.ui.TextDisplay(message))
+            if attachments_container:
+                children.extend(attachment_components)
             self.add_item(discord.ui.Container(
-                discord.ui.TextDisplay(message),
+                *children,
                 accent_colour=accent_colour,
             ))
+            if not attachments_container:
+                for component in attachment_components:
+                    self.add_item(component)
         else:
-            self.add_item(discord.ui.TextDisplay(message))
+            if message:
+                self.add_item(discord.ui.TextDisplay(message))
+            if attachments_container and attachment_components:
+                self.add_item(discord.ui.Container(
+                    *attachment_components,
+                    accent_colour=accent_colour,
+                ))
+            else:
+                for component in attachment_components:
+                    self.add_item(component)
+
+    def _attachment_components(
+        self,
+        files: list[tuple[discord.Attachment, discord.File]],
+    ) -> list[discord.ui.MediaGallery | discord.ui.File]:
+        media_files = [
+            file
+            for attachment, file in files
+            if self._is_media_attachment(attachment)
+        ]
+        regular_files = [
+            file
+            for attachment, file in files
+            if not self._is_media_attachment(attachment)
+        ]
+        components: list[discord.ui.MediaGallery | discord.ui.File] = []
+
+        if media_files:
+            components.append(discord.ui.MediaGallery(*[
+                discord.MediaGalleryItem(
+                    media=file,
+                    description=file.description or file.filename,
+                )
+                for file in media_files
+            ]))
+
+        components.extend([
+            discord.ui.File(file)
+            for file in regular_files
+        ])
+
+        return components
+
+    def _is_media_attachment(self, attachment: discord.Attachment) -> bool:
+        content_type = attachment.content_type or ""
+        if content_type.startswith(("image/", "video/")):
+            return True
+
+        filename = attachment.filename.lower()
+        return filename.endswith((
+            ".apng",
+            ".avif",
+            ".gif",
+            ".jpg",
+            ".jpeg",
+            ".mov",
+            ".mp4",
+            ".png",
+            ".webm",
+            ".webp",
+        ))
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
 
     async def create_announcement_files(
         attachments: list[discord.Attachment],
-    ) -> list[discord.File]:
+    ) -> list[tuple[discord.Attachment, discord.File]]:
         return [
-            await attachment.to_file()
+            (attachment, await attachment.to_file())
             for attachment in attachments
         ]
 
     async def send_announcement(
-        view: AnnounceView,
+        *,
+        title: str | None,
+        message: str | None,
+        message_container: bool,
+        attachments_container: bool,
+        accent_colour: discord.Colour | None,
         attachments: list[discord.Attachment],
     ) -> None:
         try:
             files = await create_announcement_files(attachments)
+            view = AnnounceView(
+                title=title,
+                message=message,
+                message_container=message_container,
+                attachment_files=files,
+                attachments_container=attachments_container,
+                accent_colour=accent_colour,
+            )
             if files:
-                await bot.discord.send(view=view, files=files)
+                await bot.discord.send(view=view, files=[file for _, file in files])
             else:
                 await bot.discord.send(view=view)
         except discord.Forbidden:
             files = await create_announcement_files(attachments)
+            view = AnnounceView(
+                title=title,
+                message=message,
+                message_container=message_container,
+                attachment_files=files,
+                attachments_container=attachments_container,
+                accent_colour=accent_colour,
+            )
             if files:
-                await bot.discord.send(view=view, files=files, response=True)
+                await bot.discord.send(view=view, files=[file for _, file in files], response=True)
             else:
                 await bot.discord.send(view=view, response=True)
 
@@ -219,32 +311,35 @@ async def setup(bot: BotCore):
             *,
             title: str | None,
             message_container: bool,
+            attachments_container: bool,
             accent_colour: discord.Colour | None,
             attachments: list[discord.Attachment],
         ):
             super().__init__()
             self.message_title = title
             self.message_container = message_container
+            self.attachments_container = attachments_container
             self.accent_colour = accent_colour
             self.attachments = attachments
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
             token = current_interaction.set(interaction)
             try:
-                if not self.message.value and not self.message_title:
+                if not self.message.value and not self.message_title and not self.attachments:
                     await bot.discord.send(
                         contents="The message cannot be empty.",
                         response=True,
                         ephemeral=True
                     )
                     return
-                view=AnnounceView(
+                await send_announcement(
                     title=self.message_title,
                     message=self.message.value or None,
                     message_container=self.message_container,
+                    attachments_container=self.attachments_container,
                     accent_colour=self.accent_colour,
+                    attachments=self.attachments,
                 )
-                await send_announcement(view, self.attachments)
                 await bot.discord.send(
                     contents="The announcement message was successfully sent.",
                     response=True,
@@ -264,6 +359,7 @@ async def setup(bot: BotCore):
         title: str | None = None,
         message: str | None = None,
         message_container: bool = False,
+        attachments_container: bool = False,
         accent_colour: app_commands.Transform[discord.Colour, ColourTransformer] | None = None,
         attachment_1: discord.Attachment | None = None,
         attachment_2: discord.Attachment | None = None,
@@ -297,25 +393,27 @@ async def setup(bot: BotCore):
                 AnnounceModal(
                     title=title,
                     message_container=message_container,
+                    attachments_container=attachments_container,
                     accent_colour=accent_colour,
                     attachments=attachments,
                 )
             )
             return
-        if not message and not title:
+        if not message and not title and not attachments:
             await bot.discord.send(
                 contents="The message cannot be empty.",
                 response=True,
                 ephemeral=True
             )
             return
-        view = AnnounceView(
+        await send_announcement(
             title=title,
             message=message,
             message_container=message_container,
+            attachments_container=attachments_container,
             accent_colour=accent_colour,
+            attachments=attachments,
         )
-        await send_announcement(view, attachments)
         await bot.discord.send(
             contents="The announcement message was successfully sent.",
             response=True,

@@ -188,7 +188,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
-- `/manage announce [title] [message] [message_container] [accent_colour] [attachment_1..attachment_10]`: Sends a bot-authored announcement with up to 10 files. When `message` is omitted, Discord opens a modal for longer message entry. Attachments are sent as normal Discord files outside the view layout. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`.
+- `/manage announce [title] [message] [message_container] [attachments_container] [accent_colour] [attachment_1..attachment_10]`: Sends a bot-authored announcement with up to 10 files. When `message` is omitted, Discord opens a modal for longer message entry. Media attachments render through `MediaGallery`; other attachments render as Components v2 file items. `attachments_container` places those attachment components inside the accent container. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`.
 - `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
