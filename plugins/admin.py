@@ -468,6 +468,6 @@ async def setup(bot: "BotCore"):
             )
         except discord.HTTPException as e:
             await bot.discord.send(
-                contents=f"Action `{action}` failed with error:\n```{type(e).__name__}: {e}```",
+                contents=f"Action `{action}` failed with error:\n```{type(e).__qualname__}: {e}```",
                 response=True
             )
