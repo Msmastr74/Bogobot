@@ -236,6 +236,7 @@ async def setup(bot: BotCore):
                     accent_colour=accent_colour
                 )
             )
+            return
         await bot.discord.send(
             view=AnnounceView(
                 title=title,
