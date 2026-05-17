@@ -5,7 +5,7 @@ import aiohttp
 import discord
 
 from utils.monitoring import PersistentChannelMonitor
-from utils import groups
+from utils import groups, tasks
 
 from bogobot_core import BotCore
 
@@ -188,7 +188,6 @@ async def setup(bot: BotCore):
         display_name="Leaderboard monitor",
         initial_payload=monitor_payload,
         update_payload=monitor_payload,
-        interval_seconds=LEADERBOARD_MONITOR_INTERVAL_SECONDS,
     )
     leaderboard_monitor.command(
         manage,
@@ -196,7 +195,17 @@ async def setup(bot: BotCore):
         description="Start or stop leaderboard monitoring in this channel",
     )
 
+    @tasks.loop(seconds=LEADERBOARD_MONITOR_INTERVAL_SECONDS)
+    async def update_leaderboard_monitor():
+        await leaderboard_monitor.tick()
+
     @bot.init_callback
     async def init():
         await leaderboard_monitor.initialize()
-        leaderboard_monitor.start()
+        if not update_leaderboard_monitor.is_running():
+            update_leaderboard_monitor.start()
+
+    @bot.close_callback
+    async def close():
+        if update_leaderboard_monitor.is_running():
+            update_leaderboard_monitor.cancel()

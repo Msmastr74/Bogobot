@@ -77,11 +77,15 @@ class BotCore(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         
-        self.CELL_COORDS = (1170, 665, 1195, 685)
-        self.CELL_OFFSET = 37 # x offset per historical cell
         self.SORT_AREA_COORDS = (75, 60, 1205, 575)
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.1)
-        self.OCR_CELL_COUNT: int = max(1, int(self.config.get("ocr_cell_count", 2)))
+        self.SORT_SECTION_COUNT: int = max(1, int(self.config.get("sort_section_count", 25)))
+        self.SORT_OBSERVED_STRIP_COORDS = (
+            int(self.config.get("sort_observed_left", 80)),
+            int(self.config.get("sort_observed_top", 515)),
+            int(self.config.get("sort_observed_right", 1200)),
+            int(self.config.get("sort_observed_bottom", 530)),
+        )
 
         self.STATS_COORDS: dict[str, 
                                 tuple[int, int, int, int] |
@@ -95,8 +99,6 @@ class BotCore(discord.Client):
             "uptime": (1160, 10, 1260, 30, "0123456789dhm ")
         }
         self.THRESHOLD = 165
-        self.current_vals: list[tuple[str, float]] = []
-        self._current_vals_updated: bool = False
         self.stats: dict[str, str] = {}
         self.monitor_message = None
         
@@ -116,7 +118,7 @@ class BotCore(discord.Client):
         self.stream_handler = StreamHandler(
             url="https://www.youtube.com/live/DgfiqGPmGWY",
             quality="720p",
-            on_new_frame=self.on_new_frame,
+            on_new_frame=self.new_frame,
             fps=float(self.config.get("fps", 1)),
             cookies=self._streamlink_cookies(),
             http_headers=self._streamlink_http_headers(),
@@ -158,11 +160,6 @@ class BotCore(discord.Client):
         days = hours // 24
         hours = hours % 24
         return f"{days:02}:{hours:02}:{minutes:02}:{seconds_since:02}"
-
-    async def get_best_shuffles(self):
-        is_new = self._current_vals_updated
-        self._current_vals_updated = False
-        return self.current_vals, is_new
 
     def _save_config_sync(self):
         tmp_path = f"{self.config_path}.tmp"
@@ -249,15 +246,25 @@ class BotCore(discord.Client):
         self.callbacks.register('command_telemetry', callback)
         return callback
 
-    def on_new_frame_callback(
+    def new_frame_callback(
         self,
         callback: AsyncCallback[[Image.Image]]
     ):
-        self.callbacks.register('on_new_frame', callback)
+        self.callbacks.register('new_frame', callback)
         return callback
     
-    async def on_new_frame(self, img: Image.Image):
-        await self.callbacks.execute_async('on_new_frame', img)
+    async def new_frame(self, img: Image.Image):
+        await self.callbacks.execute_async('new_frame', img)
+
+    def new_value_callback(
+        self,
+        callback: AsyncCallback[[int]]
+    ):
+        self.callbacks.register('new_value', callback)
+        return callback
+
+    async def new_value(self, value: int):
+        await self.callbacks.execute_async('new_value', value)
     
     class _Discord:
         def __init__(self, outer: 'BotCore'):

@@ -33,10 +33,6 @@ async def setup(bot: BotCore):
 
             crops: list[OcrCrop] = []
             stats_specs: list[tuple[int, str, str]] = []
-            cell_indexes: list[int] = []
-
-            if sort_changed:
-                bot.current_vals = []
 
             for name, coords in bot.STATS_COORDS.items():
                 whitelist = "0123456789,"
@@ -56,16 +52,6 @@ async def setup(bot: BotCore):
                 stats_specs.append((len(crops), name, whitelist))
                 crops.append((crop_coords, whitelist, psm))
 
-            if sort_changed:
-                coords = bot.CELL_COORDS
-                for _ in range(bot.OCR_CELL_COUNT):
-                    cell_indexes.append(len(crops))
-                    crops.append((coords, "0123456789", None))
-                    coords = (
-                        coords[0] - bot.CELL_OFFSET, coords[1],
-                        coords[2] - bot.CELL_OFFSET, coords[3]
-                    )
-
             results = await parse_crops(crops)
 
             for index, name, whitelist in stats_specs:
@@ -76,9 +62,7 @@ async def setup(bot: BotCore):
                 bot.stats[name] = text
 
             if sort_changed:
-                bot.current_vals = [results[index] for index in cell_indexes]
-                bot.current_vals.reverse()
-                bot._current_vals_updated = True
+                await bot.new_value(read_best_shuffle_count(img))
 
             bot._last_ocr_refresh = time.time()
         except Exception:
@@ -172,6 +156,37 @@ async def setup(bot: BotCore):
 
         return f"{int(number):,}"
 
+    def read_best_shuffle_count(img: Image.Image) -> int:
+        left, top, right, bottom = bot.SORT_OBSERVED_STRIP_COORDS
+        crop = img.crop((left, top, right, bottom)).convert("RGB")
+        rgb = np.array(crop).astype(np.int16)
+        section_count = bot.SORT_SECTION_COUNT
+        green_count = 0
+
+        for index in range(section_count):
+            x1 = round(index * rgb.shape[1] / section_count)
+            x2 = round((index + 1) * rgb.shape[1] / section_count)
+            section = rgb[:, x1:x2, :]
+
+            red_pixels = (
+                (section[:, :, 0] > section[:, :, 1] + 25) &
+                (section[:, :, 0] > section[:, :, 2] + 25) &
+                (section[:, :, 0] > 70)
+            ).sum()
+            green_pixels = (
+                (section[:, :, 1] > section[:, :, 0] + 10) &
+                (section[:, :, 1] > section[:, :, 2] + 10) &
+                (section[:, :, 1] > 70)
+            ).sum()
+
+            if green_pixels > red_pixels:
+                green_count += 1
+
+        bot.logger.debug(
+            f"Sort strip green sections={green_count}/{section_count}"
+        )
+        return green_count
+
     def test_sort_changed(img: Image.Image) -> bool:
         nonlocal last_sort_signature
         crop = img.crop(bot.SORT_AREA_COORDS).convert("RGB")
@@ -205,8 +220,8 @@ async def setup(bot: BotCore):
         return changed.item()
 
     last_frame_monotonic = time.monotonic()
-    @bot.on_new_frame_callback
-    async def on_new_frame(img: Image.Image):
+    @bot.new_frame_callback
+    async def new_frame(img: Image.Image):
         nonlocal last_frame_monotonic
         frame_received_at = time.time()
 

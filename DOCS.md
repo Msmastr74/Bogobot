@@ -20,8 +20,12 @@ User-edited settings:
 - `save_ocr_debug`: Enable saving processed OCR crop images in `ocr_debug/`. Defaults to false.
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.1.
+- `sort_section_count`: Number of sort sections to classify for the monitor value. Defaults to 25.
+- `sort_observed_left`: Left x-coordinate of the horizontal strip used for sort-section classification. Defaults to 80.
+- `sort_observed_top`: Top y-coordinate of the horizontal strip used for sort-section classification. Defaults to 515.
+- `sort_observed_right`: Right x-coordinate of the horizontal strip used for sort-section classification. Defaults to 1200.
+- `sort_observed_bottom`: Bottom y-coordinate of the horizontal strip used for sort-section classification. Defaults to 530.
 - `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 2.
-- `ocr_cell_count`: Number of latest history cells to OCR when the sort visualization changes. Defaults to 2.
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
 - `libtesseract_path`: Optional explicit path to the libtesseract shared library when auto-detection cannot find it.
@@ -68,11 +72,10 @@ Bogobot utilizes libtesseract OCR for visual data extraction.
 - **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
 - **OCR calls**: Each crop is sent directly to an OCR worker with its own whitelist and page segmentation mode. There is no subprocess startup or TIFF/PNG piping.
 - **Parallelism**: `ocr_concurrency` controls how many OCR workers are started. Workers run in threads, and each thread keeps its own initialized libtesseract API instance.
-- **Latest cells**: When the sort visualization changes, `ocr_cell_count` controls how many recent history cells are read for monitor updates.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
 ## Stream Stats Pipeline
-`plugins/stats.py` owns the live stream data pipeline. It registers an `@bot.on_new_frame_callback`, so every decoded stream frame flows through the same update path.
+`plugins/stats.py` owns the live stream data pipeline. It registers an `@bot.new_frame_callback`, so every decoded stream frame flows through the same update path.
 
 For each frame, `stats.py`:
 
@@ -80,25 +83,26 @@ For each frame, `stats.py`:
 - Optionally writes `live_720p.png` when `save_live_frame` is true.
 - Runs the sort-change detector over `bot.SORT_AREA_COORDS`.
 - OCRs the configured stat crops from `bot.STATS_COORDS`.
-- OCRs recent history cells only when the sort visualization changed.
-- Updates `bot.stats`, `bot.current_vals`, `bot._current_vals_updated`, and `bot._last_ocr_refresh`.
+- Classifies a thin horizontal strip across the sort sections when the sort visualization changed.
+- Emits `bot.new_value(value)` with the classified green-section count when the sort visualization changed.
+- Updates `bot.stats` and `bot._last_ocr_refresh`.
 - Feeds milestone candidates to `MilestoneTracker` when milestones are enabled.
 
 `bot.stats` is the current text cache for stream-wide values such as `shuffles`, `comparisons`, `best_run`, `shuffles_sec`, `average_best_shuffle`, and `uptime`. Commands like `/get_stats` read from this cache instead of OCRing on demand.
 
-`bot.current_vals` stores the most recent OCR results for the history cells as `(text, confidence)` tuples. These values are updated only when the sort-change detector says the bar chart actually changed. That lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
+`bot.new_value(value)` publishes the latest calculated monitor value. For the stream monitor this is currently the number of green sections in `sort_section_count`, calculated from the configured observed strip instead of OCRing tiny history cells. The event fires only when the sort-change detector says the bar chart actually changed, which lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
 
 `bot._last_ocr_refresh` is the UNIX timestamp of the latest successful OCR refresh. Display commands can use it to show when the current stats cache was last updated.
 
 ### Stream Helpers
 `BotCore.get_stream_uptime()` returns a calculated static uptime string in `DD:HH:MM:SS` format. It is based on the known stream start timestamp, not on OCR, so `/get_stats` can show it beside the OCR-read stream uptime.
 
-`BotCore.get_best_shuffles()` returns `(current_vals, is_new)`. `is_new` is true only once for each detected sort change; calling this helper clears the pending-new flag. Persistent monitors should use `is_new` to avoid reposting the same history cells on every monitor tick.
+Persistent monitors should subscribe with `@bot.new_value_callback` and keep their own pending queue if they need to publish values on a periodic loop. This avoids shared mutable state and one-shot polling helpers.
 
 ## Stream Change Detection
 The monitor does not rely only on OCR to decide whether the sort changed. The bot also crops the bar chart area, reduces it to approximate red/green/other pixels, and compares that signature with the previous frame.
 
-`sort_change_threshold` controls how much of that signature must change before the latest cell OCR is treated as new monitor data. A higher value ignores small effects like confetti or compression noise.
+`sort_change_threshold` controls how much of that signature must change before a new sort-section count is published for monitor data. A higher value ignores small effects like confetti or compression noise.
 
 ## Bot Message Helpers
 `EditCoalescer` is used for persistent bot-managed messages such as monitor and leaderboard `LayoutView` messages.
@@ -111,13 +115,13 @@ If Discord reports `NotFound` or `Forbidden` while editing a persistent message,
 
 `Tracker` is the small shared helper underneath this kind of stored Discord state. It loads raw stored IDs, normalizes them, validates live Discord access, and prunes stale entries.
 
-`PersistentChannelMonitor` in `utils.monitoring` packages the common monitor pattern: stored channel-to-message IDs, stale message pruning, start/stop handling, coalesced edits, and a periodic update loop. A monitor plugin only needs to provide an initial message payload and an update payload callback.
+`PersistentChannelMonitor` in `utils.monitoring` packages the common monitor state: stored channel-to-message IDs, stale message pruning, start/stop handling, coalesced edits, and a public `tick()` method. A monitor plugin provides an initial message payload and an update payload callback, then decides when to call `tick()`.
 
 Monitor messages use static `LayoutView` payloads. The display logic stays encapsulated in one component, and `timeout=None` keeps discord.py from registering non-interactive static views for background dispatch.
 
 `PersistentChannelMonitor.command(root, *args, **kwargs)` forwards its arguments to `root.command(...)` and registers a standard `action: Literal["start", "stop"]` command. This lets monitor plugins use either a `bot.setup` command group or any compatible command-decorator object.
 
-The monitor loop uses `utils.tasks.loop`, a relative async loop helper. Each next run is scheduled relative to the start time of the previous run; if a tick takes longer than its interval, the next iteration runs immediately instead of drifting farther behind.
+Periodic monitors should own their own `utils.tasks.loop` and call `monitor.tick()` inside it. Event-driven monitors can call `tick()` directly from callbacks such as `@bot.new_value_callback`.
 
 The stream monitor updates only after the sort-change test reports a real visual change. Repeated stale stream frames are ignored for monitor history, which keeps the monitor closer to actual state transitions than to the currently displayed stream frame.
 
@@ -159,7 +163,8 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 
 - `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
 - `@bot.close_callback`: Runs during bot shutdown.
-- `@bot.on_new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
+- `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
+- `@bot.new_value_callback`: Runs when `stats.py` detects a new sort value. The callback receives the classified green-section count as an `int`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 
 Current plugin responsibilities:

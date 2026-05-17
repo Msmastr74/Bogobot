@@ -4,7 +4,6 @@ from typing import Any, Literal
 from utils.type import ObjectWithCommandDecorator, P, R, T
 
 import discord
-from utils import tasks
 
 from utils.tracker import Tracker
 
@@ -30,7 +29,6 @@ class PersistentChannelMonitor:
         display_name: str,
         initial_payload: PayloadFactory,
         update_payload: UpdateFactory,
-        interval_seconds: float = 1,
     ):
         self.bot = bot
         self.storage_key = storage_key
@@ -43,15 +41,10 @@ class PersistentChannelMonitor:
             normalize=self._normalize_message,
             validate=self._validate_message,
         )
-        self._loop = tasks.loop(seconds=interval_seconds)(self._tick)
 
     async def initialize(self) -> None:
         await self.tracker.load()
         await self.tracker.prune_stale()
-
-    def start(self) -> None:
-        if not self._loop.is_running():
-            self._loop.start()
 
     def command(
         self,
@@ -130,7 +123,7 @@ class PersistentChannelMonitor:
             response=True,
         )
 
-    async def _tick(self) -> None:
+    async def tick(self) -> None:
         await self.tracker.prune_stale()
         stored_messages = await self.tracker.items()
 

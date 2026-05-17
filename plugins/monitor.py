@@ -8,7 +8,7 @@ from utils.monitoring import PersistentChannelMonitor
 from bogobot_core import BotCore
 from utils import groups
 
-num_matrix: list[list[tuple[str, float]]] = [[] for _ in range(30)]
+num_matrix: list[str | None] = [None for _ in range(30)]
 
 
 class MonitorView(discord.ui.LayoutView):
@@ -29,6 +29,8 @@ class MonitorPayload(TypedDict):
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
+    pending_values: list[int] = []
+    initialized = False
 
     def initial_payload() -> MonitorPayload:
         return {"view": MonitorView("Initializing...")}
@@ -36,33 +38,24 @@ async def setup(bot: BotCore):
     async def update_payload() -> MonitorPayload | None:
         global num_matrix
 
-        new_vars, is_new = await bot.get_best_shuffles()
-
-        if not is_new:
+        if not pending_values:
             return None
 
-        num_matrix.pop(0)
-        num_matrix.append([])
+        values = pending_values.copy()
+        pending_values.clear()
 
-        for i, item in enumerate(new_vars):
-            new_var, conf = item
+        for value in values:
+            num_matrix.pop(0)
+            num_matrix.append(None)
 
-            if conf <= 0 or new_var in ["0", "1", ""]:
+            if value > bot.SORT_SECTION_COUNT:
                 continue
 
-            try:
-                value = int(new_var)
-            except ValueError:
-                continue
-
-            if value > 25:
-                continue
-
-            num_matrix[-i - 1].append((new_var.rjust(2, "0"), conf))
+            num_matrix[-1] = str(value).rjust(2, "0")
 
         num_array = [
-            sublist[0][0] if sublist else "??"
-            for sublist in num_matrix
+            value if value is not None else "??"
+            for value in num_matrix
         ]
         contents = f"```\n{'.'.join(num_array)}\n```"
 
@@ -83,5 +76,13 @@ async def setup(bot: BotCore):
 
     @bot.init_callback
     async def init():
+        nonlocal initialized
         await stream_monitor.initialize()
-        stream_monitor.start()
+        initialized = True
+        await stream_monitor.tick()
+
+    @bot.new_value_callback
+    async def new_value(value: int):
+        pending_values.append(value)
+        if initialized:
+            await stream_monitor.tick()
