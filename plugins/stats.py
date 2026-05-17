@@ -205,6 +205,7 @@ async def setup(bot: BotCore):
         return changed.item()
 
     last_frame_monotonic = time.monotonic()
+    @bot.on_new_frame_callback
     async def on_new_frame(img: Image.Image):
         nonlocal last_frame_monotonic
         frame_received_at = time.time()
