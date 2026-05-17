@@ -1,3 +1,5 @@
+from typing import Literal
+
 import discord
 import random
 import asyncio
@@ -82,8 +84,8 @@ async def setup(bot: BotCore):
     async def randbool(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.choice([True, False])}", response=True)
 
-    @bot.setup.command(name="bogosort", description="bogosorts a list of numbers", defer=False, perm_requirement=0)
-    async def bogosort(interaction: discord.Interaction, items: str, delimiter: str = " "):
+    @bot.setup.command(name="bogosort-list", description="Bogosorts a list of numbers", defer=False, perm_requirement=0)
+    async def bogosort_list(interaction: discord.Interaction, items: str, delimiter: str = " "):
         items_list = split(items, delimiter)
         arr: list[float | int] = []
         for item in items_list:
@@ -107,7 +109,7 @@ async def setup(bot: BotCore):
         )
         if not message:
             return
-        counter = 15
+        counter = 25
         while arr != sorted(arr):
             await asyncio.sleep(0.5)
             await message.edit(contents=f"Sorting: `{text()}`")
@@ -124,8 +126,8 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
     
-    @bot.setup.command(name="bogosortr", description="bogosorts?", defer=False, perm_requirement=0)
-    async def bogosortr(interaction: discord.Interaction, items: str, percent: float, delimiter: str = " "):
+    @bot.setup.command(name="bogosort-listr", description="bogosorts a list of number?", defer=False, perm_requirement=0)
+    async def bogosort_listr(interaction: discord.Interaction, items: str, percent: float, delimiter: str = " "):
         if percent < 0 or percent > 100:
             await bot.discord.send(
                 contents="Percent must be between 0 and 100.",
@@ -185,7 +187,7 @@ async def setup(bot: BotCore):
         if not message:
             return
 
-        counter = 15
+        counter = 25
         succeed_count = random.randint(0, counter // 2) if should_succeed else 0
         while arr != sorted_arr:
             await asyncio.sleep(0.5)
@@ -205,5 +207,39 @@ async def setup(bot: BotCore):
                 return
         await asyncio.sleep(1.5)
         await message.edit(contents=f"Sorted: `{text()}`")
+        await message.add_reaction(sorted_emoji)
+        return
+
+    @bot.setup.command(name="bogosort", description="Bogosorts", perm_requirement=0)
+    async def bogosort(interaction: discord.Interaction, item_count: Literal[1, 2, 3, 4, 5, 6, 7, 8]):
+        items: list[tuple[int, str]] = [
+            (i, chr(0x2580 + i)) for i in range(1, item_count + 1)
+        ]
+        random.shuffle(items)
+        def format():
+            return ''.join(map(lambda t: t[1], items))
+        def is_sorted():
+            last_v: int | None = None
+            for v, _char in items:
+                if last_v is not None and v < last_v:
+                    return False
+                last_v = v
+            return True
+
+        message = await bot.discord.send(
+            contents=format(), response=True
+        )
+        if not message:
+            return
+        counter = 25
+        while not is_sorted():
+            if counter <= 0:
+                await message.add_reaction(unsorted_emoji)
+                return
+            await message.edit(contents=format())
+            random.shuffle(items)
+            counter -= 1
+            await asyncio.sleep(0.5)
+
         await message.add_reaction(sorted_emoji)
         return
