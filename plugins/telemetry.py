@@ -5,10 +5,12 @@ from dataclasses import dataclass
 import heapq
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import Literal, TypedDict
 import itertools
 import discord
+from test.test_typing import TypeAlias
 from utils.pagination import PageSection, PaginatedView, SectionRead
+from bogobot_core import BotCore
 
 class CommandTelemetryBase(TypedDict):
     interaction_id: int
@@ -27,7 +29,7 @@ class CommandTelemetryEnd(CommandTelemetryBase):
     duration_ms: float
     error: str | None
 
-CommandTelemetryEvent = CommandTelemetryStart | CommandTelemetryEnd
+CommandTelemetryEvent: TypeAlias = CommandTelemetryStart | CommandTelemetryEnd
 
 @dataclass
 class UserUsage:
@@ -41,9 +43,6 @@ class TelemetryState:
     # Byte offsets from the start of the append-only telemetry file.
     cursor: int
     snapshot_end: int
-
-if TYPE_CHECKING:
-    from main import BotCore
 
 
 class UsageView(discord.ui.LayoutView):
@@ -60,7 +59,7 @@ class UsageView(discord.ui.LayoutView):
             accent_colour=discord.Color.blurple(),
         ))
 
-async def setup(bot: "BotCore"):
+async def setup(bot: BotCore):
     from utils import groups
 
     manage = groups.manage(bot)
@@ -81,7 +80,7 @@ async def setup(bot: "BotCore"):
     commands_by_user: defaultdict[int, Counter[str]] = defaultdict(Counter)
     users_by_command: defaultdict[str, Counter[int]] = defaultdict(Counter)
 
-    def is_public_action(action: "CommandTelemetryEnd") -> bool:
+    def is_public_action(action: CommandTelemetryEnd) -> bool:
         return action["status"] == "ok" and is_public_command(action["command"])
     
     def is_public_command(command: str) -> bool:
@@ -90,7 +89,7 @@ async def setup(bot: "BotCore"):
                 return False
         return True
 
-    def add_usage(action: "CommandTelemetryEnd") -> None:
+    def add_usage(action: CommandTelemetryEnd) -> None:
         if not is_public_action(action):
             return
 
@@ -186,7 +185,7 @@ async def setup(bot: "BotCore"):
 
         flush_task = asyncio.create_task(delayed_flush())
 
-    def save_action(action: "CommandTelemetryEnd") -> None:
+    def save_action(action: CommandTelemetryEnd) -> None:
         pending_lines.append(json.dumps(action, separators=(",", ":")))
         schedule_flush()
 
@@ -203,7 +202,7 @@ async def setup(bot: "BotCore"):
         return TelemetryState(cursor=eof, snapshot_end=eof)
 
     def parse_telemetry_line(raw_line: bytes, requested: set[str]) -> str | None:
-        def action_matches(action: "CommandTelemetryEnd") -> bool:
+        def action_matches(action: CommandTelemetryEnd) -> bool:
             return not requested or action["command"] in requested
 
         with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
@@ -455,7 +454,7 @@ async def setup(bot: "BotCore"):
             return "⚠️"
         return status
 
-    def format_telemetry_line(item: "CommandTelemetryEnd") -> str:
+    def format_telemetry_line(item: CommandTelemetryEnd) -> str:
         timestamp = f"<t:{item['time']}:T>"
         channel_id = item["channel_id"]
         channel = f"<#{channel_id}>" if channel_id is not None else "DM"
@@ -605,7 +604,7 @@ async def setup(bot: "BotCore"):
     load_actions()
 
     @bot.command_telemetry_callback
-    def record_command(event: "CommandTelemetryEvent"):
+    def record_command(event: CommandTelemetryEvent):
         key = (event["interaction_id"], event["command"])
 
         if event["phase"] == "start":

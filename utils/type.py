@@ -1,6 +1,6 @@
 from typing import Any, Coroutine, ParamSpec, TypeAlias, TypeVar, Callable, Protocol, TYPE_CHECKING, Hashable
 if TYPE_CHECKING:
-    from main import BotCore
+    from bogobot_core import BotCore
 
 P = ParamSpec("P")
 R = TypeVar("R", covariant=True)

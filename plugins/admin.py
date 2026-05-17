@@ -10,7 +10,7 @@ import discord
 from utils.pagination import Page, PageSection, PaginatedView, SectionRead
 
 if TYPE_CHECKING:
-    from main import BotCore
+    from bogobot_core import BotCore
 
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]

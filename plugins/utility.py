@@ -2,11 +2,8 @@ import asyncio
 import discord
 from discord import app_commands
 
-from typing import TYPE_CHECKING
-
 from utils.transformers import ColourTransformer
-if TYPE_CHECKING:
-    from main import BotCore
+from bogobot_core import BotCore, current_interaction
 
 class AvatarView(discord.ui.LayoutView):
     def __init__(
@@ -120,7 +117,7 @@ class AnnounceView(discord.ui.LayoutView):
         else:
             self.add_item(discord.ui.TextDisplay(message))
 
-async def setup(bot: 'BotCore'):
+async def setup(bot: BotCore):
     from utils import groups
     manage = groups.manage(bot)
 
@@ -184,6 +181,40 @@ async def setup(bot: 'BotCore'):
                 allowed_mentions=discord.AllowedMentions.none()
             )
 
+    class AnnounceModal(discord.ui.Modal, title="Announcement Message Contents"):
+        message = discord.ui.TextInput(
+            label="Message",
+            style=discord.TextStyle.long,
+            required=False,
+            placeholder="Type a message..."
+        )
+        def __init__(
+            self,
+            *,
+            title: str | None,
+            message_container: bool,
+            accent_colour: discord.Colour | None
+        ):
+            super().__init__()
+            self.message_title = title
+            self.message_container = message_container
+            self.accent_colour = accent_colour
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            token = current_interaction.set(interaction)
+            try:
+                await bot.discord.send(
+                    view=AnnounceView(
+                        title=self.message_title,
+                        message=self.message.value or None,
+                        message_container=self.message_container,
+                        accent_colour=self.accent_colour,
+                    ),
+                    response=True,
+                )
+            finally:
+                current_interaction.reset(token)
+    
     @manage.command(
         name='announce',
         description='Send a message through the bot.',
@@ -192,11 +223,19 @@ async def setup(bot: 'BotCore'):
     )
     async def announce(
         interaction: discord.Interaction,
-        title: str,
-        message: str,
+        title: str | None = None,
+        message: str | None = None,
         message_container: bool = False,
         accent_colour: app_commands.Transform[discord.Colour, ColourTransformer] | None = None
     ):
+        if message is None:
+            await interaction.response.send_modal(
+                AnnounceModal(
+                    title=title,
+                    message_container=message_container,
+                    accent_colour=accent_colour
+                )
+            )
         await bot.discord.send(
             view=AnnounceView(
                 title=title,

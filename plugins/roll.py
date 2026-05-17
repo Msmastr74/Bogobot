@@ -4,13 +4,11 @@ import asyncio
 
 # here because Chat asked for it
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from main import BotCore
+from bogobot_core import BotCore
 
 UNSORTED_EMOJI_ID = 1495482469128999053
 SORTED_EMOJI_ID = 1495381291162402939
-async def setup(bot: 'BotCore'):
+async def setup(bot: BotCore):
     def split(text: str, delim: str): return list(filter(bool, text.split(delim)))
     @bot.setup.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     async def roll(interaction: discord.Interaction):

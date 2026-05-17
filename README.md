@@ -57,28 +57,28 @@ python main.py
 
 Your terminal output should look similar to this:
 ```log
-[May 16 20:50:06.115 WARNING  | discord.client  ] PyNaCl is not installed, voice will NOT be supported
-[May 16 20:50:06.115 WARNING  | discord.client  ] davey is not installed, voice will NOT be supported
-[May 16 20:50:06.206 INFO     | Bogobot         ] Loaded Plugin: monitor.py
-[May 16 20:50:06.207 INFO     | Bogobot         ] Loaded Plugin: leaderboard.py
-[May 16 20:50:06.208 INFO     | Bogobot         ] Loaded Plugin: accounts.py
-[May 16 20:50:06.209 INFO     | Bogobot         ] Loaded Plugin: milestones.py
-[May 16 20:50:06.212 INFO     | Bogobot         ] Loaded Plugin: utility.py
-[May 16 20:50:06.212 INFO     | Bogobot         ] Loaded Plugin: activity.py
-[May 16 20:50:06.216 INFO     | Bogobot         ] Loaded Plugin: telemetry.py
-[May 16 20:50:06.216 INFO     | Bogobot         ] Loaded Plugin: get_stats.py
-[May 16 20:50:06.216 INFO     | Bogobot         ] Loaded Plugin: admin.py
-[May 16 20:50:06.217 INFO     | Bogobot         ] Loaded Plugin: stats.py
-[May 16 20:50:06.219 INFO     | Bogobot         ] Loaded Plugin: bogoscramble.py
-[May 16 20:50:06.220 INFO     | Bogobot         ] Loaded Plugin: roll.py
-[May 16 20:50:06.220 INFO     | discord.client  ] logging in using static token
-[May 16 20:50:06.627 INFO     | Bogobot         ] Syncing Discord command tree (command tree changed)
-[May 16 20:50:09.059 INFO     | discord.gateway ] Shard ID None has connected to Gateway (Session ID: 8ff64b2579a47b99a34bf6fec71c6a00).
-[May 16 20:50:11.064 INFO     | Bogobot         ] Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
-[May 16 20:50:11.065 INFO     | Bogobot         ] Beginning automatic account creation...
-[May 16 20:50:11.065 INFO     | Bogobot         ] Automatically created 0 accounts out of 4 members from REDACTED
-[May 16 20:50:11.065 INFO     | Bogobot         ] Automatically created 0 accounts out of 16 members from Bogobot development (1495827707085197385)
-[May 16 20:50:11.067 INFO     | Bogobot         ] Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 20 members from 2 servers
+[May 16 21:18:31.428 WARNING  | discord.client  ] PyNaCl is not installed, voice will NOT be supported
+[May 16 21:18:31.428 WARNING  | discord.client  ] davey is not installed, voice will NOT be supported
+[May 16 21:18:31.511 INFO     | Bogobot         ] Loaded Plugin: monitor.py
+[May 16 21:18:31.513 INFO     | Bogobot         ] Loaded Plugin: leaderboard.py
+[May 16 21:18:31.515 INFO     | Bogobot         ] Loaded Plugin: accounts.py
+[May 16 21:18:31.519 INFO     | Bogobot         ] Loaded Plugin: milestones.py
+[May 16 21:18:31.521 INFO     | Bogobot         ] Loaded Plugin: utility.py
+[May 16 21:18:31.522 INFO     | Bogobot         ] Loaded Plugin: activity.py
+[May 16 21:18:31.648 INFO     | Bogobot         ] Loaded Plugin: telemetry.py
+[May 16 21:18:31.649 INFO     | Bogobot         ] Loaded Plugin: get_stats.py
+[May 16 21:18:31.649 INFO     | Bogobot         ] Loaded Plugin: admin.py
+[May 16 21:18:31.651 INFO     | Bogobot         ] Loaded Plugin: stats.py
+[May 16 21:18:31.657 INFO     | Bogobot         ] Loaded Plugin: bogoscramble.py
+[May 16 21:18:31.658 INFO     | Bogobot         ] Loaded Plugin: roll.py
+[May 16 21:18:31.659 INFO     | discord.client  ] logging in using static token
+[May 16 21:18:32.036 INFO     | Bogobot         ] Syncing Discord command tree (command tree changed)
+[May 16 21:18:32.731 INFO     | discord.gateway ] Shard ID None has connected to Gateway (Session ID: 64e45a6cbc7030530954eb66dac06a9c).
+[May 16 21:18:34.733 INFO     | Bogobot         ] Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
+[May 16 21:18:34.735 INFO     | Bogobot         ] Beginning automatic account creation...
+[May 16 21:18:34.735 INFO     | Bogobot         ] Automatically created 0 accounts out of 4 members from REDACTED
+[May 16 21:18:34.735 INFO     | Bogobot         ] Automatically created 0 accounts out of 16 members from Bogobot development (1495827707085197385)
+[May 16 21:18:34.736 INFO     | Bogobot         ] Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 20 members from 2 servers
 ```
 
 ## Features

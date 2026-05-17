@@ -2,12 +2,9 @@ import discord
 from utils import tasks
 import random
 
-from typing import TYPE_CHECKING
+from bogobot_core import BotCore
 
-if TYPE_CHECKING:
-    from main import BotCore
-
-async def setup(bot: 'BotCore'):
+async def setup(bot: BotCore):
     @tasks.loop(seconds=15)
     async def update_status():
         if not bot.user:

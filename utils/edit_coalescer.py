@@ -1,12 +1,10 @@
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import discord
-
-if TYPE_CHECKING:
-    from logging import Logger
+from logging import Logger
 
 # Maximum number of seconds to wait based on message send duration
 # This solution adapts to the hidden rate limiting handling behind the scenes of discord.py
@@ -23,7 +21,7 @@ class MessageEditCoalescer:
         self,
         message: discord.PartialMessage,
         *,
-        logger: "Logger | None" = None
+        logger: Logger | None = None
     ):
         self.message = message
         self.logger = logger
@@ -104,7 +102,7 @@ class EditCoalescer:
     def __init__(
         self,
         *,
-        logger: "Logger | None" = None,
+        logger: Logger | None = None,
     ):
         self.logger = logger
         self._coalescers: dict[int, MessageEditCoalescer] = {}

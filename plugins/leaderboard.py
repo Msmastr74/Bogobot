@@ -1,13 +1,12 @@
 import time
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import aiohttp
 import discord
 
 from utils.monitoring import PersistentChannelMonitor
 
-if TYPE_CHECKING:
-    from main import BotCore
+from bogobot_core import BotCore
 
 class Player(TypedDict, total=False):
     pos: int
@@ -95,7 +94,7 @@ class LeaderboardView(discord.ui.LayoutView):
 class LeaderboardPayload(TypedDict):
     view: LeaderboardView
 
-async def setup(bot: "BotCore"):
+async def setup(bot: BotCore):
     from utils import groups
 
     manage = groups.manage(bot)

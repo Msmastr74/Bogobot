@@ -1,9 +1,8 @@
 import discord
 import datetime
 
-from typing import TYPE_CHECKING, Iterable
-if TYPE_CHECKING:
-    from main import BotCore
+from typing import Iterable
+from bogobot_core import BotCore
 
 class StatsView(discord.ui.LayoutView):
     def __init__(
@@ -26,7 +25,7 @@ class StatsView(discord.ui.LayoutView):
                 f"-# Updated at <t:{int(round(updated_at.timestamp()))}:T>"
             ))
 
-async def setup(bot: 'BotCore'):
+async def setup(bot: BotCore):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
     async def get_stats(interaction: discord.Interaction):
         stats_list = bot.stats

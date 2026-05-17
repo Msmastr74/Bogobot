@@ -1,15 +1,14 @@
-from typing import TYPE_CHECKING, cast
+from typing import cast
 import numpy as np
 import time
 from PIL import Image
 
-if TYPE_CHECKING:
-    from main import BotCore
+from bogobot_core import BotCore
 from ocr import OcrCrop, OcrResult
 import asyncio
 import cv2
 
-async def setup(bot: 'BotCore'):
+async def setup(bot: BotCore):
     last_sort_signature: np.ndarray | None = None
 
     async def update_ocr_data(img: Image.Image, *, sort_changed: bool = True) -> None:

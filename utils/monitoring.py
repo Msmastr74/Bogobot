@@ -1,6 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Literal, TYPE_CHECKING
+from typing import Any, Literal
 from utils.type import ObjectWithCommandDecorator, P, R, T
 
 import discord
@@ -8,9 +8,8 @@ from utils import tasks
 
 from utils.tracker import Tracker
 
-if TYPE_CHECKING:
-    from bogobot_core import BotCore
-    from utils.edit_coalescer import MessageEditCoalescer
+from bogobot_core import BotCore
+from utils.edit_coalescer import MessageEditCoalescer
 
 MessagePayload = Mapping[str, Any]
 PayloadFactory = Callable[[], MessagePayload | Awaitable[MessagePayload]]
@@ -25,7 +24,7 @@ async def _resolve(value: Awaitable[T] | T) -> T:
 class PersistentChannelMonitor:
     def __init__(
         self,
-        bot: "BotCore",
+        bot: BotCore,
         *,
         storage_key: str,
         display_name: str,

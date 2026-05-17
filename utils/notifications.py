@@ -1,12 +1,10 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, cast
 
 import discord
 from utils.tracker import Tracker
-
-if TYPE_CHECKING:
-    from logging import Logger
+from logging import Logger
 
 class NotificationBroadcaster:
     def __init__(
@@ -15,7 +13,7 @@ class NotificationBroadcaster:
         *,
         subscriptions: dict[str, Any],
         save_subscriptions: Callable[[dict[str, list[str]]], Awaitable[None]],
-        logger: "Logger | None" = None,
+        logger: Logger | None = None,
     ):
         self.bot = bot
         self.subscriptions = subscriptions

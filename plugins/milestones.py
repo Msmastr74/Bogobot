@@ -1,14 +1,13 @@
 from collections import Counter, defaultdict, deque
 from string import Template
-from typing import Callable, Literal, TYPE_CHECKING
+from typing import Callable, Literal
 import io
 import time
 
 import discord
 from PIL import Image
 
-if TYPE_CHECKING:
-    from main import BotCore
+from bogobot_core import BotCore
 
 
 MILESTONE_USAGE_TYPE = "milestones"
@@ -69,7 +68,7 @@ def safe_milestone_filename_value(value: str) -> str:
 
 
 class MilestoneTracker:
-    def __init__(self, bot: "BotCore"):
+    def __init__(self, bot: BotCore):
         self.bot = bot
         self.history: defaultdict[str, deque[tuple[str, int, Image.Image | None]]] = defaultdict(
             lambda: deque(maxlen=MILESTONE_WINDOW_SIZE)
@@ -387,7 +386,7 @@ class MilestoneTracker:
         )
 
 
-async def setup(bot: "BotCore"):
+async def setup(bot: BotCore):
     from utils import groups
 
     manage = groups.manage(bot)

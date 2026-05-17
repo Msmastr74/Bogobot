@@ -210,8 +210,9 @@ Each plugin must include a `setup` function to register commands with the `BotCo
 
 ```python
 import discord
+from bogobot_core import BotCore
 
-async def setup(bot):
+async def setup(bot: BotCore):
     @bot.setup.command(name="example", description="An example command", perm_requirement=0)
     async def example(interaction: discord.Interaction):
         await bot.discord.send("Hello World", response=True)
@@ -253,12 +254,9 @@ Shared groups live in `utils/groups.py`. Add a small helper that calls `bot.setu
 
 ```python
 from typing import TYPE_CHECKING
+from bogobot_core import BotCore
 
-if TYPE_CHECKING:
-    from main import BotCore
-
-
-def tools(bot: "BotCore"):
+def tools(bot: BotCore):
     return bot.setup.group("tools", "Tool commands")
 ```
 

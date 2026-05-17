@@ -12,12 +12,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageSequence
 
-from typing import Optional, overload, TYPE_CHECKING
+from typing import Optional, overload
 from bogobot_core import current_interaction
 from utils.logger_pipe import log_subprocess_pipe
 from utils.type import Coro
-if TYPE_CHECKING:
-    from main import BotCore
+from bogobot_core import BotCore
 
 MAXIMUM_FRAMES = 5000
 DEFAULT_SCRAMBLE_SHAPE = (10, 10)
@@ -28,7 +27,7 @@ class BogoUserError(Exception):
 
 FileList = list[Coro[discord.File | None]]
 
-async def setup(bot: "BotCore"):
+async def setup(bot: BotCore):
     def get_scramble_shape(rows: int | None, columns: int | None) -> tuple[int, int]:
         if rows is None and columns is None:
             return DEFAULT_SCRAMBLE_SHAPE
