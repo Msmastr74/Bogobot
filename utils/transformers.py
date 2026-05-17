@@ -14,3 +14,11 @@ class ColourTransformer(discord.app_commands.Transformer):
                 value, self.type, self
             )
 
+class IntTransformer(discord.app_commands.Transformer):
+    async def transform(self, interaction: discord.Interaction, value: str) -> int:
+        try:
+            return int(value)
+        except ValueError:
+            raise discord.app_commands.TransformerError(
+                value, self.type, self
+            )

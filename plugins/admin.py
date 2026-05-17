@@ -7,8 +7,10 @@ import sys
 from typing import Literal, TYPE_CHECKING
 
 import discord
+from discord import app_commands
 from utils.pagination import Page, PageSection, PaginatedView, SectionRead
 from utils import groups
+from utils.transformers import IntTransformer
 
 if TYPE_CHECKING:
     from bogobot_core import BotCore
@@ -436,8 +438,8 @@ async def setup(bot: "BotCore"):
     async def message(
         interaction: discord.Interaction,
         action: Literal['delete', 'react'],
-        message_id: int,
-        channel_id: int | None = None,
+        message_id: app_commands.Transform[int, IntTransformer],
+        channel_id: app_commands.Transform[int, IntTransformer] | None = None,
         emoji: str | None = None,
     ):
         channel_id = channel_id or interaction.channel_id

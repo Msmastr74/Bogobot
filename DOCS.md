@@ -175,7 +175,7 @@ Current plugin responsibilities:
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
-- `utils/transformers.py`: Slash-command transformers such as `ColourTransformer`.
+- `utils/transformers.py`: Slash-command transformers such as `ColourTransformer` and `IntTransformer`.
 
 ## Admin Commands
 The admin plugin adds `/manage state` and `/manage logs`.
