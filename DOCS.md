@@ -36,6 +36,7 @@ User-edited settings:
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 - `archive_path`: Path to the compact monitor archive. Defaults to `archive/monitor.bga`.
 - `archive_flush_interval`: Seconds to batch monitor archive records before flushing to disk. Defaults to 60.
+- `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
 - `fps`: Frames received per second.
 
 Bot-managed storage:
