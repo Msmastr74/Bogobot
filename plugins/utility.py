@@ -122,6 +122,31 @@ class AnnounceView(discord.ui.LayoutView):
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
 
+    async def create_announcement_files(
+        attachments: list[discord.Attachment],
+    ) -> list[discord.File]:
+        return [
+            await attachment.to_file()
+            for attachment in attachments
+        ]
+
+    async def send_announcement(
+        view: AnnounceView,
+        attachments: list[discord.Attachment],
+    ) -> None:
+        try:
+            files = await create_announcement_files(attachments)
+            if files:
+                await bot.discord.send(view=view, files=files)
+            else:
+                await bot.discord.send(view=view)
+        except discord.Forbidden:
+            files = await create_announcement_files(attachments)
+            if files:
+                await bot.discord.send(view=view, files=files, response=True)
+            else:
+                await bot.discord.send(view=view, response=True)
+
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
     async def avatar(interaction: discord.Interaction, user: discord.Member | discord.User | None = None) -> None:
         if user is None:
@@ -194,12 +219,14 @@ async def setup(bot: BotCore):
             *,
             title: str | None,
             message_container: bool,
-            accent_colour: discord.Colour | None
+            accent_colour: discord.Colour | None,
+            attachments: list[discord.Attachment],
         ):
             super().__init__()
             self.message_title = title
             self.message_container = message_container
             self.accent_colour = accent_colour
+            self.attachments = attachments
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
             token = current_interaction.set(interaction)
@@ -217,10 +244,7 @@ async def setup(bot: BotCore):
                     message_container=self.message_container,
                     accent_colour=self.accent_colour,
                 )
-                try:
-                    await bot.discord.send(view=view)
-                except discord.Forbidden:
-                    await bot.discord.send(view=view, response=True)
+                await send_announcement(view, self.attachments)
                 await bot.discord.send(
                     contents="The announcement message was successfully sent.",
                     response=True,
@@ -240,14 +264,41 @@ async def setup(bot: BotCore):
         title: str | None = None,
         message: str | None = None,
         message_container: bool = False,
-        accent_colour: app_commands.Transform[discord.Colour, ColourTransformer] | None = None
+        accent_colour: app_commands.Transform[discord.Colour, ColourTransformer] | None = None,
+        attachment_1: discord.Attachment | None = None,
+        attachment_2: discord.Attachment | None = None,
+        attachment_3: discord.Attachment | None = None,
+        attachment_4: discord.Attachment | None = None,
+        attachment_5: discord.Attachment | None = None,
+        attachment_6: discord.Attachment | None = None,
+        attachment_7: discord.Attachment | None = None,
+        attachment_8: discord.Attachment | None = None,
+        attachment_9: discord.Attachment | None = None,
+        attachment_10: discord.Attachment | None = None,
     ):
+        attachments = [
+            attachment
+            for attachment in (
+                attachment_1,
+                attachment_2,
+                attachment_3,
+                attachment_4,
+                attachment_5,
+                attachment_6,
+                attachment_7,
+                attachment_8,
+                attachment_9,
+                attachment_10,
+            )
+            if attachment is not None
+        ]
         if message is None:
             await interaction.response.send_modal(
                 AnnounceModal(
                     title=title,
                     message_container=message_container,
-                    accent_colour=accent_colour
+                    accent_colour=accent_colour,
+                    attachments=attachments,
                 )
             )
             return
@@ -264,10 +315,7 @@ async def setup(bot: BotCore):
             message_container=message_container,
             accent_colour=accent_colour,
         )
-        try:
-            await bot.discord.send(view=view)
-        except discord.Forbidden:
-            await bot.discord.send(view=view, response=True)
+        await send_announcement(view, attachments)
         await bot.discord.send(
             contents="The announcement message was successfully sent.",
             response=True,
