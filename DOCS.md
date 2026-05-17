@@ -165,13 +165,13 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 Current plugin responsibilities:
 
 - `accounts.py`: `/accounts` permission commands.
-- `admin.py`: `/manage state` and `/manage logs`.
+- `admin.py`: `/manage state`, `/manage logs`, and `/manage message`.
 - `bogoscramble.py`: Bogoscramble message/media utilities.
 - `get_stats.py`: `/get_stats` display command.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
-- `milestones.py`: milestone tracking, notifications, and `/manage milestones`.
+- `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
-- `roll.py`: random utility commands.
+- `roll.py`: random utility commands and small bogosort toys.
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
@@ -188,16 +188,19 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
-- `/manage announce [title] [message] [message_container] [attachments_container] [accent_colour] [attachment_1..attachment_10]`: Sends a bot-authored announcement with up to 10 files. When `message` is omitted, Discord opens a modal for longer message entry. Media attachments render through `MediaGallery`; other attachments render as Components v2 file items. `attachments_container` places those attachment components inside the accent container. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`.
-- `/manage message delete|react|unreact|pin|unpin|edit|reply message_id [channel_id] [emoji]`: Deletes a message, pins a message, edits a message, replies to a message, or adds a reaction using a partial message reference. `channel_id` defaults to the current channel. `emoji` is required for `react`.
+- `/manage announce [title] [message] [message_container] [attachments_container] [accent_colour] [attachment_1..attachment_10]`: Sends a bot-authored announcement with up to 10 files. When `message` is omitted, Discord opens a modal for longer message entry. Media attachments render through `MediaGallery`; other attachments render as Components v2 file items. `attachments_container` places those attachment components inside the accent container. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`. Requires admin level 3.
+- `/manage message delete|react|unreact|pin|unpin|edit|reply message_id [channel_id] [emoji] [content]`: Deletes, reacts to, removes a reaction from, pins, unpins, edits, or replies to a message using a partial message reference. `channel_id` defaults to the current channel. `emoji` is required for `react` and `unreact`; `content` is required for `edit` and `reply`. `delete` is restricted to messages sent by the bot.
 - `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
+- `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available.
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
+- `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/choice`, `/shuffle`, `/bogo`: Randomization and text/list utilities.
+- `/bogosort`, `/bogosort-list`, `/bogosort-listr`: Small animated bogosort commands.
 
 Account commands live under `/accounts`:
 

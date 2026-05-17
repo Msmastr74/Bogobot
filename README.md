@@ -88,13 +88,14 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage monitor: Starts or stops a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts or stops a persistent top leaderboard message.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
+ * /milestone_info: Shows recent milestone history and frame images.
  * /manage announce: Sends a simple bot-authored announcement.
  * /manage message: Deletes, pins, edits, replies to, or reacts to a message by ID.
  * /manage state: Stops or restarts the bot process.
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
  * /avatar and /ping: Small Discord utility commands.
- * /roll: A random number generation utility.
+ * /roll and friends: Random number, choice, shuffle, text bogo, and small bogosort utilities.
  * /accounts: Manages account permission ranks.
 
 ## Documentation
