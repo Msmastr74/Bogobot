@@ -4,7 +4,7 @@ from typing import Any, Literal, TYPE_CHECKING
 from utils.type import ObjectWithCommandDecorator, P, R, T
 
 import discord
-from discord.ext import tasks
+from utils import tasks
 
 from utils.tracker import Tracker
 

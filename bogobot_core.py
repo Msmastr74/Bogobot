@@ -11,12 +11,13 @@ import asyncio
 import importlib
 import contextvars
 import time
-from typing import Any, Awaitable, Callable, TYPE_CHECKING, Concatenate, cast
+from typing import Any, Callable, TYPE_CHECKING, Concatenate, cast
 from ocr import LibTesseractOCR, OcrCrop, OcrResult, TESSDATA_FAST_URL
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
+from utils.callbacks import CallbackRegistry, Callback
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -130,7 +131,6 @@ class BotCore(discord.Client):
         self.info = self._Info(self)
         self.discord = self._Discord(self)
         self.setup = self._Setup(self)
-        self.command_telemetry_callbacks: list[Callable[["CommandTelemetryEvent"], Awaitable[None] | None]] = []
         self._last_ocr_refresh: float = 0.0
         self._last_frame_monotonic = time.monotonic()
         
@@ -149,7 +149,7 @@ class BotCore(discord.Client):
         self._connected = False
         
         self.event(self.on_ready)
-        self.on_ready_callbacks = []
+        self.callbacks = CallbackRegistry()
         
         self.milestones: 'MilestoneTracker | None' = None
 
@@ -193,8 +193,13 @@ class BotCore(discord.Client):
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
         return self.authorization_level(user_id) >= perm_requirement
     
-    def init_callback(self, callback: Callable[[], Awaitable[None]]):
-        self.on_ready_callbacks.append(callback)
+    def init_callback(self, callback: Callback[[]]):
+        self.callbacks.register('init', callback)
+        return callback
+
+    def close_callback(self, callback: Callback[[]]):
+        self.callbacks.register('close', callback)
+        return callback
 
     def _streamlink_cookies(self) -> list[str]:
         cookies = self.config.get("cookies")
@@ -228,19 +233,10 @@ class BotCore(discord.Client):
 
     def command_telemetry_callback(
         self,
-        callback: Callable[["CommandTelemetryEvent"], Awaitable[None] | None],
+        callback: Callback[["CommandTelemetryEvent"]],
     ):
-        self.command_telemetry_callbacks.append(callback)
+        self.callbacks.register('command_telemetry', callback)
         return callback
-
-    async def emit_command_telemetry(self, event: "CommandTelemetryEvent"):
-        for callback in self.command_telemetry_callbacks:
-            try:
-                result = callback(event)
-                if result is not None:
-                    await result
-            except Exception as e:
-                self.logger.warning(f"Command telemetry callback failed: {e}")
 
     class _Info:
         def __init__(self, outer: 'BotCore'):
@@ -744,11 +740,7 @@ class BotCore(discord.Client):
         except Exception as e:
             self.logger.warning(f"Failed initializing notifications: {e}")
         
-        for callback in self.on_ready_callbacks:
-            try:
-                await callback()
-            except Exception as e:
-                self.logger.warning(f"Error in on_ready callback: {e}")
+        await self.callbacks.execute_async('init')
         guild_count = 0
         member_count = 0
         added_member_count = 0
@@ -806,11 +798,12 @@ class BotCore(discord.Client):
 
     async def close(self):
         self.logger.info("Shutting down bot...")
+        await self.callbacks.execute_async('close')
         self.stream_handler.stop()
         self.ocr.close()
         await self.edits.close()
         await self.notifications.close()
-        await super().close() 
+        await super().close()
 
     class _Setup:
         def __init__(self, outer: 'BotCore'):
@@ -968,7 +961,7 @@ class BotCore(discord.Client):
             allowed = self.outer.is_authorized(interaction.user.id, perm_requirement)
 
             try:
-                await self.outer.emit_command_telemetry({
+                await self.outer.callbacks.execute_async('command_telemetry', {
                     **base_event,
                     "phase": "start",
                     "time": int(time.time()),
@@ -991,7 +984,7 @@ class BotCore(discord.Client):
                 except discord.HTTPException:
                     pass
             finally:
-                await self.outer.emit_command_telemetry({
+                await self.outer.callbacks.execute_async('command_telemetry', {
                     **base_event,
                     "phase": "end",
                     "time": int(time.time()),

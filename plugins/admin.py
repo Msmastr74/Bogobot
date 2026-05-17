@@ -383,7 +383,7 @@ async def setup(bot: "BotCore"):
             bot.logger.critical("Shutting down process by command request.")
             with contextlib.suppress(Exception):
                 await bot.close()
-            os._exit(0)
+            sys.exit(0)
             return
 
     @manage.command(name="logs", description="Show recent bot logs or write a log message")

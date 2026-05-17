@@ -1,5 +1,5 @@
 import discord
-from discord.ext import tasks
+from utils import tasks
 import random
 
 from typing import TYPE_CHECKING
@@ -40,3 +40,8 @@ async def setup(bot: 'BotCore'):
     async def init():
         if not update_status.is_running():
             update_status.start()
+    
+    @bot.close_callback
+    async def close():
+        if update_status.is_running():
+            update_status.cancel()
