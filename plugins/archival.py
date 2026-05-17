@@ -46,6 +46,26 @@ async def setup(bot: BotCore):
     last_event_time: float | None = None
     chunk_started = False
 
+    async def delete_archive_message(interaction: discord.Interaction) -> None:
+        if interaction.message is not None:
+            try:
+                await interaction.message.delete()
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "I cannot delete that archive message.",
+                        ephemeral=True,
+                    )
+            return
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Deleted archive message.",
+                ephemeral=True,
+            )
+
     class PersistentArchiveCloseView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
@@ -60,7 +80,9 @@ async def setup(bot: BotCore):
             interaction: discord.Interaction,
             button: discord.ui.Button,
         ) -> None:
-            await interaction.delete_original_response()
+            await delete_archive_message(interaction)
+
+    bot.add_view(PersistentArchiveCloseView())
 
     def append_text(text: str) -> None:
         if archive_path.parent != Path("."):
@@ -173,8 +195,6 @@ async def setup(bot: BotCore):
     async def init():
         nonlocal flush_task
 
-        bot.add_view(PersistentArchiveCloseView())
-
         if flush_task is None or flush_task.done():
             flush_task = asyncio.create_task(flush_loop())
 
@@ -236,6 +256,7 @@ async def setup(bot: BotCore):
             self.newer.callback = self.newer_action
             self.refresh.callback = self.refresh_action
             self.older.callback = self.older_action
+            self.close.callback = self.close_action
             self.controls = discord.ui.ActionRow(
                 self.newer,
                 self.refresh,
@@ -349,6 +370,12 @@ async def setup(bot: BotCore):
             interaction: discord.Interaction,
         ) -> None:
             await self.show_previous_page(interaction)
+
+        async def close_action(
+            self,
+            interaction: discord.Interaction,
+        ) -> None:
+            await delete_archive_message(interaction)
 
     @bot.setup.command(
         name="archive",
