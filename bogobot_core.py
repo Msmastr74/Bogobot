@@ -462,18 +462,43 @@ class BotCore(discord.Client):
                 finally:
                     self.message = None
             
-            async def add_reaction(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
-                if not self.message:
-                    return
-
+            def _resolve_emoji(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
                 if isinstance(emoji_data, BotCore._Discord.Emoji):
                     emoji_data = emoji_data.emoji
                 emoji = self.outer.get_emoji(emoji_data) if isinstance(emoji_data, int) else emoji_data
                 if not emoji:
                     self.outer.logger.warning(f"Emoji with ID {emoji_data} not found.")
+                    return None
+                return emoji
+            
+            async def add_reaction(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
+                if not self.message:
                     return
+                
+                emoji = self._resolve_emoji(emoji_data)
+                if not emoji:
+                    return
+
                 try:
                     await self.message.add_reaction(emoji)
+                except discord.NotFound:
+                    self.message = None
+                except discord.Forbidden:
+                    pass
+            async def remove_reaction(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
+                if not self.message:
+                    return
+                
+                if not self.outer.user:
+                    self.outer.logger.warning(f"Attempted to remove reaction while `bot.user` is None.")
+                    return
+                
+                emoji = self._resolve_emoji(emoji_data)
+                if not emoji:
+                    return
+
+                try:
+                    await self.message.remove_reaction(emoji, self.outer.user)
                 except discord.NotFound:
                     self.message = None
                 except discord.Forbidden:

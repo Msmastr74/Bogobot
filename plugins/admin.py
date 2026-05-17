@@ -488,7 +488,7 @@ async def setup(bot: "BotCore"):
                         response=True
                     )
                     return
-                await message.edit(content=content)
+                await message.edit(content=content, view=None)
             elif action == 'reply':
                 if content is None:
                     await bot.discord.send(
