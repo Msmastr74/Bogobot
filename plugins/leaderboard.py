@@ -83,9 +83,9 @@ class LeaderboardView(discord.ui.LayoutView):
 
         streak_text = ""
         if streak > 0:
-            streak_text = f" | Win streak: {streak}"
+            streak_text = f" | 🔥 {streak}"
         elif streak < 0:
-            streak_text = f" | Loss streak: {abs(streak)}"
+            streak_text = f" | ❄️ {abs(streak)}"
 
         return (
             f"{pos}. {rank_emoji} **{name}** - "
