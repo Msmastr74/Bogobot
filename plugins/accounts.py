@@ -85,6 +85,16 @@ async def setup(bot: BotCore):
             f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers."
         )
     
+    @bot.member_join_callback
+    async def on_member_join(member: discord.Member | discord.User):
+        count = await bot.accounts.ensure_accounts([member.id])
+        await bot.accounts.normalize_owner(bot.config["owner_uid"])
+        await bot.save_accounts()
+        if count > 0:
+            bot.logger.info(
+                f"Automatically created an account for <@{member.id}> ({member.name})."
+            )
+    
     @accounts.command(name="perm_edit", description="Edits a user's rank")
     async def perm_edit(
         interaction: discord.Interaction, action: Literal['promote', 'demote', 'set'],
