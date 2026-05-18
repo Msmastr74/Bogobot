@@ -1,6 +1,5 @@
 import asyncio
 from dataclasses import dataclass
-import datetime as dt
 import json
 from pathlib import Path
 
@@ -501,15 +500,14 @@ async def setup(bot: BotCore):
             )
 
         def event_line(self, event: ArchiveEvent) -> str:
-            timestamp = int(event.timestamp)
-            stamp = dt.datetime.fromtimestamp(
-                event.timestamp,
-                tz=dt.timezone.utc,
-            ).isoformat(timespec="milliseconds")
+            timestamp_ms = round(event.timestamp * 1000)
+            timestamp = timestamp_ms // 1000
+            milliseconds = timestamp_ms % 1000
+            dt_seconds = event.dt_centiseconds / 100
+            fraction = f".{milliseconds:03d}"
             return (
-                f"`@{event.start}` <t:{timestamp}:T> "
-                f"`{stamp}` "
-                f"`dt={event.dt_centiseconds}cs` "
+                f"`@{event.start}` <t:{timestamp}:T>`{fraction}` "
+                f"`dt={dt_seconds:.2f}s` "
                 f"`value={event.value}/{event.section_count}`"
             )
 
