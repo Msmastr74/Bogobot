@@ -5,10 +5,9 @@ from dataclasses import dataclass
 import heapq
 import json
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, TypeAlias
 import itertools
 import discord
-from test.test_typing import TypeAlias
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
 from utils import groups
