@@ -140,7 +140,7 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
         lines = [f"### {title}"]
         visible_uids: set[str] = set()
         if not ranked:
-            lines.append("No bogotree runs yet.")
+            lines.append("#- No data")
         else:
             for index, (uid, stats) in enumerate(ranked, start=1):
                 line = f"`#{index}` {line_for(uid, stats)}"
@@ -206,7 +206,7 @@ def ranked_best_score(
     leaderboard: dict[str, BogotreeUserStats],
 ) -> list[tuple[str, BogotreeUserStats]]:
     return sorted(
-        leaderboard.items(),
+        filter(lambda i: i[1]["best_equal_count"] > 0, leaderboard.items()),
         key=lambda item: (
             -item[1]["best_equal_count"],
             item[1]["best_timestamp"] or 2**63 - 1,
@@ -220,7 +220,7 @@ def ranked_steps(
     leaderboard: dict[str, BogotreeUserStats],
 ) -> list[tuple[str, BogotreeUserStats]]:
     return sorted(
-        leaderboard.items(),
+        filter(lambda i: i[1]["steps"] > 0, leaderboard.items()),
         key=lambda item: (
             -item[1]["steps"],
             item[0],
@@ -232,7 +232,7 @@ def ranked_calls(
     leaderboard: dict[str, BogotreeUserStats],
 ) -> list[tuple[str, BogotreeUserStats]]:
     return sorted(
-        leaderboard.items(),
+        filter(lambda i: i[1]["calls"] > 0, leaderboard.items()),
         key=lambda item: (
             -item[1]["calls"],
             item[0],
