@@ -37,7 +37,7 @@ User-edited settings:
 - `archive_path`: Path to the compact monitor archive. Defaults to `archive/monitor.bga`.
 - `archive_flush_interval`: Seconds to batch monitor archive records before flushing to disk. Defaults to 60.
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
-- `bogotree_path`: Path to the Bogotree state and leaderboard JSON file. Defaults to `bogotree.json`.
+- `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
 
 Bot-managed storage:
@@ -48,11 +48,12 @@ Bot-managed storage:
 - `milestones`: Latest confirmed value for each milestone name.
 
 Bogotree storage:
-- `bogotree.json`, or the file named by `bogotree_path`, stores Bogotree puzzle state and leaderboard data.
+- `bogotree.json`, or the file named by `bogotree_path`, stores Bogotree puzzle state.
+- Per-user Bogotree leaderboard data is stored on accounts under the root-level `bogotree` field.
 
 Account storage:
 - `accounts.json`, or the file named by `accounts_path`, stores Discord user IDs mapped to account records.
-- Each account record currently contains `perm_level`.
+- Each account record contains `perm_level` plus any plugin-owned root-level annotation fields.
 - On ready, the bot creates basic accounts for visible guild members and saves the configured `owner_uid` at permission level 4.
 
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
@@ -163,12 +164,20 @@ The telemetry plugin records command completions to a JSONL file. Each line is o
 
 The plugin keeps a small recent-action buffer for `/manage telemetry` and builds in-memory usage indexes at startup for `/usage`. New command events update those indexes as they arrive, which keeps `/usage` cheap even after the telemetry file grows.
 
+## Accounts
+Account storage and permission logic live in `utils.accounts`, separate from the `/accounts` command plugin.
+
+`AccountManager` owns the account JSON file, normalizes account records, and serializes writes through an async lock. It provides permission helpers such as `authorization_level(...)`, `is_authorized(...)`, and the atomic rank-edit helper used by `/accounts perm_edit`. The `/accounts` plugin registers a `connect_callback` to hydrate visible guild member accounts on every Discord ready event.
+
+`accounts[uid]` returns an `Account` handle. Missing accounts read as a fake account with `perm_level: 0`. `account[key]` reads root-level account data, `await account.write(key, value)` creates the account if needed and writes under the manager lock, and `account.lock` exposes that lock for larger grouped operations. Plugin annotations are root-level account fields beside `perm_level`.
+
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.
 
 Plugins can register lifecycle callbacks through decorators on `BotCore`:
 
 - `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
+- `@bot.connect_callback`: Runs on every Discord ready event, before the one-time connected guard. Use it for state that should refresh after reconnects.
 - `@bot.close_callback`: Runs during bot shutdown.
 - `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
 - `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives the classified green-section count as an `int` and the observation timestamp as a Python epoch-time `float`.
@@ -189,6 +198,7 @@ Current plugin responsibilities:
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
+- `utils/accounts.py`: Account storage, permission checks, and account annotations.
 - `utils/transformers.py`: Slash-command transformers such as `ColourTransformer` and `IntTransformer`.
 
 ## Admin Commands

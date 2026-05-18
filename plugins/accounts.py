@@ -1,7 +1,8 @@
 import discord
 
-from typing import Iterable, Literal, TypedDict
+from typing import Iterable, Literal
 from bogobot_core import BotCore
+from utils.accounts import AccountRecord
 from utils import groups
 
 Rank = Literal['basic', 'authorized', 'mod', 'admin', 'owner']
@@ -14,16 +15,13 @@ RANKS: dict[int, Rank] = {
 }
 RANK_NUMS: dict[Rank, int] = dict((v, k) for k, v in RANKS.items())
 
-class Account(TypedDict):
-    perm_level: int
-
 class AccountListView(discord.ui.LayoutView):
     def __init__(
         self, *,
         title: str = "Accounts",
         error_text: str = "No accounts found",
         truncated_text: str = "...",
-        accounts: Iterable[tuple[str, Account]]
+        accounts: Iterable[tuple[str, AccountRecord]]
     ) -> None:
         super().__init__(timeout=None)
         remaining = 3900 # reserve 100
@@ -57,6 +55,35 @@ class AccountListView(discord.ui.LayoutView):
 
 async def setup(bot: BotCore):
     accounts = groups.accounts(bot)
+
+    @bot.connect_callback
+    async def load_accounts():
+        guild_count = 0
+        member_count = 0
+        added_member_count = 0
+        guild_member_count = 0
+        added_guild_member_count = 0
+        bot.logger.info("Beginning automatic account creation...")
+        for guild in bot.guilds:
+            guild_count += 1
+            guild_member_ids: list[int] = []
+            for member in guild.members:
+                guild_member_count += 1
+                member_count += 1
+                guild_member_ids.append(member.id)
+            added_guild_member_count = await bot.accounts.ensure_accounts(guild_member_ids)
+            added_member_count += added_guild_member_count
+            bot.logger.info(
+                f"Automatically created {added_guild_member_count} accounts out of {guild_member_count} members from {guild.name} ({guild.id})."
+            )
+            guild_member_count = 0
+            added_guild_member_count = 0
+
+        await bot.accounts.normalize_owner(bot.config["owner_uid"])
+        await bot.save_accounts()
+        bot.logger.info(
+            f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers."
+        )
     
     @accounts.command(name="perm_edit", description="Edits a user's rank")
     async def perm_edit(
@@ -67,17 +94,14 @@ async def setup(bot: BotCore):
             # Lockout prevention
             await bot.discord.send(contents="You cannot edit your own rank", response=True, ephemeral=True)
             return
-        if str(user.id) not in bot.accounts:
-            await bot.discord.send(contents="User not found in accounts database", response=True, ephemeral=True)
-            return
-        current_rank = bot.accounts[str(user.id)]["perm_level"]
+        current_rank = await bot.accounts.permission_level(user.id)
         new_rank: int | None = None
         if action != "set" and level is not None:
             await bot.discord.send(contents="Level argument should not be provided unless using the set action", response=True, ephemeral=True)
             return
         if action == "promote":
             new_rank = current_rank + 1
-        elif action == "deomote":
+        elif action == "demote":
             new_rank = current_rank - 1
         elif action == "set":
             if level:
@@ -89,13 +113,13 @@ async def setup(bot: BotCore):
         cur_rank_name = RANKS.get(current_rank, "Unknown")
         new_rank_name = RANKS.get(new_rank, "Unknown")
 
-        own_rank = bot.accounts[str(interaction.user.id)]["perm_level"]
-        if own_rank > current_rank and own_rank > new_rank:
-            if current_rank == new_rank:
-                await bot.discord.send(contents="New rank must be different from old rank", response=True, ephemeral=True)
-                return
-            bot.accounts[str(user.id)]["perm_level"] = new_rank
-            await bot.save_accounts()
+        result, current_rank, own_rank = await bot.accounts.set_permission_level_if_overranked(
+            actor_uid=interaction.user.id,
+            target_uid=user.id,
+            new_level=new_rank,
+        )
+        cur_rank_name = RANKS.get(current_rank, "Unknown")
+        if result == "ok":
             if current_rank < new_rank:
                 await bot.discord.send(
                     contents=f"Successfully promoted <@{user.id}> from {cur_rank_name} to {new_rank_name}", response=True, ephemeral=True
@@ -104,17 +128,16 @@ async def setup(bot: BotCore):
                 await bot.discord.send(
                     contents=f"Successfully demoted <@{user.id}> from {cur_rank_name} to {new_rank_name}", response=True, ephemeral=True
                 )
-        elif own_rank <= current_rank:
+        elif result == "same":
+            await bot.discord.send(contents="New rank must be different from old rank", response=True, ephemeral=True)
+        elif result == "actor_not_over_current":
             await bot.discord.send(contents=f"Must overrank {cur_rank_name} to edit rank to {new_rank_name}", response=True, ephemeral=True)
-        elif own_rank <= new_rank:
+        elif result == "actor_not_over_new":
             await bot.discord.send(contents=f"Must overrank {new_rank_name} to edit rank to {new_rank_name}", response=True, ephemeral=True)
     
     @accounts.command(name="perm_info", description="Gets a user's current rank")
     async def perm_info(interaction: discord.Interaction, user: discord.Member):
-        if str(user.id) not in bot.accounts:
-            await bot.discord.send(contents="User not found in accounts database", response=True, ephemeral=True)
-            return
-        current_rank = bot.accounts[str(user.id)]["perm_level"]
+        current_rank = await bot.accounts.permission_level(user.id)
         current_rank_name = RANKS.get(current_rank, "Unknown")
         await bot.discord.send(
             contents=f"<@{user.id}>'s current rank is {current_rank_name}",
@@ -126,13 +149,13 @@ async def setup(bot: BotCore):
     async def list_users(
         interaction: discord.Interaction, minimum_rank: Rank | None
     ):
-        filtered_accounts = bot.accounts.items()
+        filtered_accounts: Iterable[tuple[str, AccountRecord]] = await bot.accounts.items()
         is_filtered = minimum_rank is not None
         if is_filtered:
             minimum_rank_num = RANK_NUMS[minimum_rank]
             filtered_accounts = filter(
                 lambda x: x[1]["perm_level"] >= minimum_rank_num,
-                bot.accounts.items()
+                filtered_accounts
             )
         view = AccountListView(
             title=f"Accounts with rank {minimum_rank} or higher" if 

@@ -12,6 +12,7 @@ import time
 from typing import Any, Callable, TYPE_CHECKING, Concatenate, cast
 from ocr import LibTesseractOCR, OcrCrop, TESSDATA_FAST_URL
 from stream import StreamHandler
+from utils.accounts import AccountManager
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
@@ -58,7 +59,6 @@ current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = cont
 if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
-    from plugins.accounts import Account
 
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
@@ -66,16 +66,11 @@ class BotCore(discord.Client):
         with open(self.config_path, 'r') as f:
             self.config: dict[str, Any] = json.load(f)
 
-        self.accounts_path: str = self.config.get("accounts_path", "accounts.json")
-        if not os.path.exists(self.accounts_path):
-            with open(self.accounts_path, 'w') as f:
-                json.dump({}, f)
-        
-        with open(self.accounts_path, 'r') as f:
-            self.accounts: dict[str, 'Account'] = json.load(f)
+        self.accounts = AccountManager(
+            path=self.config.get("accounts_path", "accounts.json"),
+        )
         
         self._config_lock = asyncio.Lock()
-        self._accounts_lock = asyncio.Lock()
         intents = discord.Intents.default()
         intents.members = True
         super().__init__(intents=intents)
@@ -194,17 +189,17 @@ class BotCore(discord.Client):
         return channel_data
 
     def authorization_level(self, user_id: int) -> int:
-        if str(user_id) not in self.accounts:
-            return 0
-
-        rank = self.accounts[str(user_id)]["perm_level"]
-        return rank
+        return self.accounts.authorization_level(user_id)
 
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
-        return self.authorization_level(user_id) >= perm_requirement
+        return self.accounts.is_authorized(user_id, perm_requirement)
     
     def init_callback(self, callback: AsyncCallback[[]]):
         self.callbacks.register('init', callback)
+        return callback
+
+    def connect_callback(self, callback: AsyncCallback[[]]):
+        self.callbacks.register('connect', callback)
         return callback
 
     def close_callback(self, callback: AsyncCallback[[]]):
@@ -593,47 +588,17 @@ class BotCore(discord.Client):
     async def on_ready(self):
         assert self.user is not None
         self.logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        
-        if self._connected:
-            return # Prevent multiple on_ready calls from causing issues
-        self._connected = True
-        
-        await self.discord.init()
 
-        try:
-            await self.notifications.initialize()
-        except Exception:
-            self.logger.exception("Failed initializing notifications")
+        if not self._connected:
+            self._connected = True
+            await self.discord.init()
+            try:
+                await self.notifications.initialize()
+            except Exception:
+                self.logger.exception("Failed initializing notifications")
+            await self.callbacks.execute_async('init')
         
-        await self.callbacks.execute_async('init')
-        guild_count = 0
-        member_count = 0
-        added_member_count = 0
-        guild_member_count = 0
-        added_guild_member_count = 0
-        self.logger.info("Beginning automatic account creation...")
-        for guild in self.guilds:
-            guild_count += 1
-            for member in guild.members:
-                guild_member_count += 1
-                member_count += 1
-                if str(member.id) not in self.accounts:
-                    added_member_count += 1
-                    added_guild_member_count += 1
-                    self.accounts[str(member.id)] = {"perm_level": 0}
-            self.logger.info(f"Automatically created {added_guild_member_count} accounts out of {guild_member_count} members from {guild.name} ({guild.id})")
-            guild_member_count = 0
-            added_guild_member_count = 0
-        
-        owner_uid = str(self.config["owner_uid"])
-        for uid, account in self.accounts.items():
-            if account["perm_level"] == 4 and uid != owner_uid:
-                account["perm_level"] = 3
-        if owner_uid in self.accounts:
-            self.accounts[owner_uid]["perm_level"] = 4
-
-        await self.save_accounts()
-        self.logger.info(f"Automatic account creation finished. Automatically created a total of {added_member_count} accounts out of a total of {member_count} members from {guild_count} servers")
+        await self.callbacks.execute_async('connect')
 
     async def load_plugins(self, folder_name="plugins"):
         logger = self.logger.getChild("Plugins")
@@ -669,11 +634,7 @@ class BotCore(discord.Client):
             self._save_config_sync()
 
     async def save_accounts(self):
-        async with self._accounts_lock:
-            tmp_path = f"{self.accounts_path}.tmp"
-            with open(tmp_path, 'w') as f:
-                json.dump(self.accounts, f, indent=4)
-            os.replace(tmp_path, self.accounts_path)
+        await self.accounts.save()
 
     async def run_bot(self):
         self.stream_handler.async_loop = self.loop

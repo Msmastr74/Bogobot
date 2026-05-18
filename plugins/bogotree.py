@@ -16,7 +16,7 @@ BOGOTREE_MIN_STEPS = 30
 BOGOTREE_MAX_STEPS = 100
 BOGOTREE_STORAGE_PATH = "bogotree.json"
 BOGOTREE_STATE_KEY = "state"
-BOGOTREE_LEADERBOARD_KEY = "leaderboard"
+BOGOTREE_ACCOUNT_KEY = "bogotree"
 ARROW = "\u2192"
 LEADERBOARD_SECTION_LIMIT = 1200
 BOGOTREE_PSEUDOCODE = """```text
@@ -262,6 +262,25 @@ def default_user_stats(username: str = "") -> BogotreeUserStats:
     }
 
 
+def normalize_user_stats(raw_stats: object, username: str = "") -> BogotreeUserStats:
+    if not isinstance(raw_stats, dict):
+        return default_user_stats(username)
+
+    try:
+        return {
+            "calls": max(0, int(raw_stats.get("calls", 0))),
+            "steps": max(0, int(raw_stats.get("steps", 0))),
+            "best_equal_count": max(0, min(
+                BOGOTREE_N,
+                int(raw_stats.get("best_equal_count", 0)),
+            )),
+            "best_timestamp": max(0, int(raw_stats.get("best_timestamp", 0))),
+            "username": str(raw_stats.get("username", username)),
+        }
+    except (TypeError, ValueError):
+        return default_user_stats(username)
+
+
 def normalize_state(raw_state: object) -> BogotreeState:
     if not isinstance(raw_state, dict):
         return default_state()
@@ -288,33 +307,6 @@ def normalize_state(raw_state: object) -> BogotreeState:
         "best_x": best_x,
         "solved": solved,
     }
-
-
-def normalize_leaderboard(raw_leaderboard: object) -> dict[str, BogotreeUserStats]:
-    if not isinstance(raw_leaderboard, dict):
-        return {}
-
-    leaderboard: dict[str, BogotreeUserStats] = {}
-    for raw_uid, raw_stats in raw_leaderboard.items():
-        uid = str(raw_uid)
-        if not isinstance(raw_stats, dict):
-            continue
-
-        try:
-            leaderboard[uid] = {
-                "calls": max(0, int(raw_stats.get("calls", 0))),
-                "steps": max(0, int(raw_stats.get("steps", 0))),
-                "best_equal_count": max(0, min(
-                    BOGOTREE_N,
-                    int(raw_stats.get("best_equal_count", 0)),
-                )),
-                "best_timestamp": max(0, int(raw_stats.get("best_timestamp", 0))),
-                "username": str(raw_stats.get("username", "")),
-            }
-        except (TypeError, ValueError):
-            continue
-
-    return leaderboard
 
 
 def normalize_array(value: object) -> list[int]:
@@ -408,21 +400,10 @@ async def setup(bot: BotCore):
         await save_storage(storage)
 
     async def get_leaderboard() -> dict[str, BogotreeUserStats]:
-        storage = await load_storage()
-        leaderboard = normalize_leaderboard(storage.get(BOGOTREE_LEADERBOARD_KEY))
-        if leaderboard != storage.get(BOGOTREE_LEADERBOARD_KEY):
-            storage[BOGOTREE_LEADERBOARD_KEY] = leaderboard
-            await save_storage(storage)
-        return leaderboard
-
-    async def save_state_and_leaderboard(
-        state: BogotreeState,
-        leaderboard: dict[str, BogotreeUserStats],
-    ) -> None:
-        storage = await load_storage()
-        storage[BOGOTREE_STATE_KEY] = state
-        storage[BOGOTREE_LEADERBOARD_KEY] = leaderboard
-        await save_storage(storage)
+        return {
+            uid: normalize_user_stats(raw_stats)
+            for uid, raw_stats in await bot.accounts.query(BOGOTREE_ACCOUNT_KEY)
+        }
 
     async def bogotree_leaderboard(
         interaction: discord.Interaction,
@@ -438,8 +419,7 @@ async def setup(bot: BotCore):
             safety_filter=True
         )
 
-    def update_user_stats(
-        leaderboard: dict[str, BogotreeUserStats],
+    async def update_user_stats(
         interaction: discord.Interaction,
         *,
         calls: int,
@@ -447,7 +427,11 @@ async def setup(bot: BotCore):
         best_equal_count: int,
     ) -> None:
         uid = str(interaction.user.id)
-        stats = leaderboard.get(uid, default_user_stats(str(interaction.user)))
+        account = bot.accounts[uid]
+        stats = normalize_user_stats(
+            account.get(BOGOTREE_ACCOUNT_KEY),
+            str(interaction.user),
+        )
         stats["username"] = str(interaction.user)
         stats["calls"] += calls
         stats["steps"] += steps
@@ -456,7 +440,15 @@ async def setup(bot: BotCore):
             stats["best_equal_count"] = best_equal_count
             stats["best_timestamp"] = int(time.time())
 
-        leaderboard[uid] = stats
+        await account.write(BOGOTREE_ACCOUNT_KEY, stats)
+
+    async def reset_user_scores() -> None:
+        for uid, raw_stats in await bot.accounts.query(BOGOTREE_ACCOUNT_KEY):
+            stats = normalize_user_stats(raw_stats)
+            stats["steps"] = 0
+            stats["best_equal_count"] = 0
+            stats["best_timestamp"] = 0
+            await bot.accounts[uid].write(BOGOTREE_ACCOUNT_KEY, stats)
 
     @bot.setup.command(
         name="bogotree",
@@ -481,6 +473,7 @@ async def setup(bot: BotCore):
             async with state_lock:
                 state = default_state()
                 await save_state(state)
+                await reset_user_scores()
             await bot.discord.send(
                 view=BogotreeView(title="Bogotree Reset", state=state),
                 response=True,
@@ -513,7 +506,6 @@ async def setup(bot: BotCore):
                 return
 
             planned_steps = random.randint(BOGOTREE_MIN_STEPS, BOGOTREE_MAX_STEPS)
-            leaderboard = await get_leaderboard()
             performed_steps = 0
             selected_steps = 0
             current_step_start = state["current_step"]
@@ -549,14 +541,13 @@ async def setup(bot: BotCore):
             state["best_step"] = best_step
             state["best_equal_count"] = best_score[0]
             state["solved"] = best_score[0] >= BOGOTREE_N
-            update_user_stats(
-                leaderboard,
+            await update_user_stats(
                 interaction,
                 calls=1,
                 steps=performed_steps,
                 best_equal_count=batch_best_score[0] if batch_best_score is not None else 0,
             )
-            await save_state_and_leaderboard(state, leaderboard)
+            await save_state(state)
 
         await bot.discord.send(
             view=BogotreeView(
