@@ -506,9 +506,10 @@ async def setup(bot: BotCore):
             dt_seconds = event.dt_centiseconds / 100
             fraction = f".{milliseconds:03d}"
             return (
-                f"`@{event.start}` <t:{timestamp}:T>`{fraction} "
+                f"`@{event.start} "
                 f"dt={dt_seconds:.2f}s "
-                f"value={event.value}/{event.section_count}`"
+                f"value={event.value}/{event.section_count}` "
+                f"<t:{timestamp}:T>`{fraction}`"
             )
 
         def replace_cache(self, events: list[ArchiveEvent]) -> None:
