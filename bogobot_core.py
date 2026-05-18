@@ -301,47 +301,6 @@ class BotCore(discord.Client):
                 embed=kwargs.get("embed"),
             )
 
-        async def send_embed(
-            self,
-            description=None,
-            *,
-            embed: discord.Embed | None = None,
-            title="embed",
-            footer="",
-            author="Bogobot",
-            color=discord.Color.blue(),
-            response=False,
-            ephemeral=False,
-            **kwargs,
-        ):
-            """
-            Deprecated compatibility helper.
-
-            New bot-authored UI should use discord.ui.LayoutView via
-            bot.discord.send(view=...). Keep this for older plugins and
-            workflows that intentionally need Discord embeds. New code that
-            truly needs an embed should prefer bot.discord.send(embed=...).
-            """
-            if embed is None:
-                embed = discord.Embed(
-                    title=title,
-                    description=description,
-                    color=color,
-                )
-                embed.set_footer(text=footer)
-                embed.set_author(name=author)
-
-            message = await self._send(
-                response=response,
-                ephemeral=ephemeral,
-                embed=embed,
-                **kwargs,
-            )
-            if message is None:
-                return None
-            
-            return self.MessageHandle(self.outer, message, content=kwargs.get("content"), embed=embed)
-
         async def _send(
             self,
             response=False,
@@ -401,70 +360,6 @@ class BotCore(discord.Client):
                     await self.message.edit(**kwargs)
                 except discord.NotFound:
                     self.message = None
-
-            async def edit_embed(
-                self,
-                description=None,
-                *,
-                embed: discord.Embed | None = None,
-                title=None,
-                footer=None,
-                author=None,
-                color=None,
-                add_field=False, name=None, value=None, inline=False,
-                **kwargs,
-            ):
-                """
-                Deprecated compatibility helper.
-
-                New bot-authored UI should edit LayoutView payloads through
-                message.edit(view=...). Keep this for older plugins and
-                workflows that intentionally need Discord embeds. New code
-                that truly needs an embed should prefer message.edit(embed=...).
-                """
-                if not self.message:
-                    return
-
-                new_embed = embed or self._updated_embed(
-                    description=description,
-                    title=title,
-                    footer=footer,
-                    author=author,
-                    color=color,
-                    add_field=add_field,
-                    name=name,
-                    value=value,
-                    inline=inline
-                )
-
-                try:
-                    self.embed = new_embed
-                    await self.message.edit(embed=new_embed, **kwargs)
-                except discord.NotFound:
-                    self.message = None
-
-            def _updated_embed(
-                self, description=None, title=None, footer=None, author=None, color=None,
-                add_field=False, name=None, value=None, inline=False
-            ):
-                old = self.embed or discord.Embed()
-                new_embed = discord.Embed.from_dict(old.to_dict())
-                if title is not None:
-                    new_embed.title = title
-                if description is not None:
-                    new_embed.description = description
-                if color is not None:
-                    new_embed.colour = color
-
-                if add_field:
-                    new_embed.add_field(name=name, value=value, inline=inline)
-
-                current_author = old.author.name if old.author else ""
-                new_embed.set_author(name=author or current_author)
-                current_footer = old.footer.text if old.footer else ""
-                new_embed.set_footer(text=footer or current_footer)
-
-                return new_embed
 
             async def delete(self):
                 if not self.message:

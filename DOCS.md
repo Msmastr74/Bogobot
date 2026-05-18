@@ -62,15 +62,11 @@ Account storage:
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.
 
 ### Messages
-* `send(contents, response=True)`: Sends a message. If `response` is true, it attempts to reply to the current interaction. Pass `view=...` for bot-authored `LayoutView` UI. Returns a MessageHandle object or None.
-* `message.edit(contents)`: Edits the message contents or kwargs such as `view=...`.
+* `send(contents, response=True)`: Sends a message. If `response` is true, it attempts to reply to the current interaction. Pass `view=...` for bot-authored `LayoutView` UI, or `embed=...` when an embed is needed. Returns a MessageHandle object or None.
+* `message.edit(contents)`: Edits the message contents or kwargs such as `view=...` or `embed=...`.
 * `message.delete()`: Deletes the message.
 
-### Deprecated Embeds
-New bot-authored UI should use static `discord.ui.LayoutView` payloads with `bot.discord.send(view=...)`. New code that truly needs embeds should pass `embed=...` to `send(...)` or `edit(...)` directly.
-
-* `send_embed(description, title, color, footer, response=True)`: Deprecated compatibility helper for sending an embed. Returns a MessageHandle object or None.
-* `message.edit_embed(description, title, author, add_field=False, name, value, inline=False)`: Deprecated compatibility helper for modifying an embed. Setting `add_field` to true appends a new field based on name, value, and inline.
+New bot-authored UI should use static `discord.ui.LayoutView` payloads with `bot.discord.send(view=...)`. Embeds are still supported through Discord's native `embed=...` and `embeds=...` send/edit keyword arguments, but the old `send_embed(...)` and `message.edit_embed(...)` compatibility helpers have been removed.
 
 ## OCR Implementation
 Bogobot utilizes libtesseract OCR for visual data extraction.
