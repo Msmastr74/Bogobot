@@ -24,6 +24,8 @@ ARROW = "→"
 LEADERBOARD_SECTION_LIMIT = 950
 BOGOTREE_SOLVED_SCORE = 1
 BOGOTREE_METER_THRESHOLD_CM = 999
+BOGOTREE_SEEDLING_MAX_CM = 100
+BOGOTREE_SPROUT_MAX_CM = 1000
 BOGOTREE_PSEUDOCODE = f"""```text
 Start with {BOGOTREE_N} zeroes, then run {BOGOTREE_WARMUP_RUNS} warm-up runs.
 
@@ -106,7 +108,7 @@ class BogotreeView(discord.ui.LayoutView):
         if state["solved"] and not best_improved:
             accent_colour = discord.Color.green()
 
-        self.add_item(discord.ui.TextDisplay(f"## {title}"))
+        self.add_item(discord.ui.TextDisplay(f"## {title} {tree_emoji(height(x))}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay("\n".join(body_lines)),
             accent_colour=accent_colour,
@@ -410,6 +412,14 @@ def render_tree_state(values: list[int]) -> list[str]:
 
 def height(values: list[int]) -> float:
     return sum(values) / len(values) / 100 if values else 0
+
+
+def tree_emoji(value: float) -> str:
+    if value < BOGOTREE_SEEDLING_MAX_CM:
+        return "🌱"
+    if value < BOGOTREE_SPROUT_MAX_CM:
+        return "🪾"
+    return "🌳"
 
 
 def format_height(value: float) -> str:
