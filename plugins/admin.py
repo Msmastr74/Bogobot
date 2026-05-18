@@ -16,13 +16,14 @@ if TYPE_CHECKING:
     from bogobot_core import BotCore
 
 
-LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "FATAL"]
 log_level_mapping: dict[LogLevel, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
     "WARNING": logging.WARNING,
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL,
+    "FATAL": logging.FATAL
 }
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class MemoryLogHandler(logging.Handler):
         logging.WARNING: discord.Color.gold(),
         logging.ERROR: discord.Color.red(),
         logging.CRITICAL: discord.Color.dark_red(),
+        logging.FATAL: discord.Color.dark_red(),
     }
     LEVEL_COLOR_ORDER = sorted(LEVEL_COLORS, reverse=True)
 
@@ -58,6 +60,7 @@ class MemoryLogHandler(logging.Handler):
         logging.WARNING: "⚠️",
         logging.ERROR: "❗",
         logging.CRITICAL: "❌",
+        logging.FATAL: "❌"
     }
     LEVEL_EMOJI_ORDER = sorted(LEVEL_EMOJIS, reverse=True)
 

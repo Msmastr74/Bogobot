@@ -19,7 +19,7 @@ from utils.callbacks import CallbackRegistry, AsyncCallback
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
-CONSOLE_LOG_FORMAT = '[%(asctime)s.%(msecs)03d %(levelname)-8s | %(name)-15s ] %(message)s'
+CONSOLE_LOG_FORMAT = '%(asctime_f)s %(levelname_f)s %(name_f)s %(message)s'
 LOG_DATE_FORMAT = '%b %d %H:%M:%S'
 
 class ColorFormatter(logging.Formatter):
@@ -29,15 +29,19 @@ class ColorFormatter(logging.Formatter):
         logging.WARNING: "\x1b[33m",
         logging.ERROR: "\x1b[31m",
         logging.CRITICAL: "\x1b[1;31m",
+        logging.FATAL: "\x1b[1;31m",
     }
+    BOLD_GREY = "\x1b[1;90m"
+    MAGENTA = "\x1b[35m"
     RESET = "\x1b[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        message = super().format(record)
-        color = self.LEVEL_COLORS.get(record.levelno)
-        if not color:
-            return message
-        return f"{color}{message}{self.RESET}"
+        record.asctime_f = f"{self.BOLD_GREY}{self.formatTime(record, self.datefmt)}.{int(record.msecs):03d}{self.RESET}"
+        record.levelname_f = (
+            f"{self.LEVEL_COLORS.get(record.levelno, '')}{record.levelname:<8s}{self.RESET}"
+        )
+        record.name_f = f"{self.MAGENTA}{record.name:<15s}{self.RESET}"
+        return super().format(record)
 
 CONSOLE_LOG_HANDLER = logging.StreamHandler()
 CONSOLE_LOG_HANDLER.setFormatter(ColorFormatter(CONSOLE_LOG_FORMAT, LOG_DATE_FORMAT))

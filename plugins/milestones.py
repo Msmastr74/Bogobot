@@ -9,6 +9,7 @@ from PIL import Image
 
 from bogobot_core import BotCore
 from utils import groups
+from discord import app_commands
 
 
 MILESTONE_USAGE_TYPE = "milestones"
