@@ -97,6 +97,9 @@ class BotCore(discord.Client):
         }
         self.THRESHOLD = 165
         self.stats: dict[str, str] = {}
+        self.best_shuffle_sections: list[bool] = []
+        self.sort_values: list[int] = []
+        self.new_values: list[tuple[bool, int]] = []
         self.monitor_message = None
         
         self.debug: bool = self.config.get("debug", False)
@@ -255,16 +258,21 @@ class BotCore(discord.Client):
 
     def new_value_callback(
         self,
-        callback: AsyncCallback[[int, float]]
+        callback: AsyncCallback[[list[tuple[bool, int]], int, float]]
     ):
         self.callbacks.register('new_value', callback)
         return callback
 
-    async def new_value(self, value: int, timestamp: float | None = None):
+    async def new_value(
+        self,
+        new_values: list[tuple[bool, int]],
+        new_value: int,
+        timestamp: float | None = None,
+    ):
         if timestamp is None:
             timestamp = time.time()
 
-        await self.callbacks.execute_async('new_value', value, timestamp)
+        await self.callbacks.execute_async('new_value', new_values, new_value, timestamp)
     
     class _Discord:
         def __init__(self, outer: 'BotCore'):

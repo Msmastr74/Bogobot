@@ -53,8 +53,6 @@ def parse_number(value: str | None) -> Decimal | None:
 
 
 async def setup(bot: BotCore):
-    last_sort_signature: np.ndarray | None = None
-
     async def update_ocr_data(img: Image.Image, *, sort_changed: bool = True) -> None:
         try:
             async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
@@ -173,68 +171,7 @@ async def setup(bot: BotCore):
 
         return f"{int(number):,}"
 
-    def read_best_shuffle_count(img: Image.Image) -> int:
-        left, top, right, bottom = bot.SORT_OBSERVED_STRIP_COORDS
-        crop = img.crop((left, top, right, bottom)).convert("RGB")
-        rgb = np.array(crop).astype(np.int16)
-        section_count = bot.SORT_SECTION_COUNT
-        green_count = 0
-
-        for index in range(section_count):
-            x1 = round(index * rgb.shape[1] / section_count)
-            x2 = round((index + 1) * rgb.shape[1] / section_count)
-            section = rgb[:, x1:x2, :]
-
-            red_pixels = (
-                (section[:, :, 0] > section[:, :, 1] + 25) &
-                (section[:, :, 0] > section[:, :, 2] + 25) &
-                (section[:, :, 0] > 70)
-            ).sum()
-            green_pixels = (
-                (section[:, :, 1] > section[:, :, 0] + 10) &
-                (section[:, :, 1] > section[:, :, 2] + 10) &
-                (section[:, :, 1] > 70)
-            ).sum()
-
-            if green_pixels > red_pixels:
-                green_count += 1
-
-        bot.logger.debug(
-            f"Sort strip green sections={green_count}/{section_count}"
-        )
-        return green_count
-
-    def test_sort_changed(img: Image.Image) -> bool:
-        nonlocal last_sort_signature
-        crop = img.crop(bot.SORT_AREA_COORDS).convert("RGB")
-        rgb = np.array(crop)
-        small = cv2.resize(rgb, (160, 72), interpolation=cv2.INTER_AREA).astype(np.int16)
-
-        red = (
-            (small[:, :, 0] > small[:, :, 1] + 25) &
-            (small[:, :, 0] > small[:, :, 2] + 25) &
-            (small[:, :, 0] > 80)
-        )
-        green = (
-            (small[:, :, 1] > small[:, :, 0] + 15) &
-            (small[:, :, 1] > small[:, :, 2] + 15) &
-            (small[:, :, 1] > 80)
-        )
-
-        signature = np.zeros(small.shape[:2], dtype=np.uint8)
-        signature[red] = 1
-        signature[green] = 2
-
-        if last_sort_signature is None:
-            last_sort_signature = signature
-            return True
-
-        changed_ratio: np.float64 = np.count_nonzero(signature != last_sort_signature) / signature.size
-        last_sort_signature = signature
-
-        changed = changed_ratio >= bot.SORT_CHANGE_THRESHOLD
-        bot.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
-        return changed.item()
+    sort_reader = SortSectionReader(bot)
 
     last_frame_monotonic = time.monotonic()
     @bot.new_frame_callback
@@ -251,18 +188,23 @@ async def setup(bot: BotCore):
             img.save("live_720p.png", format="PNG")
         
         sort_changed_start = time.monotonic()
-        sort_changed = test_sort_changed(img)
-        bot.logger.debug(f"Sort changed test (dt={time.monotonic() - sort_changed_start:.2f}s)")
+        (
+            sort_changed,
+            best_shuffle_sections,
+            sort_values,
+            new_values,
+        ) = sort_reader.analyze(img)
+        bot.logger.debug(f"Sort sections analyzed (dt={time.monotonic() - sort_changed_start:.2f}s)")
 
         if sort_changed:
-            read_best_shuffle_count_start = time.monotonic()
-            best_shuffle_count = read_best_shuffle_count(img)
-            bot.logger.debug(
-                f"Best shuffle count read (dt={time.monotonic() - read_best_shuffle_count_start:.2f}s)"
-            )
+            bot.best_shuffle_sections = best_shuffle_sections
+            bot.sort_values = sort_values
+            bot.new_values = new_values
+            best_shuffle_count = sum(bot.best_shuffle_sections)
 
             new_value_start = time.monotonic()
             await bot.new_value(
+                bot.new_values,
                 best_shuffle_count,
                 timestamp=frame_received_at,
             )
@@ -278,3 +220,161 @@ async def setup(bot: BotCore):
             milestones_start = time.monotonic()
             await update_milestones(img, frame_received_at)
             bot.logger.debug(f"Milestones updated (dt={time.monotonic() - milestones_start:.2f}s)")
+
+class SortSectionReader:
+    def __init__(self, bot: BotCore):
+        self.last_signature: np.ndarray | None = None
+        self.open_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        self.close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+        self.bot = bot
+
+    def analyze(
+        self,
+        img: Image.Image,
+    ) -> tuple[bool, list[bool], list[int], list[tuple[bool, int]]]:
+        crop = img.crop(self.bot.SORT_AREA_COORDS).convert("RGB")
+        rgb = np.array(crop)
+        sort_changed = self.test_changed(rgb)
+
+        if not sort_changed:
+            return False, [], [], []
+
+        red_mask, green_mask = self.sort_colour_masks(rgb)
+        best_shuffle_sections = self.read_best_shuffle_sections(red_mask, green_mask)
+        sort_values = self.read_sort_values(red_mask | green_mask)
+        new_values = list(zip(
+            best_shuffle_sections,
+            sort_values,
+            strict=False,
+        ))
+        return True, best_shuffle_sections, sort_values, new_values
+
+    def read_best_shuffle_sections(
+        self,
+        red_mask: np.ndarray,
+        green_mask: np.ndarray,
+    ) -> list[bool]:
+        left, top, _right, _bottom = self.bot.SORT_AREA_COORDS
+        strip_left, strip_top, strip_right, strip_bottom = (
+            self.bot.SORT_OBSERVED_STRIP_COORDS
+        )
+        x1 = max(0, strip_left - left)
+        y1 = max(0, strip_top - top)
+        x2 = min(red_mask.shape[1], strip_right - left)
+        y2 = min(red_mask.shape[0], strip_bottom - top)
+        strip_red = red_mask[y1:y2, x1:x2]
+        strip_green = green_mask[y1:y2, x1:x2]
+        section_count = self.bot.SORT_SECTION_COUNT
+        sections: list[bool] = []
+
+        if strip_red.size == 0 or strip_green.size == 0:
+            return [False] * section_count
+
+        for index in range(section_count):
+            section_x1 = round(index * strip_red.shape[1] / section_count)
+            section_x2 = round((index + 1) * strip_red.shape[1] / section_count)
+            red_pixels = strip_red[:, section_x1:section_x2].sum()
+            green_pixels = strip_green[:, section_x1:section_x2].sum()
+            sections.append(bool(green_pixels > red_pixels))
+
+        self.bot.logger.debug(
+            f"Sort strip green sections={sum(sections)}/{section_count}"
+        )
+        return sections
+
+    def read_sort_values(self, colour_mask: np.ndarray) -> list[int]:
+        mask = (colour_mask * 255).astype(np.uint8)
+        section_count = self.bot.SORT_SECTION_COUNT
+        areas: list[int] = []
+
+        for index in range(section_count):
+            x1 = round(index * mask.shape[1] / section_count)
+            x2 = round((index + 1) * mask.shape[1] / section_count)
+            areas.append(self.largest_solid_area(mask[:, x1:x2]))
+
+        present_indices = [
+            index
+            for index, area in enumerate(areas)
+            if area > 0
+        ]
+        values: list[int] = [0] * section_count
+
+        for value, index in enumerate(
+            sorted(present_indices, key=lambda current_index: areas[current_index]),
+            start=1,
+        ):
+            values[index] = value
+
+        self.bot.logger.debug(f"Sort section areas={areas}, values={values}")
+        return values
+
+    def test_changed(self, sort_rgb: np.ndarray) -> bool:
+        small = cv2.resize(
+            sort_rgb,
+            (160, 72),
+            interpolation=cv2.INTER_AREA,
+        ).astype(np.int16)
+        red = (
+            (small[:, :, 0] > small[:, :, 1] + 25) &
+            (small[:, :, 0] > small[:, :, 2] + 25) &
+            (small[:, :, 0] > 80)
+        )
+        green = (
+            (small[:, :, 1] > small[:, :, 0] + 15) &
+            (small[:, :, 1] > small[:, :, 2] + 15) &
+            (small[:, :, 1] > 80)
+        )
+
+        signature = np.zeros(small.shape[:2], dtype=np.uint8)
+        signature[red] = 1
+        signature[green] = 2
+
+        if self.last_signature is None:
+            self.last_signature = signature
+            return True
+
+        changed_ratio: np.float64 = (
+            np.count_nonzero(signature != self.last_signature) / signature.size
+        )
+        self.last_signature = signature
+
+        changed = changed_ratio >= self.bot.SORT_CHANGE_THRESHOLD
+        self.bot.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
+        return changed.item()
+
+    def sort_colour_masks(self, rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        rgb16 = rgb.astype(np.int16)
+        red = (
+            (rgb16[:, :, 0] > rgb16[:, :, 1] + 25) &
+            (rgb16[:, :, 0] > rgb16[:, :, 2] + 25) &
+            (rgb16[:, :, 0] > 70)
+        )
+        green = (
+            (rgb16[:, :, 1] > rgb16[:, :, 0] + 10) &
+            (rgb16[:, :, 1] > rgb16[:, :, 2] + 10) &
+            (rgb16[:, :, 1] > 70)
+        )
+        return red, green
+
+    def largest_solid_area(self, mask: np.ndarray) -> int:
+        if mask.size == 0:
+            return 0
+
+        # Break hairline bridges/noise before measuring the main block.
+        cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.open_kernel)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, self.close_kernel)
+
+        _label_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            cleaned,
+            connectivity=8,
+        )
+        if len(stats) <= 1:
+            return 0
+
+        min_area = max(8, round(mask.shape[0] * mask.shape[1] * 0.001))
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        solid_areas = areas[areas >= min_area]
+        if solid_areas.size == 0:
+            return 0
+
+        return int(solid_areas.max())

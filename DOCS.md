@@ -88,13 +88,22 @@ For each frame, `stats.py`:
 - Runs the sort-change detector over `bot.SORT_AREA_COORDS`.
 - OCRs the configured stat crops from `bot.STATS_COORDS`.
 - Classifies a thin horizontal strip across the sort sections when the sort visualization changed.
-- Emits `bot.new_value(value)` with the classified green-section count when the sort visualization changed.
+- Reads the current sort values from the colored section areas when the sort visualization changed.
+- Emits `bot.new_value(new_values, new_value)` when the sort visualization changed.
 - Updates `bot.stats` and `bot._last_ocr_refresh`.
 - Feeds milestone candidates to `MilestoneTracker` when milestones are enabled.
 
 `bot.stats` is the current text cache for stream-wide values such as `shuffles`, `comparisons`, `best_run`, `shuffles_sec`, `average_best_shuffle`, and `uptime`. Commands like `/get_stats` read from this cache instead of OCRing on demand.
 
-`bot.new_value(value)` publishes the latest calculated monitor value. For the stream monitor this is currently the number of green sections in `sort_section_count`, calculated from the configured observed strip instead of OCRing tiny history cells. The event fires only when the sort-change detector says the bar chart actually changed, which lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
+`stats.py` keeps this visual sort logic in one `SortSectionReader`, which crops the sort area once per frame and uses that crop for change detection, green/red section classification, and area-ranked value reading.
+
+`bot.best_shuffle_sections` is the latest per-section green/red classification as `list[bool]`. `sum(bot.best_shuffle_sections)` is the scalar best-shuffle count used by existing monitor/archive displays.
+
+`bot.sort_values` is the latest area-read sort permutation as `list[int]`. `stats.py` crops `bot.SORT_AREA_COORDS`, masks the red/green sort blocks, cleans the mask with OpenCV morphology, measures the largest solid component in each configured section, and ranks those areas into values. An unreadable section is represented as `0`.
+
+`bot.new_values` combines those two caches as `list[tuple[bool, int]]`, where each tuple is `(is_green, sort_value)` for the same section.
+
+`bot.new_value(new_values, new_value)` publishes the latest calculated monitor event. For the stream monitor, `new_value` is currently the number of green sections in `sort_section_count`, calculated from the configured observed strip instead of OCRing tiny history cells. The event fires only when the sort-change detector says the bar chart actually changed, which lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
 
 `bot._last_ocr_refresh` is the UNIX timestamp of the latest successful OCR refresh. Display commands can use it to show when the current stats cache was last updated.
 
@@ -176,7 +185,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.connect_callback`: Runs on every Discord ready event, before the one-time connected guard. Use it for state that should refresh after reconnects.
 - `@bot.close_callback`: Runs during bot shutdown.
 - `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
-- `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives the classified green-section count as an `int` and the observation timestamp as a Python epoch-time `float`.
+- `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives `new_values: list[tuple[bool, int]]`, `new_value: int`, and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 
 Current plugin responsibilities:

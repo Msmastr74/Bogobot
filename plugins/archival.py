@@ -435,7 +435,11 @@ async def setup(bot: BotCore):
         await flush_pending()
 
     @bot.new_value_callback
-    async def archive_value(value: int, timestamp: float):
+    async def archive_value(
+        new_values: list[tuple[bool, int]],
+        value: int,
+        timestamp: float,
+    ):
         nonlocal chunk_base_time, chunk_elapsed_centiseconds
         nonlocal chunk_event_count, chunk_started, last_event_time
 

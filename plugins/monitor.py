@@ -82,7 +82,11 @@ async def setup(bot: BotCore):
         await stream_monitor.tick()
 
     @bot.new_value_callback
-    async def new_value(value: int, timestamp: float):
+    async def new_value(
+        new_values: list[tuple[bool, int]],
+        value: int,
+        timestamp: float,
+    ):
         pending_values.append(value)
         if initialized:
             await stream_monitor.tick()
