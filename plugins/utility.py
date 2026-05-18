@@ -1,8 +1,9 @@
 import asyncio
+from typing import Sequence
 import discord
 from discord import app_commands
 
-from utils.transformers import ColourTransformer
+from utils.transformers import ColourTransformer, IntTransformer
 from bogobot_core import BotCore, current_interaction
 from utils import groups
 
@@ -104,7 +105,7 @@ class AnnounceView(discord.ui.LayoutView):
         title: str | None,
         message: str | None,
         message_container: bool,
-        attachment_files: list[tuple[discord.Attachment, discord.File]],
+        attachment_files: Sequence[tuple[discord.Attachment, discord.File | discord.Attachment]],
         attachments_container: bool,
         accent_colour: discord.Colour | None = None,
     ):
@@ -141,15 +142,15 @@ class AnnounceView(discord.ui.LayoutView):
 
     def _attachment_components(
         self,
-        files: list[tuple[discord.Attachment, discord.File]],
+        files: Sequence[tuple[discord.Attachment, discord.File | discord.Attachment]],
     ) -> list[discord.ui.MediaGallery | discord.ui.File]:
         media_files = [
-            file
+            (attachment, file)
             for attachment, file in files
             if self._is_media_attachment(attachment)
         ]
         regular_files = [
-            file
+            (attachment, file)
             for attachment, file in files
             if not self._is_media_attachment(attachment)
         ]
@@ -158,18 +159,36 @@ class AnnounceView(discord.ui.LayoutView):
         if media_files:
             components.append(discord.ui.MediaGallery(*[
                 discord.MediaGalleryItem(
-                    media=file,
-                    description=file.description or file.filename,
+                    media=self._component_media(attachment, file),
+                    description=self._component_description(attachment, file),
                 )
-                for file in media_files
+                for attachment, file in media_files
             ]))
 
         components.extend([
-            discord.ui.File(file)
-            for file in regular_files
+            discord.ui.File(self._component_media(attachment, file))
+            for attachment, file in regular_files
         ])
 
         return components
+
+    def _component_media(
+        self,
+        attachment: discord.Attachment,
+        file: discord.File | discord.Attachment,
+    ) -> discord.File | str:
+        if isinstance(file, discord.File):
+            return file
+        return attachment.url
+
+    def _component_description(
+        self,
+        attachment: discord.Attachment,
+        file: discord.File | discord.Attachment,
+    ) -> str:
+        if isinstance(file, discord.File):
+            return file.description or file.filename
+        return attachment.description or attachment.filename
 
     def _is_media_attachment(self, attachment: discord.Attachment) -> bool:
         content_type = attachment.content_type or ""
@@ -201,43 +220,99 @@ async def setup(bot: BotCore):
             for attachment in attachments
         ]
 
-    async def send_announcement(
+    async def apply_announcement(
         *,
+        interaction: discord.Interaction,
+        message_id: int | None,
         title: str | None,
         message: str | None,
         message_container: bool,
         attachments_container: bool,
         accent_colour: discord.Colour | None,
         attachments: list[discord.Attachment],
-    ) -> None:
-        try:
-            files = await create_announcement_files(attachments)
-            view = AnnounceView(
+    ) -> bool:
+        async def make_view_and_files(
+            component_attachments: list[discord.Attachment],
+        ) -> tuple[AnnounceView, list[tuple[discord.Attachment, discord.File]]]:
+            files = await create_announcement_files(component_attachments)
+            return AnnounceView(
                 title=title,
                 message=message,
                 message_container=message_container,
                 attachment_files=files,
                 attachments_container=attachments_container,
                 accent_colour=accent_colour,
+            ), files
+
+        if message_id is not None:
+            if attachments:
+                await bot.discord.send(
+                    contents="Announcement edits cannot include new attachments.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return False
+
+            channel_id = interaction.channel_id
+            if channel_id is None:
+                await bot.discord.send(
+                    contents="Could not determine this channel.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return False
+
+            target = bot.get_partial_messageable(channel_id).get_partial_message(message_id)
+            try:
+                fetched = await target.fetch()
+            except (discord.NotFound, discord.Forbidden):
+                await bot.discord.send(
+                    contents="Could not access that announcement message.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return False
+
+            if fetched.author != bot.user:
+                await bot.discord.send(
+                    contents=f"You can only edit messages sent by {bot.user.mention if bot.user else 'this bot'}.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return False
+
+            view = AnnounceView(
+                title=title,
+                message=message,
+                message_container=message_container,
+                attachment_files=[(attachment, attachment) for attachment in fetched.attachments],
+                attachments_container=attachments_container,
+                accent_colour=accent_colour,
             )
+            try:
+                await target.edit(view=view)
+            except (discord.NotFound, discord.Forbidden):
+                await bot.discord.send(
+                    contents="Could not edit that announcement message.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return False
+            return True
+
+        try:
+            view, files = await make_view_and_files(attachments)
             if files:
                 await bot.discord.send(view=view, files=[file for _, file in files])
             else:
                 await bot.discord.send(view=view)
         except discord.Forbidden:
-            files = await create_announcement_files(attachments)
-            view = AnnounceView(
-                title=title,
-                message=message,
-                message_container=message_container,
-                attachment_files=files,
-                attachments_container=attachments_container,
-                accent_colour=accent_colour,
-            )
+            view, files = await make_view_and_files(attachments)
             if files:
                 await bot.discord.send(view=view, files=[file for _, file in files], response=True)
             else:
                 await bot.discord.send(view=view, response=True)
+        return True
 
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
     async def avatar(interaction: discord.Interaction, user: discord.Member | discord.User | None = None) -> None:
@@ -314,6 +389,7 @@ async def setup(bot: BotCore):
             attachments_container: bool,
             accent_colour: discord.Colour | None,
             attachments: list[discord.Attachment],
+            message_id: int | None,
         ):
             super().__init__()
             self.message_title = title
@@ -321,6 +397,7 @@ async def setup(bot: BotCore):
             self.attachments_container = attachments_container
             self.accent_colour = accent_colour
             self.attachments = attachments
+            self.message_id = message_id
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
             token = current_interaction.set(interaction)
@@ -332,7 +409,9 @@ async def setup(bot: BotCore):
                         ephemeral=True
                     )
                     return
-                await send_announcement(
+                applied = await apply_announcement(
+                    interaction=interaction,
+                    message_id=self.message_id,
                     title=self.message_title,
                     message=self.message.value or None,
                     message_container=self.message_container,
@@ -340,8 +419,10 @@ async def setup(bot: BotCore):
                     accent_colour=self.accent_colour,
                     attachments=self.attachments,
                 )
+                if not applied:
+                    return
                 await bot.discord.send(
-                    contents="The announcement message was successfully sent.",
+                    contents=f"The announcement message was successfully {'edited' if self.message_id is not None else 'sent'}.",
                     response=True,
                     ephemeral=True
                 )
@@ -361,6 +442,7 @@ async def setup(bot: BotCore):
         message_container: bool = False,
         attachments_container: bool = False,
         accent_colour: app_commands.Transform[discord.Colour, ColourTransformer] | None = None,
+        message_id: app_commands.Transform[int, IntTransformer] | None = None,
         attachment_1: discord.Attachment | None = None,
         attachment_2: discord.Attachment | None = None,
         attachment_3: discord.Attachment | None = None,
@@ -388,6 +470,13 @@ async def setup(bot: BotCore):
             )
             if attachment is not None
         ]
+        if message_id is not None and attachments:
+            await bot.discord.send(
+                contents="Announcement edits cannot include new attachments.",
+                response=True,
+                ephemeral=True
+            )
+            return
         if message is None:
             await interaction.response.send_modal(
                 AnnounceModal(
@@ -396,6 +485,7 @@ async def setup(bot: BotCore):
                     attachments_container=attachments_container,
                     accent_colour=accent_colour,
                     attachments=attachments,
+                    message_id=message_id,
                 )
             )
             return
@@ -406,7 +496,9 @@ async def setup(bot: BotCore):
                 ephemeral=True
             )
             return
-        await send_announcement(
+        applied = await apply_announcement(
+            interaction=interaction,
+            message_id=message_id,
             title=title,
             message=message,
             message_container=message_container,
@@ -414,8 +506,10 @@ async def setup(bot: BotCore):
             accent_colour=accent_colour,
             attachments=attachments,
         )
+        if not applied:
+            return
         await bot.discord.send(
-            contents="The announcement message was successfully sent.",
+            contents=f"The announcement message was successfully {'edited' if message_id is not None else 'sent'}.",
             response=True,
             ephemeral=True
         )
