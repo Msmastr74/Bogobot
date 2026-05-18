@@ -42,6 +42,7 @@ Go into `config.json` and provide the main credentials:
  * `archive_path`: Optional compact monitor archive path. Defaults to `archive/monitor.bga`.
  * `archive_flush_interval`: Optional seconds between archive flushes. Defaults to `60`.
  * `archive_chunk_event_limit`: Optional maximum monitor values per archive chunk. Defaults to `200`.
+ * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
 
 `DOCS.md` lists every supported user setting and every bot-managed storage field.
 

@@ -37,6 +37,7 @@ User-edited settings:
 - `archive_path`: Path to the compact monitor archive. Defaults to `archive/monitor.bga`.
 - `archive_flush_interval`: Seconds to batch monitor archive records before flushing to disk. Defaults to 60.
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
+- `bogotree_path`: Path to the Bogotree state and leaderboard JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
 
 Bot-managed storage:
@@ -45,6 +46,9 @@ Bot-managed storage:
 - `monitor_messages`: Persistent monitor message IDs by Discord channel ID.
 - `leaderboard_monitor_messages`: Persistent leaderboard monitor message IDs by Discord channel ID.
 - `milestones`: Latest confirmed value for each milestone name.
+
+Bogotree storage:
+- `bogotree.json`, or the file named by `bogotree_path`, stores Bogotree puzzle state and leaderboard data.
 
 Account storage:
 - `accounts.json`, or the file named by `accounts_path`, stores Discord user IDs mapped to account records.
@@ -212,7 +216,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/choice`, `/shuffle`, `/sort`, `/bogo`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexiographic` modes.
 - `/bogosort`, `/bogosort-list`, `/bogosort-lexiographic`, `/bogosort-listr`: Small animated bogosort commands. `/bogosort-lexiographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
-- `/bogotree [run|info|reset]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `reset` requires mod rank.
+- `/bogotree [run|info|leaderboard|reset] [target]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `leaderboard` shows per-user calls, simulated steps, and best score, optionally forcing `target` into each leaderboard section; `reset` requires mod rank.
 
 Account commands live under `/accounts`:
 
