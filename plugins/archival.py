@@ -505,13 +505,12 @@ async def setup(bot: BotCore):
             seconds = timestamp % 60
             milliseconds = timestamp_ms % 1000
             dt_seconds = event.dt_centiseconds / 100
-            dt_str = f"{dt_seconds:.2f}s".ljust(6)
             v = str(event.value).rjust(len(str(event.section_count)))
             return (
                 f"`@{event.start} "
-                f"dt={dt_str} "
+                f"dt={f'{dt_seconds:.2f}s':<6} "
                 f"value={v}/{event.section_count}` "
-                f"<t:{timestamp}:s> `:{seconds}.{milliseconds:03d}`"
+                f"<t:{timestamp}:s> `:{seconds:02d}.{milliseconds:03d}`"
             )
 
         def replace_cache(self, events: list[ArchiveEvent]) -> None:
