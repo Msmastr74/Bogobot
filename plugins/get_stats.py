@@ -44,9 +44,12 @@ class SortView(discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
         
-        self.add_item(discord.ui.TextDisplay("## Bogosort Stream"))
+        self.add_item(discord.ui.TextDisplay("## Bogosort Stream Sort State"))
         colors = (self.RED, self.GREEN)
         container = discord.ui.Container(
+            discord.ui.TextDisplay(
+                f"Current best shuffle in position: `{correct_count}/{total_count}`"
+            ),
             discord.ui.TextDisplay(
                 "```ansi\n" +
                 ' '.join(
@@ -54,9 +57,6 @@ class SortView(discord.ui.LayoutView):
                         lambda t: f"{colors[t[0]]}{t[1]}{self.RESET}"
                     , sort_state)
                 ) + "\n```"
-            ),
-            discord.ui.TextDisplay(
-                f"Best shuffle: `{correct_count}/{total_count}`"
             ),
         )
         if image is not None:

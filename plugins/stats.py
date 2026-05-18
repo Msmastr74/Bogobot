@@ -285,27 +285,27 @@ class SortSectionReader:
     def read_sort_values(self, colour_mask: np.ndarray) -> list[int]:
         mask = (colour_mask * 255).astype(np.uint8)
         section_count = self.bot.SORT_SECTION_COUNT
-        areas: list[int] = []
+        scores: list[tuple[int, int]] = []
 
         for index in range(section_count):
             x1 = round(index * mask.shape[1] / section_count)
             x2 = round((index + 1) * mask.shape[1] / section_count)
-            areas.append(self.largest_solid_area(mask[:, x1:x2]))
+            scores.append(self.solid_section_score(mask[:, x1:x2]))
 
         present_indices = [
             index
-            for index, area in enumerate(areas)
-            if area > 0
+            for index, (height, area) in enumerate(scores)
+            if height > 0 and area > 0
         ]
         values: list[int] = [0] * section_count
 
         for value, index in enumerate(
-            sorted(present_indices, key=lambda current_index: areas[current_index]),
+            sorted(present_indices, key=lambda current_index: scores[current_index]),
             start=1,
         ):
             values[index] = value
 
-        self.bot.logger.debug(f"Sort section areas={areas}, values={values}")
+        self.bot.logger.debug(f"Sort section scores={scores}, values={values}")
         return values
 
     def test_changed(self, sort_rgb: np.ndarray) -> bool:
@@ -356,9 +356,9 @@ class SortSectionReader:
         )
         return red, green
 
-    def largest_solid_area(self, mask: np.ndarray) -> int:
+    def solid_section_score(self, mask: np.ndarray) -> tuple[int, int]:
         if mask.size == 0:
-            return 0
+            return (0, 0)
 
         # Break hairline bridges/noise before measuring the main block.
         cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.open_kernel)
@@ -369,12 +369,18 @@ class SortSectionReader:
             connectivity=8,
         )
         if len(stats) <= 1:
-            return 0
+            return (0, 0)
 
         min_area = max(8, round(mask.shape[0] * mask.shape[1] * 0.001))
-        areas = stats[1:, cv2.CC_STAT_AREA]
-        solid_areas = areas[areas >= min_area]
-        if solid_areas.size == 0:
-            return 0
+        component_stats = [
+            stats[index]
+            for index in range(1, len(stats))
+            if stats[index, cv2.CC_STAT_AREA] >= min_area
+        ]
+        if not component_stats:
+            return (0, 0)
 
-        return int(solid_areas.max())
+        largest = max(component_stats, key=lambda row: row[cv2.CC_STAT_AREA])
+        height = int(largest[cv2.CC_STAT_HEIGHT])
+        area = int(largest[cv2.CC_STAT_AREA])
+        return (height, area)
