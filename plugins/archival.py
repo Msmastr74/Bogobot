@@ -504,11 +504,13 @@ async def setup(bot: BotCore):
             timestamp = timestamp_ms // 1000
             milliseconds = timestamp_ms % 1000
             dt_seconds = event.dt_centiseconds / 100
+            dt_str = f"{dt_seconds:.2f}s".ljust(6)
             fraction = f".{milliseconds:03d}"
+            v = str(event.value).rjust(len(str(event.section_count)))
             return (
                 f"`@{event.start} "
-                f"dt={dt_seconds:.2f}s "
-                f"value={event.value}/{event.section_count}` "
+                f"dt={dt_str} "
+                f"value={v}/{event.section_count}` "
                 f"<t:{timestamp}:T>`{fraction}`"
             )
 
