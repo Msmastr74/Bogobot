@@ -290,7 +290,12 @@ async def setup(bot: BotCore):
                 accent_colour=accent_colour,
             )
             try:
-                await target.edit(view=view)
+                await target.edit(
+                    content=None,
+                    embeds=[],
+                    attachments=fetched.attachments,
+                    view=view
+                )
             except (discord.NotFound, discord.Forbidden):
                 await bot.discord.send(
                     contents="Could not edit that announcement message.",
