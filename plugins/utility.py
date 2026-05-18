@@ -293,7 +293,6 @@ async def setup(bot: BotCore):
                 await target.edit(
                     content=None,
                     embeds=[],
-                    attachments=fetched.attachments,
                     view=view
                 )
             except (discord.NotFound, discord.Forbidden):
