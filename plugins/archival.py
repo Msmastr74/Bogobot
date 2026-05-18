@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 
@@ -22,8 +22,10 @@ ARCHIVE_WINDOW_CHUNK_LIMIT = 4
 class ArchiveEvent:
     timestamp: float
     dt_centiseconds: int
+    display_dt_centiseconds: int
     value: int
     section_count: int
+    chunk_start: int
     start: int
     end: int
 
@@ -263,8 +265,10 @@ async def setup(bot: BotCore):
                 events.append(ArchiveEvent(
                     timestamp=current_time,
                     dt_centiseconds=dt_centiseconds,
+                    display_dt_centiseconds=dt_centiseconds,
                     value=value,
                     section_count=section_count,
+                    chunk_start=start,
                     start=absolute_start,
                     end=absolute_end,
                 ))
@@ -516,7 +520,7 @@ async def setup(bot: BotCore):
             timestamp = timestamp_ms // 1000
             seconds = timestamp % 60
             milliseconds = timestamp_ms % 1000
-            dt_seconds = event.dt_centiseconds / 100
+            dt_seconds = event.display_dt_centiseconds / 100
             v = str(event.value).rjust(len(str(event.section_count)))
             return (
                 f"`@{event.start} "
@@ -526,7 +530,26 @@ async def setup(bot: BotCore):
             )
 
         def replace_cache(self, events: list[ArchiveEvent]) -> None:
-            self.cached_events = sorted(events, key=lambda event: event.start)
+            self.cached_events = self.with_display_dts(
+                sorted(events, key=lambda event: event.start)
+            )
+
+        def with_display_dts(self, events: list[ArchiveEvent]) -> list[ArchiveEvent]:
+            displayed_events: list[ArchiveEvent] = []
+            previous: ArchiveEvent | None = None
+            for event in events:
+                if previous is not None and event.chunk_start != previous.chunk_start:
+                    display_dt_centiseconds = max(
+                        event.dt_centiseconds,
+                        int((event.timestamp - previous.timestamp) * 100),
+                    )
+                    event = replace(
+                        event,
+                        display_dt_centiseconds=display_dt_centiseconds,
+                    )
+                displayed_events.append(event)
+                previous = event
+            return displayed_events
 
         async def event_before(self, cursor: int, snapshot_end: int) -> ArchiveEvent | None:
             candidates = [
