@@ -17,16 +17,20 @@ BOGOTREE_PSEUDOCODE = """```text
 x = Array(n).fill(0)
 
 each /bogotree run:
+  candidate = x
+  batch_best = x
   repeat random(MIN_STEPS..MAX_STEPS) times:
     r = Array(n).fill_each(randint(1..n))
-    x = sorted(x) + sorted_desc(r)
-    remember x if it has the best equal-slot count
+    candidate = sorted(candidate) + sorted_desc(r)
+    remember the last candidate with the best equal-slot count
     stop forever if all slots are equal
+  x = batch_best
 ```"""
 
 
 class BogotreeState(TypedDict):
     x: list[int]
+    current_step: int
     total_steps: int
     best_step: int
     best_equal_count: int
@@ -41,6 +45,7 @@ class BogotreeView(discord.ui.LayoutView):
         title: str,
         state: BogotreeState,
         batch_steps: int | None = None,
+        selected_steps: int | None = None,
         previous_best_equal_count: int | None = None,
         show_info: bool = False,
     ):
@@ -49,14 +54,16 @@ class BogotreeView(discord.ui.LayoutView):
         x = state["x"]
         body_lines = [
             f"State: `{format_array(x)}`",
-            f"Current step: `{state['total_steps']:,}`",
+            f"Current step: `{state['current_step']:,}`",
             f"Current in position: `{equal_count(x)}/{len(x)}`",
             f"Best result: `{best_result_text(state, previous_best_equal_count)}`",
             f"Best step: `{state['best_step']:,}`",
             f"Total simulated: `{state['total_steps']:,}`",
         ]
         if batch_steps is not None:
-            body_lines.append(f"Batch: `{batch_steps}` steps")
+            body_lines.append(f"Batch simulated: `{batch_steps}` steps")
+        if selected_steps is not None:
+            body_lines.append(f"Batch selected: `{selected_steps}` steps")
         if state["solved"]:
             body_lines.append("Solved. Waiting for a mod reset.")
 
@@ -78,6 +85,7 @@ class BogotreeView(discord.ui.LayoutView):
 def default_state() -> BogotreeState:
     return {
         "x": [0 for _ in range(BOGOTREE_N)],
+        "current_step": 0,
         "total_steps": 0,
         "best_step": 0,
         "best_equal_count": 0,
@@ -94,6 +102,7 @@ def normalize_state(raw_state: object) -> BogotreeState:
         x = normalize_array(raw_state.get("x"))
         best_x = normalize_array(raw_state.get("best_x", x))
         total_steps = max(0, int(raw_state.get("total_steps", 0)))
+        current_step = max(0, int(raw_state.get("current_step", total_steps)))
         best_step = max(0, int(raw_state.get("best_step", total_steps)))
         best_equal_count = max(0, int(raw_state.get("best_equal_count", 0)))
         if best_step > 0:
@@ -104,6 +113,7 @@ def normalize_state(raw_state: object) -> BogotreeState:
 
     return {
         "x": x,
+        "current_step": current_step,
         "total_steps": total_steps,
         "best_step": best_step,
         "best_equal_count": best_equal_count,
@@ -222,25 +232,36 @@ async def setup(bot: BotCore):
 
             planned_steps = random.randint(BOGOTREE_MIN_STEPS, BOGOTREE_MAX_STEPS)
             performed_steps = 0
+            selected_steps = 0
+            current_step_start = state["current_step"]
             current = state["x"]
             best_x = state["best_x"]
             best_step = state["best_step"]
             previous_best_equal_count = state["best_equal_count"]
             best_score = state["best_equal_count"], -spread(best_x)
+            batch_best_x = current
+            batch_best_score: tuple[int, int] | None = None
+            batch_best_offset = 0
 
             for _ in range(planned_steps):
                 current = step(current)
                 performed_steps += 1
                 state["total_steps"] += 1
                 current_score = score(current)
+                if batch_best_score is None or current_score >= batch_best_score:
+                    batch_best_x = current
+                    batch_best_score = current_score
+                    batch_best_offset = performed_steps
                 if current_score > best_score:
                     best_x = current
-                    best_step = state["total_steps"]
+                    best_step = current_step_start + performed_steps
                     best_score = current_score
                     if best_score[0] >= BOGOTREE_N:
                         break
 
-            state["x"] = current
+            selected_steps = batch_best_offset
+            state["x"] = batch_best_x
+            state["current_step"] = current_step_start + selected_steps
             state["best_x"] = best_x
             state["best_step"] = best_step
             state["best_equal_count"] = best_score[0]
@@ -252,6 +273,7 @@ async def setup(bot: BotCore):
                 title="Bogotree Solved" if state["solved"] else "Bogotree",
                 state=state,
                 batch_steps=performed_steps,
+                selected_steps=selected_steps,
                 previous_best_equal_count=previous_best_equal_count,
             ),
             response=True,
