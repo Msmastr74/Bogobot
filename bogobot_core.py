@@ -494,7 +494,7 @@ class BotCore(discord.Client):
                     return None
                 return emoji
             
-            async def add_reaction(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
+            async def add_reaction(self, emoji_data: 'int | discord.Emoji | BotCore._Discord.Emoji | str | None'):
                 if not self.message:
                     return
                 
@@ -508,7 +508,7 @@ class BotCore(discord.Client):
                     self.message = None
                 except discord.Forbidden:
                     pass
-            async def remove_reaction(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
+            async def remove_reaction(self, emoji_data: 'int | discord.Emoji | BotCore._Discord.Emoji | str | None'):
                 if not self.message:
                     return
                 
