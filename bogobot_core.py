@@ -372,7 +372,7 @@ class BotCore(discord.Client):
                 finally:
                     self.message = None
             
-            def _resolve_emoji(self, emoji_data: int | discord.Emoji | 'BotCore._Discord.Emoji' | str | None):
+            def _resolve_emoji(self, emoji_data: 'int | discord.Emoji | BotCore._Discord.Emoji | str | None'):
                 if isinstance(emoji_data, BotCore._Discord.Emoji):
                     emoji_data = emoji_data.emoji
                 emoji = self.outer.get_emoji(emoji_data) if isinstance(emoji_data, int) else emoji_data
