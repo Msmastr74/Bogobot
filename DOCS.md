@@ -175,6 +175,7 @@ Current plugin responsibilities:
 - `accounts.py`: `/accounts` permission commands.
 - `admin.py`: `/manage state`, `/manage logs`, and `/manage message`.
 - `archival.py`: compact append-only archive for observed monitor values and `/archive`.
+- `bogotree.py`: collaborative random equalization puzzle.
 - `bogoscramble.py`: Bogoscramble message/media utilities.
 - `get_stats.py`: `/get_stats` display command.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
@@ -211,6 +212,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/choice`, `/shuffle`, `/sort`, `/bogo`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexiographic` modes.
 - `/bogosort`, `/bogosort-list`, `/bogosort-lexiographic`, `/bogosort-listr`: Small animated bogosort commands. `/bogosort-lexiographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
+- `/bogotree [run|info|reset]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `reset` requires mod rank.
 
 Account commands live under `/accounts`:
 
