@@ -76,6 +76,7 @@ class BotCore(discord.Client):
         intents.members = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self.tree.on_error = self.on_tree_error
         
         self.SORT_AREA_COORDS = (75, 60, 1205, 575)
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.1)
@@ -686,14 +687,51 @@ class BotCore(discord.Client):
         await self.edits.close()
         await self.notifications.close()
         await super().close()
+    
+    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.TransformerError):
+            command_obj = interaction.command
+            command_name = (
+                getattr(command_obj, "qualified_name", None) or
+                getattr(command_obj, "name", "unknown")
+            )
+            base_event: CommandTelemetryBase = {
+                "interaction_id": interaction.id,
+                "command": command_name,
+                "user_id": interaction.user.id,
+                "username": str(interaction.user),
+                "channel_id": interaction.channel_id,
+                "time": 0
+            }
+            command_time = int(time.time())
+            await self.callbacks.execute_async('command_telemetry', {
+                **base_event,
+                "phase": "start",
+                "time": command_time,
+            })
+            try:
+                await interaction.response.send_message(str(error), ephemeral=True)
+            except discord.HTTPException:
+                pass
+            finally:
+                await self.callbacks.execute_async('command_telemetry', {
+                    **base_event,
+                    "phase": "end",
+                    "time": command_time,
+                    "status": "error",
+                    "duration_ms": 0,
+                    "error": str(error),
+                })
+            return
+        await app_commands.CommandTree.on_error(self.tree, interaction, error)
 
     class _Setup:
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
-            self.groups: dict[str, discord.app_commands.Group] = {}
+            self.groups: dict[str, app_commands.Group] = {}
         
         _Callable = Callable[Concatenate[discord.Interaction, P], Coro[T]]
-        _Command = discord.app_commands.Command[discord.app_commands.Group, P, T]
+        _Command = app_commands.Command[app_commands.Group, P, T]
         
         def command(
             self, name: str, *, description="No description", perm_requirement=1,
@@ -722,7 +760,7 @@ class BotCore(discord.Client):
             def __init__(
                 self,
                 setup: "BotCore._Setup",
-                group: discord.app_commands.Group,
+                group: app_commands.Group,
             ):
                 self.setup = setup
                 self.group = group
@@ -752,7 +790,7 @@ class BotCore(discord.Client):
 
         def group(
             self,
-            name: str | discord.app_commands.Group,
+            name: str | app_commands.Group,
             description="No description",
         ) -> "BotCore._Setup._CommandGroup":
             group = self._get_group(name, description)
@@ -768,7 +806,7 @@ class BotCore(discord.Client):
                 Callable[[discord.Interaction, discord.Message], Coro[Any]] |
                 Callable[[discord.Interaction, discord.Member | discord.User],
                          Coro[Any]]
-            ], discord.app_commands.ContextMenu]:
+            ], app_commands.ContextMenu]:
             def decorator(func):
                 @self.outer.tree.context_menu(name=name)
                 @functools.wraps(func)
@@ -787,13 +825,13 @@ class BotCore(discord.Client):
 
         def _get_group(
             self,
-            group: str | discord.app_commands.Group | None,
+            group: str | app_commands.Group | None,
             description: str,
-        ) -> discord.app_commands.Group | None:
+        ) -> app_commands.Group | None:
             if group is None:
                 return None
 
-            if isinstance(group, discord.app_commands.Group):
+            if isinstance(group, app_commands.Group):
                 self.groups.setdefault(group.name, group)
                 if self.outer.tree.get_command(group.name) is None:
                     self.outer.tree.add_command(group)
@@ -801,7 +839,7 @@ class BotCore(discord.Client):
 
             group_obj = self.groups.get(group)
             if group_obj is None:
-                group_obj = discord.app_commands.Group(
+                group_obj = app_commands.Group(
                     name=group,
                     description=description,
                 )
@@ -821,7 +859,6 @@ class BotCore(discord.Client):
             eph,
             defer,
         ):
-            started_at = time.monotonic()
             command_obj = interaction.command
             command_name = (
                 getattr(command_obj, "qualified_name", None) or
@@ -842,6 +879,7 @@ class BotCore(discord.Client):
             token = current_interaction.set(interaction)
             allowed = self.outer.is_authorized(interaction.user.id, perm_requirement)
 
+            started_at = time.monotonic()
             try:
                 await self.outer.callbacks.execute_async('command_telemetry', {
                     **base_event,

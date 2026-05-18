@@ -535,7 +535,7 @@ async def setup(bot: BotCore):
     async def milestone_autocomplete(
         interaction: discord.Interaction,
         current: str,
-    ) -> list[discord.app_commands.Choice[str]]:
+    ) -> list[app_commands.Choice[str]]:
         return await milestone_name_choices(current)
 
     @bot.setup.command(
@@ -601,10 +601,10 @@ async def setup(bot: BotCore):
     async def milestone_info_autocomplete(
         interaction: discord.Interaction,
         current: str,
-    ) -> list[discord.app_commands.Choice[str]]:
+    ) -> list[app_commands.Choice[str]]:
         return await milestone_name_choices(current)
 
-    async def milestone_name_choices(current: str) -> list[discord.app_commands.Choice[str]]:
+    async def milestone_name_choices(current: str) -> list[app_commands.Choice[str]]:
         current = current.strip().lower()
         choices = []
 
@@ -612,7 +612,7 @@ async def setup(bot: BotCore):
             if current and not name.lower().startswith(current):
                 continue
 
-            choices.append(discord.app_commands.Choice(name=name, value=name))
+            choices.append(app_commands.Choice(name=name, value=name))
 
             if len(choices) >= 25:
                 break

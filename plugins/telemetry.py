@@ -12,6 +12,7 @@ from test.test_typing import TypeAlias
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
 from utils import groups
+from discord import app_commands
 
 class CommandTelemetryBase(TypedDict):
     interaction_id: int
@@ -551,7 +552,7 @@ async def setup(bot: BotCore):
     def autocomplete_commands(
         current: str,
         valid_commands: set[str],
-    ) -> list[discord.app_commands.Choice[str]]:
+    ) -> list[app_commands.Choice[str]]:
         parts = current.split(",")
         raw_current = parts[-1].strip()
         use_slash = raw_current.startswith("/")
@@ -576,7 +577,7 @@ async def setup(bot: BotCore):
                 for item in [*previous, command]
             ]
             choices.append(
-                discord.app_commands.Choice(
+                app_commands.Choice(
                     name=", ".join(display_commands),
                     value=value,
                 )
@@ -595,7 +596,7 @@ async def setup(bot: BotCore):
         for command in itertools.chain(
             bot.tree.get_commands(), bot.tree.walk_commands()
         ):
-            if isinstance(command, discord.app_commands.Group):
+            if isinstance(command, app_commands.Group):
                 continue
             if is_public_command(command.qualified_name):
                 valid_public_commands.add(command.qualified_name)
@@ -659,7 +660,7 @@ async def setup(bot: BotCore):
     async def telemetry_commands_autocomplete(
         interaction: discord.Interaction,
         current: str,
-    ) -> list[discord.app_commands.Choice[str]]:
+    ) -> list[app_commands.Choice[str]]:
         return autocomplete_commands(current, all_valid_commands)
 
     @bot.setup.command(
@@ -699,5 +700,5 @@ async def setup(bot: BotCore):
     async def usage_commands_autocomplete(
         interaction: discord.Interaction,
         current: str,
-    ) -> list[discord.app_commands.Choice[str]]:
+    ) -> list[app_commands.Choice[str]]:
         return autocomplete_commands(current, valid_public_commands)
