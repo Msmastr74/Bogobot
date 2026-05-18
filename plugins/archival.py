@@ -502,16 +502,16 @@ async def setup(bot: BotCore):
         def event_line(self, event: ArchiveEvent) -> str:
             timestamp_ms = round(event.timestamp * 1000)
             timestamp = timestamp_ms // 1000
+            seconds = timestamp % 60
             milliseconds = timestamp_ms % 1000
             dt_seconds = event.dt_centiseconds / 100
             dt_str = f"{dt_seconds:.2f}s".ljust(6)
-            fraction = f".{milliseconds:03d}"
             v = str(event.value).rjust(len(str(event.section_count)))
             return (
                 f"`@{event.start} "
                 f"dt={dt_str} "
                 f"value={v}/{event.section_count}` "
-                f"<t:{timestamp}:T>`{fraction}`"
+                f"<t:{timestamp}:s> `:{seconds}.{milliseconds:03d}`"
             )
 
         def replace_cache(self, events: list[ArchiveEvent]) -> None:
