@@ -15,7 +15,6 @@ DEFAULT_CHUNK_EVENT_LIMIT = 200
 ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
 ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
-ARCHIVE_WINDOW_CHUNK_LIMIT = 4
 
 
 @dataclass(frozen=True)
@@ -277,28 +276,60 @@ async def setup(bot: BotCore):
 
         return events
 
+    def previous_event_before_chunk(chunk_start: int) -> ArchiveEvent | None:
+        previous_chunk_start, previous_chunk_end = read_chunk_before(chunk_start)
+        if previous_chunk_start == previous_chunk_end:
+            return None
+
+        previous_events = parse_chunk(previous_chunk_start, previous_chunk_end)
+        if not previous_events:
+            return None
+        return previous_events[-1]
+
+    def read_chunk_events(start: int, end: int) -> list[ArchiveEvent]:
+        events = parse_chunk(start, end)
+        if not events:
+            return []
+
+        previous_event = previous_event_before_chunk(start)
+        if previous_event is None:
+            return events
+
+        first_event = events[0]
+        display_dt_centiseconds = max(
+            first_event.dt_centiseconds,
+            int((first_event.timestamp - previous_event.timestamp) * 100),
+        )
+        return [
+            replace(
+                first_event,
+                display_dt_centiseconds=display_dt_centiseconds,
+            ),
+            *events[1:],
+        ]
+
     def read_events_before(
         end: int,
         snapshot_end: int,
+        value_filter: int | None = None,
         limit: int = ARCHIVE_BUFFER_EVENT_LIMIT,
     ) -> list[ArchiveEvent]:
         events_descending: list[ArchiveEvent] = []
         cursor = min(end, snapshot_end)
-        chunks_read = 0
 
         while (
             cursor > 0
             and len(events_descending) < limit
-            and chunks_read < ARCHIVE_WINDOW_CHUNK_LIMIT
         ):
             chunk_start, chunk_end = read_chunk_before(cursor)
             if chunk_start == chunk_end:
                 break
 
-            chunk_events = parse_chunk(chunk_start, chunk_end)
+            chunk_events = read_chunk_events(chunk_start, chunk_end)
             eligible_events = [
                 event for event in chunk_events
                 if event.start < cursor
+                and (value_filter is None or event.value == value_filter)
             ]
             for event in reversed(eligible_events):
                 events_descending.append(event)
@@ -306,23 +337,21 @@ async def setup(bot: BotCore):
                     break
 
             cursor = chunk_start
-            chunks_read += 1
 
         return list(reversed(events_descending))
 
     def read_events_after(
         start: int,
         snapshot_end: int,
+        value_filter: int | None = None,
         limit: int = ARCHIVE_BUFFER_EVENT_LIMIT,
     ) -> list[ArchiveEvent]:
         events: list[ArchiveEvent] = []
         cursor = max(0, start)
-        chunks_read = 0
 
         while (
             cursor < snapshot_end
             and len(events) < limit
-            and chunks_read < ARCHIVE_WINDOW_CHUNK_LIMIT
         ):
             chunk_start, chunk_end = chunk_bounds_containing_or_after(
                 cursor,
@@ -331,10 +360,11 @@ async def setup(bot: BotCore):
             if chunk_start == chunk_end:
                 break
 
-            chunk_events = parse_chunk(chunk_start, chunk_end)
+            chunk_events = read_chunk_events(chunk_start, chunk_end)
             eligible_events = [
                 event for event in chunk_events
                 if event.start > cursor
+                and (value_filter is None or event.value == value_filter)
             ]
             for event in eligible_events:
                 events.append(event)
@@ -342,7 +372,6 @@ async def setup(bot: BotCore):
                     break
 
             cursor = chunk_end
-            chunks_read += 1
 
         return events
 
@@ -443,8 +472,14 @@ async def setup(bot: BotCore):
             chunk_event_count += 1
 
     class ArchiveView(PaginatedView[ArchiveState]):
-        def __init__(self, *, initial_state: ArchiveState):
+        def __init__(
+            self,
+            *,
+            initial_state: ArchiveState,
+            value_filter: int | None = None,
+        ):
             super().__init__(initial_state=initial_state, timeout=300)
+            self.value_filter = value_filter
             self.cached_events: list[ArchiveEvent] = []
             self.newer = discord.ui.Button(
                 label="Newer",
@@ -478,10 +513,13 @@ async def setup(bot: BotCore):
             return discord.AllowedMentions.none()
 
         def empty_sections(self) -> list[PageSection]:
+            body = "No archived monitor values yet."
+            if self.value_filter is not None:
+                body = f"No archived monitor values matching `{self.value_filter}`."
             return [
                 PageSection(
                     title="Monitor Archive",
-                    body="No archived monitor values yet.",
+                    body=body,
                     accent_colour=discord.Color.dark_teal(),
                 )
             ]
@@ -496,8 +534,14 @@ async def setup(bot: BotCore):
             return (
                 "## Monitor Archive\n"
                 f"Archive snapshot: `{self.state.snapshot_end}` bytes\n"
+                f"{self.filter_line()}"
                 f"Showing event starts `{min(indexes)}` to `{max(indexes)}`"
             )
+
+        def filter_line(self) -> str:
+            if self.value_filter is None:
+                return ""
+            return f"Value filter: `{self.value_filter}`\n"
 
         def add_controls(self) -> None:
             self.add_item(self.controls)
@@ -530,26 +574,7 @@ async def setup(bot: BotCore):
             )
 
         def replace_cache(self, events: list[ArchiveEvent]) -> None:
-            self.cached_events = self.with_display_dts(
-                sorted(events, key=lambda event: event.start)
-            )
-
-        def with_display_dts(self, events: list[ArchiveEvent]) -> list[ArchiveEvent]:
-            displayed_events: list[ArchiveEvent] = []
-            previous: ArchiveEvent | None = None
-            for event in events:
-                if previous is not None and event.chunk_start != previous.chunk_start:
-                    display_dt_centiseconds = max(
-                        event.dt_centiseconds,
-                        int((event.timestamp - previous.timestamp) * 100),
-                    )
-                    event = replace(
-                        event,
-                        display_dt_centiseconds=display_dt_centiseconds,
-                    )
-                displayed_events.append(event)
-                previous = event
-            return displayed_events
+            self.cached_events = sorted(events, key=lambda event: event.start)
 
         async def event_before(self, cursor: int, snapshot_end: int) -> ArchiveEvent | None:
             candidates = [
@@ -561,6 +586,7 @@ async def setup(bot: BotCore):
                     read_events_before,
                     cursor,
                     snapshot_end,
+                    self.value_filter,
                 ))
                 candidates = [
                     event for event in self.cached_events
@@ -580,6 +606,7 @@ async def setup(bot: BotCore):
                     read_events_after,
                     cursor,
                     snapshot_end,
+                    self.value_filter,
                 ))
                 candidates = [
                     event for event in self.cached_events
@@ -654,13 +681,25 @@ async def setup(bot: BotCore):
         perm_requirement=0,
         eph=False,
     )
-    async def archive(interaction: discord.Interaction):
+    async def archive(
+        interaction: discord.Interaction,
+        value: int | None = None,
+    ):
+        if value is not None and (value < 0 or value > bot.SORT_SECTION_COUNT):
+            await bot.discord.send(
+                f"Archive value must be between 0 and {bot.SORT_SECTION_COUNT}.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
         snapshot_end = await archive_snapshot_end()
         view = ArchiveView(
             initial_state=ArchiveState(
                 cursor=snapshot_end,
                 snapshot_end=snapshot_end,
             ),
+            value_filter=value,
         )
         page = await view.load()
         await bot.discord.send(
