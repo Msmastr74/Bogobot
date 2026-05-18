@@ -151,7 +151,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
             text = text[:max(0, remaining - len(TRUNCATION_TEXT))] + TRUNCATION_TEXT
 
         self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(text or "\u200b"),
+            discord.ui.TextDisplay(text or "\u200d"),
             accent_colour=self.page_accent_colour(page),
         ))
 
@@ -162,7 +162,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
 
     def _section_text(self, section: PageSection) -> str:
         parts: list[str] = []
-        parts.append(section.body or "\u200b")
+        parts.append(section.body or "\u200d")
         if section.footer:
             parts.append(f"-# {section.footer}")
         return "\n".join(parts)

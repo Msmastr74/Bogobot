@@ -57,7 +57,7 @@ class UsageView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
         self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(body or "\u200b"),
+            discord.ui.TextDisplay(body or "\u200d"),
             accent_colour=discord.Color.blurple(),
         ))
 

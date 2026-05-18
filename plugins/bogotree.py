@@ -17,7 +17,7 @@ BOGOTREE_MAX_STEPS = 100
 BOGOTREE_STORAGE_PATH = "bogotree.json"
 BOGOTREE_STATE_KEY = "state"
 BOGOTREE_ACCOUNT_KEY = "bogotree"
-ARROW = "\u2192"
+ARROW = "→"
 LEADERBOARD_SECTION_LIMIT = 1200
 BOGOTREE_PSEUDOCODE = """```text
 x = Array(n).fill(0)
@@ -81,10 +81,18 @@ class BogotreeView(discord.ui.LayoutView):
         if state["solved"]:
             body_lines.append("Solved. Waiting for a mod reset.")
 
+        best_improved = (
+            previous_best_equal_count is not None
+            and state["best_equal_count"] > previous_best_equal_count
+        )
+        accent_colour = discord.Color.gold() if best_improved else discord.Color.blurple()
+        if state["solved"] and not best_improved:
+            accent_colour = discord.Color.green()
+
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay("\n".join(body_lines)),
-            accent_colour=discord.Color.green() if state["solved"] else discord.Color.blurple(),
+            accent_colour=accent_colour,
         ))
         if show_info:
             self.add_item(discord.ui.Container(
@@ -357,6 +365,8 @@ def best_result_text(
 async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
     storage_path = bot.config.get("bogotree_path", BOGOTREE_STORAGE_PATH)
+    sorted_emoji = bot.discord.get_emoji("sorted")
+    star_emoji = "⭐"
 
     def load_storage_sync() -> dict[str, object]:
         if not os.path.exists(storage_path):
@@ -541,6 +551,7 @@ async def setup(bot: BotCore):
             state["best_step"] = best_step
             state["best_equal_count"] = best_score[0]
             state["solved"] = best_score[0] >= BOGOTREE_N
+            best_improved = state["best_equal_count"] > previous_best_equal_count
             await update_user_stats(
                 interaction,
                 calls=1,
@@ -549,7 +560,7 @@ async def setup(bot: BotCore):
             )
             await save_state(state)
 
-        await bot.discord.send(
+        message = await bot.discord.send(
             view=BogotreeView(
                 title="Bogotree Solved" if state["solved"] else "Bogotree",
                 state=state,
@@ -559,3 +570,6 @@ async def setup(bot: BotCore):
             ),
             response=True,
         )
+        if best_improved and message:
+            await message.add_reaction(sorted_emoji)
+            await message.add_reaction(star_emoji)
