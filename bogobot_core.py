@@ -10,7 +10,7 @@ import importlib
 import contextvars
 import time
 from typing import Any, Callable, TYPE_CHECKING, Concatenate, cast
-from ocr import LibTesseractOCR, TESSDATA_FAST_URL
+from ocr import LibTesseractOCR, OcrCrop, TESSDATA_FAST_URL
 from stream import StreamHandler
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
@@ -92,16 +92,13 @@ class BotCore(discord.Client):
             int(self.config.get("sort_observed_bottom", 530)),
         )
 
-        self.STATS_COORDS: dict[str, 
-                                tuple[int, int, int, int] |
-                                tuple[int, int, int, int, str] |
-                                tuple[int, int, int, int, tuple[str | None, int | None]]] = {
-            "shuffles": (81, 610, 312, 640),
-            "comparisons": (331, 610, 551, 640),
-            "best_run": (645, 610, 730, 640, "0123456789/"),
-            "shuffles_sec": (819, 610, 1043, 640),
-            "average_best_shuffle": (80, 670, 115, 685, "0123456789."),
-            "uptime": (1160, 10, 1260, 30, "0123456789dhm ")
+        self.STATS_COORDS: dict[str, OcrCrop] = {
+            "shuffles": OcrCrop(81, 610, 312, 640, whitelist="0123456789,.KMBTQi"),
+            "comparisons": OcrCrop(331, 610, 551, 640, whitelist="0123456789,.KMBTQi"),
+            "best_run": OcrCrop(645, 610, 730, 640, whitelist="0123456789/"),
+            "shuffles_sec": OcrCrop(819, 610, 1043, 640),
+            "average_best_shuffle": OcrCrop(80, 670, 115, 685, whitelist="0123456789."),
+            "uptime": OcrCrop(1150, 10, 1260, 30, whitelist="0123456789dhm ")
         }
         self.THRESHOLD = 165
         self.stats: dict[str, str] = {}

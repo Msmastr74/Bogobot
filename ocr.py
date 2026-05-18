@@ -6,6 +6,7 @@ import os
 import queue
 import threading
 import urllib.request
+from dataclasses import dataclass
 from typing import Any
 import logging
 
@@ -13,9 +14,26 @@ import cv2
 import numpy as np
 from PIL import Image
 
-OcrCrop = tuple[tuple[int, int, int, int], str, int | None]
+@dataclass(frozen=True)
+class OcrCrop:
+    left: int
+    top: int
+    right: int
+    bottom: int
+    whitelist: str = "0123456789,"
+    psm: int | None = None
+    scale: int | None = None
+    threshold: int | None = None
+    close: bool | None = None
+    dilate: bool | None = None
+
+    @property
+    def coords(self) -> tuple[int, int, int, int]:
+        return self.left, self.top, self.right, self.bottom
+
+
 OcrResult = tuple[str, float]
-OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int, int] | None
+OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int, int, int, bool, bool] | None
 
 TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
 TESSERACT_LANGUAGE = "eng_fast"
@@ -79,14 +97,17 @@ class LibTesseractOCR:
         pil_cell: Image.Image,
         whitelist: str,
         psm: int = 7,
-        scale: int = 3
+        scale: int = 3,
+        threshold: int = 165,
+        close: bool = True,
+        dilate: bool = True,
     ) -> OcrResult:
         with self._state_lock:
             if self._closed:
                 raise RuntimeError("Tesseract OCR engine is closed")
 
             future: concurrent.futures.Future[OcrResult] = concurrent.futures.Future()
-            self._tasks.put((future, pil_cell, whitelist, int(psm), scale))
+            self._tasks.put((future, pil_cell, whitelist, int(psm), scale, threshold, close, dilate))
 
         return await asyncio.wrap_future(future)
 
@@ -110,11 +131,14 @@ class LibTesseractOCR:
         pil_cell: Image.Image,
         whitelist: str,
         psm: int,
-        scale: int
+        scale: int,
+        threshold: int,
+        close: bool,
+        dilate: bool,
     ) -> OcrResult:
         self._set_variable(api, "tessedit_char_whitelist", whitelist)
         self._lib.TessBaseAPISetPageSegMode(api, int(psm))
-        return self._parse_cell_sync(api, pil_cell, whitelist, scale)
+        return self._parse_cell_sync(api, pil_cell, whitelist, scale, threshold, close, dilate)
 
     def _parse_cell_sync(
         self,
@@ -122,8 +146,17 @@ class LibTesseractOCR:
         pil_cell: Image.Image,
         whitelist: str,
         scale: int,
+        threshold: int,
+        close: bool,
+        dilate: bool,
     ) -> OcrResult:
-        processed = preprocess_cell(pil_cell, scale)
+        processed = preprocess_cell(
+            pil_cell,
+            scale,
+            threshold=threshold,
+            close=close,
+            dilate=dilate,
+        )
         image = np.ascontiguousarray(processed, dtype=np.uint8)
         height, width = image.shape
 
@@ -188,11 +221,11 @@ class LibTesseractOCR:
                 if task is None:
                     return
 
-                future, pil_cell, whitelist, psm, scale = task
+                future, pil_cell, whitelist, psm, scale, threshold, close, dilate = task
                 if future.set_running_or_notify_cancel():
                     try:
                         future.set_result(
-                            self._parse_sync(api, pil_cell, whitelist, psm, scale)
+                            self._parse_sync(api, pil_cell, whitelist, psm, scale, threshold, close, dilate)
                         )
                     except Exception as e:
                         future.set_exception(e)
@@ -416,12 +449,15 @@ def preprocess_cell(
     pad: int = 15,
     stroke_thickness: int = 13,
     threshold: int = 165,
+    close: bool = True,
+    dilate: bool = True,
 ) -> np.ndarray:
     # Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
     img = np.array(pil_cell.convert("L"))
     upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
     _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+    if close:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
@@ -481,11 +517,13 @@ def preprocess_cell(
                 shells.append({"box": (x, y, w, h), "type": "normal"})
 
     bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
+    if not dilate:
+        return bw
     return cv2.dilate(bw, np.array(
         dtype=np.uint8,
         object=[
-            [2, 1, 1, 2],
-            [2, 1, 1, 2],
-            [2, 1, 1, 2]
+            [2, 1, 2],
+            [2, 1, 2],
+            [2, 1, 2]
         ]
     ), iterations=1)

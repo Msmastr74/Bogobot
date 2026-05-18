@@ -1,4 +1,3 @@
-from typing import cast
 import numpy as np
 import time
 from PIL import Image
@@ -15,15 +14,14 @@ async def setup(bot: BotCore):
         try:
             async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
                 async def parse_crop(crop: OcrCrop) -> OcrResult:
-                    coords, whitelist, psm = crop
-                    
-                    width, height = coords[2] - coords[0], coords[3] - coords[1]
-                    area = width * height
                     return await bot.ocr.parse(
-                        img.crop(coords),
-                        whitelist,
-                        psm=7 if psm is None else psm,
-                        scale=3 if area > 1500 else 6
+                        img.crop(crop.coords),
+                        crop.whitelist,
+                        psm=7 if crop.psm is None else crop.psm,
+                        scale=3 if crop.scale is None else crop.scale,
+                        threshold=165 if crop.threshold is None else crop.threshold,
+                        close=True if crop.close is None else crop.close,
+                        dilate=True if crop.dilate is None else crop.dilate,
                     )
 
                 return await asyncio.gather(*[
@@ -34,23 +32,9 @@ async def setup(bot: BotCore):
             crops: list[OcrCrop] = []
             stats_specs: list[tuple[int, str, str]] = []
 
-            for name, coords in bot.STATS_COORDS.items():
-                whitelist = "0123456789,"
-                psm: int | None = None
-                if len(coords) >= 5:
-                    extra = coords[4]
-                    if isinstance(extra, str):
-                        whitelist = extra
-                    else:
-                        w, psm = extra
-                        if w is not None:
-                            whitelist = w
-                        if psm is not None:
-                            psm = int(psm)
-                crop_coords = cast(tuple[int, int, int, int], coords[:4])
-
-                stats_specs.append((len(crops), name, whitelist))
-                crops.append((crop_coords, whitelist, psm))
+            for name, crop in bot.STATS_COORDS.items():
+                stats_specs.append((len(crops), name, crop.whitelist))
+                crops.append(crop)
 
             results = await parse_crops(crops)
 
