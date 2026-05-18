@@ -48,12 +48,12 @@ class SortView(discord.ui.LayoutView):
         colors = (self.RED, self.GREEN)
         container = discord.ui.Container(
             discord.ui.TextDisplay(
-                "```ansi\n"
+                "```ansi\n" +
                 ' '.join(
                     map(
                         lambda t: f"{colors[t[0]]}{t[1]}{self.RESET}"
                     , sort_state)
-                )
+                ) + "\n```"
             ),
             discord.ui.TextDisplay(
                 f"Best shuffle: `{correct_count}/{total_count}`"
