@@ -488,8 +488,8 @@ async def setup(bot: BotCore):
             self.add_item(self.controls)
 
         def sync_controls(self) -> None:
-            self.newer.disabled = self.next_page_state is None
-            self.older.disabled = self.previous_page_state is None
+            self.newer.disabled = self.previous_page_state is None
+            self.older.disabled = self.next_page_state is None
             self.refresh.disabled = False
 
         def section_for(self, event: ArchiveEvent) -> PageSection:
@@ -558,7 +558,7 @@ async def setup(bot: BotCore):
             self,
             state: ArchiveState,
         ) -> SectionRead[ArchiveState] | None:
-            event = await self.event_after(state.cursor, state.snapshot_end)
+            event = await self.event_before(state.cursor, state.snapshot_end)
             if event is None:
                 return None
             return SectionRead(
@@ -573,7 +573,7 @@ async def setup(bot: BotCore):
             self,
             state: ArchiveState,
         ) -> SectionRead[ArchiveState] | None:
-            event = await self.event_before(state.cursor, state.snapshot_end)
+            event = await self.event_after(state.cursor, state.snapshot_end)
             if event is None:
                 return None
             return SectionRead(
@@ -588,7 +588,7 @@ async def setup(bot: BotCore):
             self,
             interaction: discord.Interaction,
         ) -> None:
-            await self.show_next_page(interaction)
+            await self.show_previous_page(interaction)
 
         async def refresh_action(
             self,
@@ -599,14 +599,13 @@ async def setup(bot: BotCore):
             await self.set_state(
                 interaction,
                 ArchiveState(cursor=snapshot_end, snapshot_end=snapshot_end),
-                direction="previous",
             )
 
         async def older_action(
             self,
             interaction: discord.Interaction,
         ) -> None:
-            await self.show_previous_page(interaction)
+            await self.show_next_page(interaction)
 
         async def close_action(
             self,
@@ -628,7 +627,7 @@ async def setup(bot: BotCore):
                 snapshot_end=snapshot_end,
             ),
         )
-        page = await view.load(direction="previous")
+        page = await view.load()
         await bot.discord.send(
             **page.as_send_kwargs(),
             view=view,
