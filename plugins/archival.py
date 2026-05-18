@@ -493,6 +493,10 @@ async def setup(bot: BotCore):
                 label="Older",
                 style=discord.ButtonStyle.secondary,
             )
+            self.freeze = discord.ui.Button(
+                label="Freeze",
+                style=discord.ButtonStyle.secondary,
+            )
             self.close = discord.ui.Button(
                 label="Close",
                 style=discord.ButtonStyle.danger,
@@ -501,11 +505,13 @@ async def setup(bot: BotCore):
             self.newer.callback = self.newer_action
             self.refresh.callback = self.refresh_action
             self.older.callback = self.older_action
+            self.freeze.callback = self.freeze_action
             self.close.callback = self.close_action
             self.controls = discord.ui.ActionRow(
                 self.newer,
                 self.refresh,
                 self.older,
+                self.freeze,
                 self.close,
             )
 
@@ -668,6 +674,26 @@ async def setup(bot: BotCore):
             interaction: discord.Interaction,
         ) -> None:
             await self.show_next_page(interaction)
+
+        async def freeze_action(
+            self,
+            interaction: discord.Interaction,
+        ) -> None:
+            if self.current_page is None:
+                return
+
+            frozen_view = discord.ui.LayoutView(timeout=None)
+            header = self.page_header(self.current_page)
+            if header:
+                frozen_view.add_item(discord.ui.TextDisplay(header))
+            frozen_view.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(self._page_body_text(self.current_page.sections)),
+                accent_colour=self.page_accent_colour(self.current_page),
+            ))
+            await interaction.response.edit_message(
+                view=frozen_view,
+                **self.current_page.as_edit_kwargs(),
+            )
 
         async def close_action(
             self,
