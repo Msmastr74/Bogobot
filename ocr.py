@@ -408,7 +408,7 @@ class LibTesseractOCR:
 
         os.makedirs(self.debug_folder, exist_ok=True)
         safe_text = "".join(
-            c for c in text if c.isalnum() or c in (" ", "_", "-", ",")
+            c for c in text if c.isalnum() or c in (" ", "_", "-", ",", ".")
         ).rstrip()
         new_filename = f"ocr_{safe_text}.png"
         new_path = os.path.join(self.debug_folder, new_filename)

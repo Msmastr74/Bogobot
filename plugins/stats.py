@@ -1,11 +1,56 @@
 import numpy as np
 import time
+from decimal import Decimal, InvalidOperation
 from PIL import Image
 
 from bogobot_core import BotCore
 from ocr import OcrCrop, OcrResult
 import asyncio
 import cv2
+
+STAT_SUFFIX_POWERS = {
+    "": 0,
+    "k": 3,
+    "m": 6,
+    "b": 9,
+    "t": 12,
+    "q": 15,
+    "qa": 15,
+    "qd": 15,
+    "qi": 18,
+    "qt": 18,
+    "sx": 21,
+    "sp": 24,
+    "oc": 27,
+    "no": 30,
+    "dc": 33,
+}
+
+
+def parse_number(value: str | None) -> Decimal | None:
+    if not value:
+        return None
+
+    compact = value.strip().replace(",", "").replace(" ", "")
+    suffix_start = len(compact)
+    while suffix_start > 0 and compact[suffix_start - 1].isalpha():
+        suffix_start -= 1
+
+    number_text = compact[:suffix_start]
+    suffix = compact[suffix_start:].lower()
+    if not number_text or suffix not in STAT_SUFFIX_POWERS:
+        return None
+
+    try:
+        number = Decimal(number_text)
+    except InvalidOperation:
+        return None
+
+    if not number.is_finite():
+        return None
+
+    return number * (Decimal(10) ** STAT_SUFFIX_POWERS[suffix])
+
 
 async def setup(bot: BotCore):
     last_sort_signature: np.ndarray | None = None
@@ -97,8 +142,8 @@ async def setup(bot: BotCore):
             return None
 
         current_value = await bot.milestones.get(milestone_name)
-        current_number = parse_stat_value(current_value)
-        next_number = parse_stat_value(milestone_value)
+        current_number = parse_number(current_value)
+        next_number = parse_number(milestone_value)
 
         if (
             current_number is not None
@@ -109,17 +154,8 @@ async def setup(bot: BotCore):
 
         return await bot.milestones.update(milestone_name, milestone_value, timestamp=timestamp, img=img)
 
-    def parse_stat_value(value: str | None) -> float | None:
-        if not value:
-            return None
-
-        try:
-            return float(value.replace(",", ""))
-        except ValueError:
-            return None
-
     def round_stat_down_to_power(value: str | None) -> str | None:
-        number = parse_stat_value(value)
+        number = parse_number(value)
         if number is None:
             return None
 
@@ -131,7 +167,7 @@ async def setup(bot: BotCore):
         return f"{number // power * power:,}"
 
     def round_stat_down_to_int(value: str | None) -> str | None:
-        number = parse_stat_value(value)
+        number = parse_number(value)
         if number is None:
             return None
 
