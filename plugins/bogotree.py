@@ -153,8 +153,8 @@ def best_result_text(
 ) -> str:
     current = state["best_equal_count"]
     if previous_best_equal_count is None or previous_best_equal_count == current:
-        return str(current)
-    return f"{previous_best_equal_count} {ARROW} {current}"
+        return f"{current}/{len(state['x'])}"
+    return f"{previous_best_equal_count}/{len(state['x'])} {ARROW} {current}/{len(state['x'])}"
 
 
 async def setup(bot: BotCore):
