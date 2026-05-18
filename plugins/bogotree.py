@@ -197,7 +197,7 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
         timestamp = stats["best_timestamp"]
         best_time = f"<t:{timestamp}:T>" if timestamp else "never"
         return (
-            f"<@{uid}> `{stats['best_equal_count']}/{BOGOTREE_N}` "
+            f"<@{uid}> `{stats['best_equal_count']}/{BOGOTREE_N}`\n"
             f"-# first reached {best_time}"
         )
 
