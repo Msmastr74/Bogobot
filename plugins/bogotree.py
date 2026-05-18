@@ -399,7 +399,7 @@ def render_tree_state(values: list[int]) -> list[str]:
         for i, value in enumerate(row):
             state_segment = f"{value / 100:.2f}"
             if i != len(row) - 1:
-                state_segment += ", "
+                state_segment += " "
             mode_index = modes.index(value) if value in modes else len(modes)
             unicode_char = chr(max(0x2588 - mode_index, 0x2580))
             tree_line += unicode_char * len(state_segment)
