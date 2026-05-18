@@ -122,7 +122,7 @@ If Discord reports `NotFound` or `Forbidden` while editing a persistent message,
 
 Monitor messages use static `LayoutView` payloads. The display logic stays encapsulated in one component, and `timeout=None` keeps discord.py from registering non-interactive static views for background dispatch.
 
-`PersistentChannelMonitor.command(root, *args, **kwargs)` forwards its arguments to `root.command(...)` and registers a standard `action: Literal["start", "stop"]` command. This lets monitor plugins use either a `bot.setup` command group or any compatible command-decorator object.
+`PersistentChannelMonitor.command(root, *args, **kwargs)` forwards its arguments to `root.command(...)` and registers a standard `action: Literal["start", "stop", "resend"]` command. This lets monitor plugins use either a `bot.setup` command group or any compatible command-decorator object.
 
 Periodic monitors should own their own `utils.tasks.loop` and call `monitor.tick()` inside it. Event-driven monitors can call `tick()` directly from callbacks such as `@bot.new_value_callback`.
 
@@ -192,8 +192,8 @@ The admin plugin adds `/manage state` and `/manage logs`.
 ## Management Commands
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
 
-- `/manage monitor start|stop`: Creates or removes the persistent monitor message in the current channel.
-- `/manage leaderboard_monitor start|stop`: Creates or removes a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes.
+- `/manage monitor start|stop|resend`: Creates, removes, or resends the persistent monitor message in the current channel. `resend` requires an existing accessible monitor message, sends the replacement first, then deletes the old message.
+- `/manage leaderboard_monitor start|stop|resend`: Creates, removes, or resends a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes. `resend` sends the replacement first, then deletes the old message.
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.

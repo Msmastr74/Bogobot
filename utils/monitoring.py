@@ -55,7 +55,7 @@ class PersistentChannelMonitor:
         @root.command(*args, **kwargs)
         async def monitor_command(
             interaction: discord.Interaction,
-            action: Literal["start", "stop"],
+            action: Literal["start", "stop", "resend"],
         ):
             await self.handle_command(interaction, action)
         return monitor_command
@@ -63,7 +63,7 @@ class PersistentChannelMonitor:
     async def handle_command(
         self,
         interaction: discord.Interaction,
-        action: Literal["start", "stop"],
+        action: Literal["start", "stop", "resend"],
     ) -> None:
         channel_id = interaction.channel_id
 
@@ -92,6 +92,39 @@ class PersistentChannelMonitor:
             )
             return
 
+        if action == "resend":
+            if existing_message_id is None:
+                await self.bot.discord.send(
+                    f"{self.display_name} is not currently running in this channel.",
+                    response=True,
+                )
+                return
+
+            existing = await self._ensure_message(channel_id, int(existing_message_id))
+            if existing is None:
+                await self.bot.discord.send(
+                    f"{self.display_name} message is not accessible.",
+                    response=True,
+                )
+                return
+
+            message = await self._send_initial_message()
+            if message is None:
+                await self.bot.discord.send(
+                    "Failed to send replacement message to this channel.",
+                    response=True,
+                )
+                return
+
+            self.bot.edits.register(message)
+            await self.tracker.set(channel_id, message.id)
+            await self._delete_message(channel_id, int(existing_message_id))
+            await self.bot.discord.send(
+                f"{self.display_name} resent in this channel.",
+                response=True,
+            )
+            return
+
         if existing_message_id is not None:
             await self.bot.discord.send(
                 f"{self.display_name} is already running in this channel.",
@@ -99,25 +132,16 @@ class PersistentChannelMonitor:
             )
             return
 
-        payload = await _resolve(self.initial_payload())
-
-        try:
-            message = await self.bot.discord.send(
-                response=False,
-                **payload,
-            )
-        except (discord.NotFound, discord.Forbidden):
-            message = None
-
-        if message is None or message.message is None:
+        message = await self._send_initial_message()
+        if message is None:
             await self.bot.discord.send(
                 "Failed to send message to this channel.",
                 response=True,
             )
             return
 
-        self.bot.edits.register(message.message)
-        await self.tracker.set(channel_id, message.message.id)
+        self.bot.edits.register(message)
+        await self.tracker.set(channel_id, message.id)
         await self.bot.discord.send(
             f"{self.display_name} online in this channel.",
             response=True,
@@ -168,6 +192,22 @@ class PersistentChannelMonitor:
             return False
 
         return True
+
+    async def _send_initial_message(self) -> discord.Message | None:
+        payload = await _resolve(self.initial_payload())
+
+        try:
+            message = await self.bot.discord.send(
+                response=False,
+                **payload,
+            )
+        except (discord.NotFound, discord.Forbidden):
+            return None
+
+        if message is None or message.message is None:
+            return None
+
+        return message.message
 
     async def _ensure_message(
         self,
