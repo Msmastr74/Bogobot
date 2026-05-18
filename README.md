@@ -33,7 +33,7 @@ Go into `config.json` and provide the main credentials:
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.
  * `sort_change_threshold`: Optional monitor sensitivity for stream visual changes. Defaults to `0.1`.
  * `sort_section_count`: Optional number of sort sections used for monitor classification. Defaults to `25`.
- * `sort_observed_left`, `sort_observed_top`, `sort_observed_right`, `sort_observed_bottom`: Optional thin-strip coordinates used to classify red/green sort sections.
+ * `sort_area_left`, `sort_area_top`, `sort_observed_top`, `sort_area_right`, `sort_area_bottom`: Optional coordinates used to classify red/green sort sections and read sort values.
  * `ocr_concurrency`: Optional number of persistent libtesseract worker threads. Defaults to `2`.
  * `tessdata_path`: Optional directory for bot-managed `eng_fast.traineddata`. Defaults to `tessdata`.
  * `milestone_initialize_format`: Optional message template for new milestones.

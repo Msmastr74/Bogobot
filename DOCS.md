@@ -21,10 +21,11 @@ User-edited settings:
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.1.
 - `sort_section_count`: Number of sort sections to classify for the monitor value. Defaults to 25.
-- `sort_observed_left`: Left x-coordinate of the horizontal strip used for sort-section classification. Defaults to 80.
+- `sort_area_left`: Left x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 80.
 - `sort_observed_top`: Top y-coordinate of the horizontal strip used for sort-section classification. Defaults to 515.
-- `sort_observed_right`: Right x-coordinate of the horizontal strip used for sort-section classification. Defaults to 1200.
-- `sort_observed_bottom`: Bottom y-coordinate of the horizontal strip used for sort-section classification. Defaults to 530.
+- `sort_area_top`: Top y-coordinate of the sort area. Defaults to 70.
+- `sort_area_right`: Right x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 1200.
+- `sort_area_bottom`: Bottom y-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 530.
 - `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 2.
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
