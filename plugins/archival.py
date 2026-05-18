@@ -55,6 +55,8 @@ async def setup(bot: BotCore):
     archive_lock = asyncio.Lock()
     flush_task: asyncio.Task[None] | None = None
     last_event_time: float | None = None
+    chunk_base_time: float | None = None
+    chunk_elapsed_centiseconds = 0
     chunk_started = False
     chunk_event_count = 0
 
@@ -401,6 +403,7 @@ async def setup(bot: BotCore):
 
     @bot.new_value_callback
     async def archive_value(value: int, timestamp: float):
+        nonlocal chunk_base_time, chunk_elapsed_centiseconds
         nonlocal chunk_event_count, chunk_started, last_event_time
 
         if value < 0 or value > bot.SORT_SECTION_COUNT:
@@ -416,12 +419,21 @@ async def setup(bot: BotCore):
                 )
             ):
                 pending_parts.append(chunk_header(timestamp))
+                chunk_base_time = timestamp
+                chunk_elapsed_centiseconds = 0
                 last_event_time = timestamp
                 chunk_started = True
                 chunk_event_count = 0
 
-            previous_time = last_event_time if last_event_time is not None else timestamp
-            dt_centiseconds = max(0, round((timestamp - previous_time) * 100))
+            if chunk_base_time is None:
+                chunk_base_time = timestamp
+
+            event_elapsed_centiseconds = max(
+                chunk_elapsed_centiseconds,
+                int((timestamp - chunk_base_time) * 100),
+            )
+            dt_centiseconds = event_elapsed_centiseconds - chunk_elapsed_centiseconds
+            chunk_elapsed_centiseconds = event_elapsed_centiseconds
             last_event_time = timestamp
             pending_parts.append(f"{dt_centiseconds},{value};")
             chunk_event_count += 1
