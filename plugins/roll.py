@@ -22,7 +22,7 @@ async def setup(bot: BotCore):
                 map(lambda t: t.strip(), text.split(delim))
             )
         )
-    @bot.setup.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
+    @bogo_group.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     async def roll(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.randint(1, 100)}", response=True)
     

@@ -214,8 +214,8 @@ Several management commands use an explicit action parameter instead of separate
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
-- `/roll`, `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/sort`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexicographic` modes.
-- `/bogo bogo|shuffle|choice|sort|sort-list|sort-listr|sort-lexicographic`: Text bogo, shuffle/choice, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
+- `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/sort`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexicographic` modes.
+- `/bogo roll|bogo|shuffle|choice|sort|sort-list|sort-listr|sort-lexicographic`: Dice roll, text bogo, shuffle/choice, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
 - `/bogotree [run|info|leaderboard|reset] [target]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `leaderboard` shows per-user calls, simulated steps, and best score, optionally forcing `target` into each leaderboard section; `reset` requires mod rank.
 
 Account commands live under `/accounts`:

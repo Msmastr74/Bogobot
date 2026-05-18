@@ -101,7 +101,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
  * /avatar and /ping: Small Discord utility commands.
- * /roll and friends: Random number, /sort, and grouped /bogo shuffle, choice, text bogo, and small bogosort utilities.
+ * /bogo and friends: Grouped roll, shuffle, choice, text bogo, and small bogosort utilities, plus top-level /sort and random number helpers.
  * /bogotree: Advances or resets a collaborative random equalization puzzle.
  * /accounts: Manages account permission ranks.
 
