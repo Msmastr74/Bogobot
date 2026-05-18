@@ -140,7 +140,7 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
         lines = [f"### {title}"]
         visible_uids: set[str] = set()
         if not ranked:
-            lines.append("#- No data")
+            lines.append("-# No data")
         else:
             for index, (uid, stats) in enumerate(ranked, start=1):
                 line = f"`#{index}` {line_for(uid, stats)}"
