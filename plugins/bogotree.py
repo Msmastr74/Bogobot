@@ -19,18 +19,28 @@ BOGOTREE_STATE_KEY = "state"
 BOGOTREE_ACCOUNT_KEY = "bogotree"
 ARROW = "→"
 LEADERBOARD_SECTION_LIMIT = 1200
-BOGOTREE_PSEUDOCODE = """```text
-x = Array(n).fill(0)
+BOGOTREE_SOLVED_SCORE = BOGOTREE_N * 100
+BOGOTREE_PSEUDOCODE = f"""```text
+Start with {BOGOTREE_N} zeroes.
 
-each /bogotree run:
-  candidate = x
-  batch_best = x
-  repeat random(MIN_STEPS..MAX_STEPS) times:
-    r = Array(n).fill_each(randint(1..n))
-    candidate = sorted(candidate) + sorted_desc(r)
-    remember the last candidate with the best equal-slot count
-    stop forever if all slots are equal
-  x = batch_best
+Each /bogotree run simulates {BOGOTREE_MIN_STEPS} to {BOGOTREE_MAX_STEPS} steps.
+
+On each step:
+  1. Sort the current values from smallest to largest.
+  2. Roll {BOGOTREE_N} random numbers from 1 to {BOGOTREE_N}.
+  3. Sort those rolls from largest to smallest.
+  4. Add them together slot by slot.
+
+Score each result by its three biggest matching groups:
+  largest group  = 1.00 point per slot
+  second group   = 0.50 point per slot
+  third group    = 0.25 point per slot
+
+Then multiply by 100.
+
+The run remembers the latest result with the best score.
+If every slot becomes equal, Bogotree is solved.
+After the run, the shared state moves to the best result from that run.
 ```"""
 
 
@@ -39,6 +49,7 @@ class BogotreeState(TypedDict):
     current_step: int
     total_steps: int
     best_step: int
+    best_score: int
     best_equal_count: int
     best_x: list[int]
     solved: bool
@@ -47,6 +58,7 @@ class BogotreeState(TypedDict):
 class BogotreeUserStats(TypedDict):
     calls: int
     steps: int
+    best_score: int
     best_equal_count: int
     best_timestamp: int
     username: str
@@ -60,7 +72,7 @@ class BogotreeView(discord.ui.LayoutView):
         state: BogotreeState,
         batch_steps: int | None = None,
         selected_steps: int | None = None,
-        previous_best_equal_count: int | None = None,
+        previous_best_score: int | None = None,
         show_info: bool = False,
     ):
         super().__init__(timeout=None)
@@ -69,8 +81,10 @@ class BogotreeView(discord.ui.LayoutView):
         body_lines = [
             f"State: `{format_array(x)}`",
             f"Current step: `{state['current_step']:,}`",
+            f"Current score: `{bogotree_score(x):,}`",
             f"Current in position: `{equal_count(x)}/{len(x)}`",
-            f"Best result: `{best_result_text(state, previous_best_equal_count)}`",
+            f"Best score: `{best_result_text(state, previous_best_score)}`",
+            f"Best in position: `{state['best_equal_count']}/{len(x)}`",
             f"Best step: `{state['best_step']:,}`",
             f"Total simulated: `{state['total_steps']:,}`",
         ]
@@ -82,8 +96,8 @@ class BogotreeView(discord.ui.LayoutView):
             body_lines.append("Solved. Waiting for a mod reset.")
 
         best_improved = (
-            previous_best_equal_count is not None
-            and state["best_equal_count"] > previous_best_equal_count
+            previous_best_score is not None
+            and state["best_score"] > previous_best_score
         )
         accent_colour = discord.Color.gold() if best_improved else discord.Color.blurple()
         if state["solved"] and not best_improved:
@@ -205,8 +219,8 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
         timestamp = stats["best_timestamp"]
         best_time = f"<t:{timestamp}:T>" if timestamp else "never"
         return (
-            f"<@{uid}> `{stats['best_equal_count']}/{BOGOTREE_N}`\n"
-            f"-# first reached {best_time}"
+            f"<@{uid}> `{stats['best_score']:,}`\n"
+            f"-# {stats['best_equal_count']}/{BOGOTREE_N} in position · first reached {best_time}"
         )
 
 
@@ -214,8 +228,9 @@ def ranked_best_score(
     leaderboard: dict[str, BogotreeUserStats],
 ) -> list[tuple[str, BogotreeUserStats]]:
     return sorted(
-        filter(lambda i: i[1]["best_equal_count"] > 0, leaderboard.items()),
+        filter(lambda i: i[1]["best_score"] > 0, leaderboard.items()),
         key=lambda item: (
+            -item[1]["best_score"],
             -item[1]["best_equal_count"],
             item[1]["best_timestamp"] or 2**63 - 1,
             -item[1]["steps"],
@@ -254,6 +269,7 @@ def default_state() -> BogotreeState:
         "current_step": 0,
         "total_steps": 0,
         "best_step": 0,
+        "best_score": 0,
         "best_equal_count": 0,
         "best_x": [0 for _ in range(BOGOTREE_N)],
         "solved": False,
@@ -264,6 +280,7 @@ def default_user_stats(username: str = "") -> BogotreeUserStats:
     return {
         "calls": 0,
         "steps": 0,
+        "best_score": 0,
         "best_equal_count": 0,
         "best_timestamp": 0,
         "username": username,
@@ -275,13 +292,18 @@ def normalize_user_stats(raw_stats: object, username: str = "") -> BogotreeUserS
         return default_user_stats(username)
 
     try:
+        best_equal_count = max(0, min(
+            BOGOTREE_N,
+            int(raw_stats.get("best_equal_count", 0)),
+        ))
         return {
             "calls": max(0, int(raw_stats.get("calls", 0))),
             "steps": max(0, int(raw_stats.get("steps", 0))),
-            "best_equal_count": max(0, min(
-                BOGOTREE_N,
-                int(raw_stats.get("best_equal_count", 0)),
-            )),
+            "best_score": max(0, int(raw_stats.get(
+                "best_score",
+                best_equal_count * 100,
+            ))),
+            "best_equal_count": best_equal_count,
             "best_timestamp": max(0, int(raw_stats.get("best_timestamp", 0))),
             "username": str(raw_stats.get("username", username)),
         }
@@ -302,6 +324,12 @@ def normalize_state(raw_state: object) -> BogotreeState:
         best_equal_count = max(0, int(raw_state.get("best_equal_count", 0)))
         if best_step > 0:
             best_equal_count = max(best_equal_count, equal_count(best_x))
+            best_score = max(
+                int(raw_state.get("best_score", 0)),
+                bogotree_score(best_x),
+            )
+        else:
+            best_score = max(0, int(raw_state.get("best_score", 0)))
         solved = bool(raw_state.get("solved", False)) or best_equal_count >= BOGOTREE_N
     except (TypeError, ValueError):
         return default_state()
@@ -311,6 +339,7 @@ def normalize_state(raw_state: object) -> BogotreeState:
         "current_step": current_step,
         "total_steps": total_steps,
         "best_step": best_step,
+        "best_score": best_score,
         "best_equal_count": best_equal_count,
         "best_x": best_x,
         "solved": solved,
@@ -329,8 +358,17 @@ def equal_count(values: list[int]) -> int:
     return max(Counter(values).values())
 
 
-def score(values: list[int]) -> tuple[int, int]:
-    return equal_count(values), -spread(values)
+def mode_counts(values: list[int]) -> list[int]:
+    return sorted(Counter(values).values(), reverse=True)
+
+
+def bogotree_score(values: list[int]) -> int:
+    counts = [*mode_counts(values), 0, 0]
+    return (counts[0] * 4 + counts[1] * 2 + counts[2]) * 25
+
+
+def score(values: list[int]) -> tuple[int, int, int]:
+    return bogotree_score(values), equal_count(values), -spread(values)
 
 
 def spread(values: list[int]) -> int:
@@ -354,12 +392,12 @@ def format_array(values: list[int]) -> str:
 
 def best_result_text(
     state: BogotreeState,
-    previous_best_equal_count: int | None = None,
+    previous_best_score: int | None = None,
 ) -> str:
-    current = state["best_equal_count"]
-    if previous_best_equal_count is None or previous_best_equal_count == current:
-        return f"{current}/{len(state['x'])}"
-    return f"{previous_best_equal_count}/{len(state['x'])} {ARROW} {current}/{len(state['x'])}"
+    current = state["best_score"]
+    if previous_best_score is None or previous_best_score == current:
+        return f"{current:,}"
+    return f"{previous_best_score:,} {ARROW} {current:,}"
 
 
 async def setup(bot: BotCore):
@@ -434,6 +472,7 @@ async def setup(bot: BotCore):
         *,
         calls: int,
         steps: int,
+        best_score: int,
         best_equal_count: int,
     ) -> None:
         uid = str(interaction.user.id)
@@ -446,7 +485,8 @@ async def setup(bot: BotCore):
         stats["calls"] += calls
         stats["steps"] += steps
 
-        if best_equal_count > stats["best_equal_count"]:
+        if best_score > stats["best_score"]:
+            stats["best_score"] = best_score
             stats["best_equal_count"] = best_equal_count
             stats["best_timestamp"] = int(time.time())
 
@@ -456,6 +496,7 @@ async def setup(bot: BotCore):
         for uid, raw_stats in await bot.accounts.query(BOGOTREE_ACCOUNT_KEY):
             stats = normalize_user_stats(raw_stats)
             stats["steps"] = 0
+            stats["best_score"] = 0
             stats["best_equal_count"] = 0
             stats["best_timestamp"] = 0
             await bot.accounts[uid].write(BOGOTREE_ACCOUNT_KEY, stats)
@@ -522,10 +563,10 @@ async def setup(bot: BotCore):
             current = state["x"]
             best_x = state["best_x"]
             best_step = state["best_step"]
-            previous_best_equal_count = state["best_equal_count"]
-            best_score = state["best_equal_count"], -spread(best_x)
+            previous_best_score = state["best_score"]
+            best_score = score(best_x) if previous_best_score else (0, 0, 0)
             batch_best_x = current
-            batch_best_score: tuple[int, int] | None = None
+            batch_best_score: tuple[int, int, int] | None = None
             batch_best_offset = 0
 
             for _ in range(planned_steps):
@@ -541,7 +582,7 @@ async def setup(bot: BotCore):
                     best_x = current
                     best_step = current_step_start + performed_steps
                     best_score = current_score
-                    if best_score[0] >= BOGOTREE_N:
+                    if best_score[0] >= BOGOTREE_SOLVED_SCORE:
                         break
 
             selected_steps = batch_best_offset
@@ -549,14 +590,16 @@ async def setup(bot: BotCore):
             state["current_step"] = current_step_start + selected_steps
             state["best_x"] = best_x
             state["best_step"] = best_step
-            state["best_equal_count"] = best_score[0]
-            state["solved"] = best_score[0] >= BOGOTREE_N
-            best_improved = state["best_equal_count"] > previous_best_equal_count
+            state["best_score"] = best_score[0]
+            state["best_equal_count"] = best_score[1]
+            state["solved"] = best_score[1] >= BOGOTREE_N
+            best_improved = state["best_score"] > previous_best_score
             await update_user_stats(
                 interaction,
                 calls=1,
                 steps=performed_steps,
-                best_equal_count=batch_best_score[0] if batch_best_score is not None else 0,
+                best_score=batch_best_score[0] if batch_best_score is not None else 0,
+                best_equal_count=batch_best_score[1] if batch_best_score is not None else 0,
             )
             await save_state(state)
 
@@ -566,7 +609,7 @@ async def setup(bot: BotCore):
                 state=state,
                 batch_steps=performed_steps,
                 selected_steps=selected_steps,
-                previous_best_equal_count=previous_best_equal_count,
+                previous_best_score=previous_best_score,
             ),
             response=True,
         )
