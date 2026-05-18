@@ -363,6 +363,8 @@ def mode_counts(values: list[int]) -> list[int]:
 
 
 def bogotree_score(values: list[int]) -> int:
+    if sum(values) == 0:
+        return 0
     counts = [*mode_counts(values), 0, 0]
     return (counts[0] * 4 + counts[1] * 2 + counts[2]) * 25
 
