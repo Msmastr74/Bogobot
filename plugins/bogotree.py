@@ -121,9 +121,9 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
             target=target,
         ))
         self.add_item(self.leaderboard_container(
-            "Calls",
+            "Uses",
             ranked_calls(leaderboard),
-            lambda uid, stats: f"<@{uid}> `{stats['calls']:,}` calls",
+            lambda uid, stats: f"<@{uid}> `{stats['calls']:,}` uses",
             discord.Color.dark_teal(),
             target=target,
         ))
