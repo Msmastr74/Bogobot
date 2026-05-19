@@ -401,18 +401,14 @@ def best_result_text(state: CbogoState, previous_best_score: int | None = None) 
 
 def get_shuffle_count(min_count: int, max_count: int) -> int:
     """
-    Gets a random shuffle count nonlinearly, with the curve centered around min_count + 25% of the range.
+    Gets a random shuffle count nonlinearly, with the curve centered around 50% of the range.
     """
     if min_count >= max_count:
         return min_count
-    range_size = max_count - min_count
-    center = min_count + range_size * 0.25
-    # Using a quadratic distribution for more values around the center
-    rand = random.random()
-    if rand < 0.5:
-        return int(center - (center - min_count) * (1 - (rand * 2) ** 2))
-    else:
-        return int(center + (max_count - center) * ((rand - 0.5) * 2) ** 2)
+    range_size = max_count - min_count + 1
+    random_value = random.random()
+    nonlinear_value = (random_value ** 2) * range_size
+    return min_count + int(nonlinear_value)
 
 def run_shuffles(values: list[int]) -> tuple[list[int], int, int]:
     current = values[:]
