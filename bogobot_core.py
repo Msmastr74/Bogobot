@@ -16,7 +16,7 @@ from utils.accounts import AccountManager
 from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
-from utils.callbacks import CallbackRegistry, AsyncCallback
+from utils.callbacks import CallbackRegistry, AsyncCallback, MaybeAwaitableT
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -204,15 +204,15 @@ class BotCore(discord.Client):
     def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
         return self.accounts.is_authorized(user_id, perm_requirement)
     
-    def init_callback(self, callback: AsyncCallback[[]]):
+    def init_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
         self.callbacks.register('init', callback)
         return callback
 
-    def connect_callback(self, callback: AsyncCallback[[]]):
+    def connect_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
         self.callbacks.register('connect', callback)
         return callback
 
-    def close_callback(self, callback: AsyncCallback[[]]):
+    def close_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
         self.callbacks.register('close', callback)
         return callback
 
@@ -248,14 +248,14 @@ class BotCore(discord.Client):
 
     def command_telemetry_callback(
         self,
-        callback: AsyncCallback[["CommandTelemetryEvent"]],
+        callback: AsyncCallback[["CommandTelemetryEvent"], MaybeAwaitableT],
     ):
         self.callbacks.register('command_telemetry', callback)
         return callback
 
     def new_frame_callback(
         self,
-        callback: AsyncCallback[[Image.Image]]
+        callback: AsyncCallback[[Image.Image], MaybeAwaitableT]
     ):
         self.callbacks.register('new_frame', callback)
         return callback
@@ -265,7 +265,7 @@ class BotCore(discord.Client):
 
     def new_value_callback(
         self,
-        callback: AsyncCallback[[list[tuple[bool, int]], int, float]]
+        callback: AsyncCallback[[list[tuple[bool, int]], int, float], MaybeAwaitableT]
     ):
         self.callbacks.register('new_value', callback)
         return callback
@@ -283,7 +283,7 @@ class BotCore(discord.Client):
     
     def member_join_callback(
         self,
-        callback: AsyncCallback[[discord.Member | discord.User]]
+        callback: AsyncCallback[[discord.Member | discord.User], MaybeAwaitableT]
     ):
         self.callbacks.register('member_join', callback)
         return callback
@@ -293,7 +293,7 @@ class BotCore(discord.Client):
 
     def guild_join_callback(
         self,
-        callback: AsyncCallback[[discord.Guild]]
+        callback: AsyncCallback[[discord.Guild], MaybeAwaitableT]
     ):
         self.callbacks.register('guild_join', callback)
         return callback

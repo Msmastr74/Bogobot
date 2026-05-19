@@ -98,7 +98,7 @@ async def setup(bot: BotCore):
     @bot.guild_join_callback
     async def on_guild_join(guild: discord.Guild):
         bot.logger.info(
-            f"Bot joined new guild; restarting automatic account creation..."
+            f"Bot joined new guild {guild.name} ({guild.id}); restarting automatic account creation..."
         )
         await load_accounts()
     

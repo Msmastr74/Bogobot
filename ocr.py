@@ -7,7 +7,7 @@ import queue
 import threading
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, overload
 import logging
 
 import cv2
@@ -33,10 +33,37 @@ class OcrCrop:
 
 
 OcrResult = tuple[str, float]
-OcrTask = tuple[concurrent.futures.Future[OcrResult], Image.Image, str, int, int, int, bool, bool] | None
+
+
+@dataclass(frozen=True)
+class OcrBox:
+    text: str
+    confidence: float
+    box: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class OcrDebugInfo:
+    raw: str
+    filtered: str
+    words: list[OcrBox]
+    symbols: list[OcrBox]
+
+
+@dataclass(frozen=True)
+class OcrDebugResult:
+    text: str
+    confidence: float
+    debug: OcrDebugInfo
+
+
+OcrTaskResult = OcrResult | OcrDebugResult
+OcrTask = tuple[concurrent.futures.Future[OcrTaskResult], Image.Image, str, int, int, int, bool, bool, bool] | None
 
 TESSDATA_FAST_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata"
 TESSERACT_LANGUAGE = "eng_fast"
+RIL_WORD = 3
+RIL_SYMBOL = 4
 
 os.environ["OMP_THREAD_LIMIT"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -102,12 +129,61 @@ class LibTesseractOCR:
         close: bool = True,
         dilate: bool = True,
     ) -> OcrResult:
+        result = await self._parse(
+            pil_cell,
+            whitelist,
+            psm=psm,
+            scale=scale,
+            threshold=threshold,
+            close=close,
+            dilate=dilate,
+            debug=False,
+        )
+        if isinstance(result, OcrDebugResult):
+            return result.text, result.confidence
+        return result
+
+    async def parse_debug(
+        self,
+        pil_cell: Image.Image,
+        whitelist: str,
+        psm: int = 7,
+        scale: int = 3,
+        threshold: int = 165,
+        close: bool = True,
+        dilate: bool = True,
+    ) -> OcrDebugResult:
+        result = await self._parse(
+            pil_cell,
+            whitelist,
+            psm=psm,
+            scale=scale,
+            threshold=threshold,
+            close=close,
+            dilate=dilate,
+            debug=True,
+        )
+        if not isinstance(result, OcrDebugResult):
+            raise RuntimeError("OCR debug result was not returned")
+        return result
+
+    async def _parse(
+        self,
+        pil_cell: Image.Image,
+        whitelist: str,
+        psm: int,
+        scale: int,
+        threshold: int,
+        close: bool,
+        dilate: bool,
+        debug: bool,
+    ) -> OcrTaskResult:
         with self._state_lock:
             if self._closed:
                 raise RuntimeError("Tesseract OCR engine is closed")
 
-            future: concurrent.futures.Future[OcrResult] = concurrent.futures.Future()
-            self._tasks.put((future, pil_cell, whitelist, int(psm), scale, threshold, close, dilate))
+            future: concurrent.futures.Future[OcrTaskResult] = concurrent.futures.Future()
+            self._tasks.put((future, pil_cell, whitelist, int(psm), scale, threshold, close, dilate, debug))
 
         return await asyncio.wrap_future(future)
 
@@ -135,10 +211,11 @@ class LibTesseractOCR:
         threshold: int,
         close: bool,
         dilate: bool,
-    ) -> OcrResult:
+        debug: bool,
+    ) -> OcrTaskResult:
         self._set_variable(api, "tessedit_char_whitelist", whitelist)
         self._lib.TessBaseAPISetPageSegMode(api, int(psm))
-        return self._parse_cell_sync(api, pil_cell, whitelist, scale, threshold, close, dilate)
+        return self._parse_cell_sync(api, pil_cell, whitelist, scale, threshold, close, dilate, debug)
 
     def _parse_cell_sync(
         self,
@@ -149,13 +226,15 @@ class LibTesseractOCR:
         threshold: int,
         close: bool,
         dilate: bool,
-    ) -> OcrResult:
+        debug: bool,
+    ) -> OcrTaskResult:
         processed = preprocess_cell(
             pil_cell,
             scale,
             threshold=threshold,
             close=close,
             dilate=dilate,
+            canonicalize_q="Q" in whitelist
         )
         image = np.ascontiguousarray(processed, dtype=np.uint8)
         height, width = image.shape
@@ -180,10 +259,13 @@ class LibTesseractOCR:
                 self._lib.TessDeleteText(raw_text)
 
         conf = self._lib.TessBaseAPIMeanTextConf(api) / 100.0
+        out = "".join(char for char in text if char in whitelist)
+        debug_info = self._ocr_debug_info(api, raw=text, filtered=out) if debug else None
         self._lib.TessBaseAPIClear(api)
 
-        out = "".join(char for char in text if char in whitelist)
         self._save_ocr_debug(processed, f"{conf:.2f}c_{out or text.strip()}")
+        if debug_info is not None:
+            return OcrDebugResult(out, conf, debug_info)
         return out, conf
 
     def _create_api(self) -> ctypes.c_void_p:
@@ -221,11 +303,11 @@ class LibTesseractOCR:
                 if task is None:
                     return
 
-                future, pil_cell, whitelist, psm, scale, threshold, close, dilate = task
+                future, pil_cell, whitelist, psm, scale, threshold, close, dilate, debug = task
                 if future.set_running_or_notify_cancel():
                     try:
                         future.set_result(
-                            self._parse_sync(api, pil_cell, whitelist, psm, scale, threshold, close, dilate)
+                            self._parse_sync(api, pil_cell, whitelist, psm, scale, threshold, close, dilate, debug)
                         )
                     except Exception as e:
                         future.set_exception(e)
@@ -386,6 +468,43 @@ class LibTesseractOCR:
         self._lib.TessDeleteText.argtypes = [ctypes.c_void_p]
         self._lib.TessDeleteText.restype = None
 
+        if hasattr(self._lib, "TessBaseAPIGetIterator"):
+            self._lib.TessBaseAPIGetIterator.argtypes = [ctypes.c_void_p]
+            self._lib.TessBaseAPIGetIterator.restype = ctypes.c_void_p
+
+        if hasattr(self._lib, "TessPageIteratorBegin"):
+            self._lib.TessPageIteratorBegin.argtypes = [ctypes.c_void_p]
+            self._lib.TessPageIteratorBegin.restype = None
+
+        if hasattr(self._lib, "TessPageIteratorNext"):
+            self._lib.TessPageIteratorNext.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self._lib.TessPageIteratorNext.restype = ctypes.c_int
+
+        if hasattr(self._lib, "TessPageIteratorBoundingBox"):
+            self._lib.TessPageIteratorBoundingBox.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            self._lib.TessPageIteratorBoundingBox.restype = ctypes.c_int
+
+        if hasattr(self._lib, "TessResultIteratorGetUTF8Text"):
+            self._lib.TessResultIteratorGetUTF8Text.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            self._lib.TessResultIteratorGetUTF8Text.restype = ctypes.c_void_p
+
+        if hasattr(self._lib, "TessResultIteratorConfidence"):
+            self._lib.TessResultIteratorConfidence.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            self._lib.TessResultIteratorConfidence.restype = ctypes.c_float
+
         if hasattr(self._lib, "TessBaseAPISetSourceResolution"):
             self._lib.TessBaseAPISetSourceResolution.argtypes = [
                 ctypes.c_void_p,
@@ -442,6 +561,166 @@ class LibTesseractOCR:
         with open(new_path, "wb") as f:
             f.write(buffer.tobytes())
 
+    def _ocr_debug_info(
+        self,
+        api: ctypes.c_void_p,
+        *,
+        raw: str,
+        filtered: str,
+    ) -> OcrDebugInfo:
+        return OcrDebugInfo(
+            raw=raw,
+            filtered=filtered,
+            words=self._ocr_iterator_boxes(api, RIL_WORD),
+            symbols=self._ocr_iterator_boxes(api, RIL_SYMBOL),
+        )
+
+    def _ocr_iterator_boxes(self, api: ctypes.c_void_p, level: int) -> list[OcrBox]:
+        required = (
+            "TessBaseAPIGetIterator",
+            "TessPageIteratorBegin",
+            "TessPageIteratorNext",
+            "TessPageIteratorBoundingBox",
+            "TessResultIteratorGetUTF8Text",
+            "TessResultIteratorConfidence",
+        )
+        if any(not hasattr(self._lib, name) for name in required):
+            return []
+
+        iterator = self._lib.TessBaseAPIGetIterator(api)
+        if not iterator:
+            return []
+
+        self._lib.TessPageIteratorBegin(iterator)
+        boxes: list[OcrBox] = []
+
+        while True:
+            text_pointer = self._lib.TessResultIteratorGetUTF8Text(iterator, level)
+            text = ""
+            try:
+                if text_pointer:
+                    text = ctypes.string_at(text_pointer).decode(errors="ignore").strip()
+            finally:
+                if text_pointer:
+                    self._lib.TessDeleteText(text_pointer)
+
+            left = ctypes.c_int()
+            top = ctypes.c_int()
+            right = ctypes.c_int()
+            bottom = ctypes.c_int()
+            has_box = self._lib.TessPageIteratorBoundingBox(
+                iterator,
+                level,
+                ctypes.byref(left),
+                ctypes.byref(top),
+                ctypes.byref(right),
+                ctypes.byref(bottom),
+            )
+
+            if text or has_box:
+                confidence = self._lib.TessResultIteratorConfidence(iterator, level)
+                boxes.append(
+                    OcrBox(
+                        text=text,
+                        confidence=float(confidence) / 100,
+                        box=(left.value, top.value, right.value, bottom.value),
+                    )
+                )
+
+            if not self._lib.TessPageIteratorNext(iterator, level):
+                break
+
+        return boxes
+
+
+def ocr_threshold_mask(
+    pil_cell: Image.Image,
+    scale: int = 3,
+    threshold: int = 165,
+    close: bool = True,
+) -> np.ndarray:
+    img = np.array(pil_cell.convert("L"))
+    upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+    _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
+    if close:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+    return mask
+
+
+def q_ellipse_stroke_score(
+    mask: np.ndarray,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    stroke_thickness: int = 13,
+) -> float:
+    details = q_ellipse_stroke_score_details(mask, x, y, w, h, stroke_thickness)
+    return details[0]
+
+
+def q_ellipse_stroke_score_details(
+    mask: np.ndarray,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    stroke_thickness: int = 13,
+) -> tuple[float, int, int]:
+    body_h = max(1, round(h * 0.72))
+    glyph = (mask[y:y + body_h, x:x + w] == 0).astype(np.uint8) * 255
+    if glyph.size == 0:
+        return 0, 0, 0
+
+    ellipse_mask = np.zeros_like(glyph)
+    cv2.ellipse(
+        ellipse_mask,
+        (w // 2, body_h // 2),
+        (max(1, round(w * 0.42)), max(1, round(body_h * 0.43))),
+        0,
+        0,
+        360,
+        255,
+        thickness=1,
+    )
+
+    ellipse_pixels = cv2.countNonZero(ellipse_mask)
+    if ellipse_pixels == 0:
+        return 0, 0, 0
+
+    glyph_nearby = cv2.dilate(glyph, np.ones((2, 2), np.uint8), iterations=1)
+    intersection = cv2.bitwise_and(glyph_nearby, ellipse_mask)
+    intersection_pixels = cv2.countNonZero(intersection)
+    return intersection_pixels / ellipse_pixels, intersection_pixels, ellipse_pixels
+
+
+@overload
+def preprocess_cell(
+    pil_cell: Image.Image,
+    scale: int = 3,
+    pad: int = 15,
+    stroke_thickness: int = 13,
+    threshold: int = 165,
+    close: bool = True,
+    dilate: bool = True,
+    canonicalize_q: bool = False,
+    *,
+    debug_draw: Literal[False] = False,
+) -> np.ndarray: ...
+
+@overload
+def preprocess_cell(
+    pil_cell: Image.Image,
+    scale: int = 3,
+    pad: int = 15,
+    stroke_thickness: int = 13,
+    threshold: int = 165,
+    close: bool = True,
+    dilate: bool = True,
+    canonicalize_q: bool = False,
+    *,
+    debug_draw: Literal[True],
+) -> tuple[np.ndarray, np.ndarray]: ...
 
 def preprocess_cell(
     pil_cell: Image.Image,
@@ -451,13 +730,17 @@ def preprocess_cell(
     threshold: int = 165,
     close: bool = True,
     dilate: bool = True,
-) -> np.ndarray:
+    canonicalize_q: bool = False,
+    *,
+    debug_draw: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     # Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
-    img = np.array(pil_cell.convert("L"))
-    upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
-    _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
-    if close:
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+    mask = ocr_threshold_mask(
+        pil_cell,
+        scale=scale,
+        threshold=threshold,
+        close=close,
+    )
 
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
@@ -466,8 +749,9 @@ def preprocess_cell(
     img_h, img_w = mask.shape
     image_area = img_h * img_w
     shells = []
+    debug_marks: list[tuple[str, tuple[int, int, int, int], float]] = []
 
-    def draw_inward_stroke(cnt: np.ndarray) -> None:
+    def draw_inward_stroke(cnt: 'cv2.typing.MatLike') -> None:
         contour_mask = np.zeros_like(mask)
         cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=-1)
 
@@ -475,6 +759,12 @@ def preprocess_cell(
         inner = cv2.erode(contour_mask, kernel, iterations=1)
         stroke = cv2.subtract(contour_mask, inner)
         bw[stroke > 0] = 0
+
+    def draw_q_tail(x: int, y: int, w: int, h: int) -> None:
+        start = (x + round(w * 0.50), y + round(h * 0.58))
+        end = (x + round(w * 0.86), y + round(h * 0.95))
+        thickness = max(3, stroke_thickness // 3)
+        cv2.line(bw, start, end, 0, thickness=thickness, lineType=cv2.LINE_AA)
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
@@ -509,21 +799,70 @@ def preprocess_cell(
         if parent_shell:
             cv2.drawContours(bw, [cnt], -1, 255, thickness=-1)
         else:
-            if ellipse_score > 0.88 and solidity > 0.94:
+            q_score = q_ellipse_stroke_score(mask, x, y, w, h, stroke_thickness) if canonicalize_q else 0
+            if q_score > 0.93:
+                cv2.drawContours(bw, [cnt], -1, 0, thickness=-1)
+                draw_q_tail(x, y, w, h)
+                shells.append({"box": (x, y, w, h), "type": "normal"})
+                debug_marks.append(("q", (x, y, w, h), q_score))
+            elif ellipse_score > 0.88 and solidity > 0.94:
                 draw_inward_stroke(cnt)
                 shells.append({"box": (x, y, w, h), "type": "zero"})
+                debug_marks.append(("z", (x, y, w, h), q_score))
             else:
                 cv2.drawContours(bw, [cnt], -1, 0, thickness=-1)
                 shells.append({"box": (x, y, w, h), "type": "normal"})
+                debug_marks.append(("n", (x, y, w, h), q_score))
 
     bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-    if not dilate:
+    if dilate:
+        bw = cv2.dilate(
+            bw,
+            np.array(
+                dtype=np.uint8,
+                object=[
+                    [2, 1, 2],
+                    [2, 1, 2],
+                    [2, 1, 2],
+                ],
+            ),
+            iterations=1,
+        )
+
+    if not debug_draw:
         return bw
-    return cv2.dilate(bw, np.array(
-        dtype=np.uint8,
-        object=[
-            [2, 1, 2],
-            [2, 1, 2],
-            [2, 1, 2]
-        ]
-    ), iterations=1)
+
+    debug_img = cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
+    for branch, (x, y, w, h), q_score in debug_marks:
+        draw_x = x + pad
+        draw_y = y + pad
+        body_h = max(1, round(h * 0.72))
+        colour = {
+            "q": (0, 0, 255),
+            "z": (255, 0, 0),
+            "n": (0, 180, 180),
+        }[branch]
+        cv2.rectangle(debug_img, (draw_x, draw_y), (draw_x + w, draw_y + h), colour, 1)
+        cv2.rectangle(debug_img, (draw_x, draw_y), (draw_x + w, draw_y + body_h), (0, 0, 180), 1)
+        cv2.ellipse(
+            debug_img,
+            (draw_x + w // 2, draw_y + body_h // 2),
+            (max(1, round(w * 0.42)), max(1, round(body_h * 0.43))),
+            0,
+            0,
+            360,
+            (0, 0, 255),
+            1,
+        )
+        cv2.putText(
+            debug_img,
+            f"{branch}:{q_score:.2f}",
+            (draw_x, max(10, draw_y - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            colour,
+            1,
+            cv2.LINE_AA,
+        )
+
+    return bw, debug_img

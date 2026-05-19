@@ -1,6 +1,6 @@
 import asyncio
 import inspect
-from typing import Any, Awaitable, Callable, TypeAlias
+from typing import Any, Awaitable, Callable, TypeAlias, TypeVar
 
 from utils.type import P
 
@@ -42,5 +42,6 @@ class CallbackRegistry:
             if isinstance(result, Exception):
                 print(f"Error in {event} callback {callback}: {result}")
 
-AsyncCallback: TypeAlias = Callable[P, Awaitable[None] | None]
+MaybeAwaitableT = TypeVar("MaybeAwaitableT", Awaitable[None], None)
+AsyncCallback: TypeAlias = Callable[P, MaybeAwaitableT]
 SyncCallback: TypeAlias = Callable[P, None]
