@@ -93,6 +93,11 @@ class CbogoView(discord.ui.LayoutView):
             discord.ui.TextDisplay("\n".join(body_lines)),
             accent_colour=accent_colour,
         ))
+        self.add_item(
+            discord.ui.TextDisplay(
+                f"-# Used at <t:{int(time.time())}:S>"
+            )
+        )
 
 class CbogoLeaderboard(discord.ui.LayoutView):
     def __init__(
