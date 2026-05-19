@@ -349,7 +349,7 @@ def in_position(values: list[int]) -> int:
     return sum(1 for index, value in enumerate(values) if index == value)
 
 HEIGHT_CHARS = [
-    " ̲", "▁", "▂", "▃", "▄", "▅", "▆", "█̲", "▇", "█"
+    " ", " ̲", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"
 ]
 
 
