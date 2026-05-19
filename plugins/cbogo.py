@@ -49,16 +49,16 @@ class CbogoView(discord.ui.LayoutView):
         title: str,
         state: CbogoState,
         run_shuffles: int | None = None,
-        previous_best_score: int | None = None
+        previous_best_score: int | None = None,
+        previous_array: list[int] | None = None,
     ):
         super().__init__(timeout=None)
 
         body_lines = [
-            *render_array(state["current_array"]),
+            *render_array(state["current_array"], previous_array),
             f"Current shuffle: `{state['current_shuffle']:,}`",
             f"Total shuffles: `{state['total_shuffles']:,}`",
             f"Runs: `{state['runs']:,}`",
-            f"Current in position: `{in_position(state['current_array'])}/{CBOGO_N}`",
             f"All-time best: `{best_result_text(state, previous_best_score)}`",
             f"All-time best shuffle: `{state['best_shuffle']:,}`",
         ]
@@ -372,13 +372,27 @@ def bogo_color(text: str, is_green: bool):
     RESET = '\x1b[0m'
     return f"{GREEN if is_green else RED}{text}{RESET}"
 
-def render_array(values: list[int]) -> list[str]:
+def render_array(
+    values: list[int],
+    from_values: list[int] | None = None,
+    *,
+    code_block: bool = True,
+) -> list[str]:
     width = len(str(CBOGO_N - 1))
+    center_w = ((width + 1) * CBOGO_N - 1) // 2
+    begin_lines: list[str] = ["```ansi"] if code_block else []
+    if from_values is not None:
+        begin_lines += [
+            *render_array(from_values, code_block=False),
+            " " * center_w + "↓"
+        ]
 
     height_line = " ".join(
         bogo_color(value_height_char(value) * width, value == index)
         for index, value in enumerate(values)
     )
+    
+    height_line += f" {in_position(values)}/{CBOGO_N}"
 
     current_line = " ".join(
         str(value).rjust(width)
@@ -386,11 +400,12 @@ def render_array(values: list[int]) -> list[str]:
     )
     current_line = f"\x1b[37m{current_line}\x1b[0m"
 
+    end_lines: list[str] = ["```"] if code_block else []
     return [
-        "```ansi",
+        *begin_lines,
         f"{height_line}",
         f"{current_line}",
-        "```"
+        *end_lines
     ]
 
 def best_result_text(state: CbogoState, previous_best_score: int | None = None) -> str:
@@ -596,6 +611,7 @@ async def setup(bot: BotCore):
 
             current_shuffle_start = state["current_shuffle"]
             previous_best_score = state["best_score"]
+            previous_array = state["current_array"]
 
             current, performed, run_best_score = run_shuffles(state["current_array"])
             state["total_shuffles"] += performed
@@ -625,6 +641,7 @@ async def setup(bot: BotCore):
                 state=state,
                 run_shuffles=performed,
                 previous_best_score=previous_best_score,
+                previous_array=previous_array,
             ),
             response=True,
         )
