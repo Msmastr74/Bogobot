@@ -80,7 +80,7 @@ class CbogoView(discord.ui.LayoutView):
             previous_best_score is not None
             and in_position(state["current_array"]) == previous_best_score
         )
-        accent_colour = discord.Colour(BOGORANGE)
+        accent_colour = discord.Colour.blue()
         if best_improved:
             accent_colour = discord.Colour.gold()
         elif best_equal:
