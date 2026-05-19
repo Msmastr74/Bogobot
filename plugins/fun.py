@@ -79,5 +79,6 @@ async def setup(bot: BotCore):
             return
         await bot.discord.send(
             view=BogonameView(original_name, new_name),
-            response=True
+            response=True,
+            safety_filter=True
         )
