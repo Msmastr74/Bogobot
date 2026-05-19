@@ -401,14 +401,18 @@ def best_result_text(state: CbogoState, previous_best_score: int | None = None) 
 
 def get_shuffle_count(min_count: int, max_count: int) -> int:
     """
-    Gets a random shuffle count nonlinearly, with the curve centered around 50% of the range.
+    Gets a random shuffle count nonlinearly, with the curve centered around the middle of the range.
     """
     if min_count >= max_count:
         return min_count
-    range_size = max_count - min_count + 1
-    random_value = random.random()
-    nonlinear_value = (random_value ** 2) * range_size
-    return min_count + int(nonlinear_value)
+    range_ = max_count - min_count
+    # Using a sigmoid function to create a nonlinear distribution
+    def sigmoid(x):
+        return 1 / (1 + pow(2.71828, -x))
+    # Scale and shift the sigmoid to fit the desired range
+    x = (random.random() - 0.5) * 10  # Random value between -5 and 5
+    shuffle_count = int(min_count + sigmoid(x) * range_)
+    return shuffle_count
 
 def run_shuffles(values: list[int]) -> tuple[list[int], int, int]:
     current = values[:]
