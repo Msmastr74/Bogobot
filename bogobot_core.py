@@ -152,6 +152,7 @@ class BotCore(discord.Client):
         
         self.event(self.on_ready)
         self.event(self.on_member_join)
+        self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
         
         self.milestones: 'MilestoneTracker | None' = None
@@ -289,7 +290,18 @@ class BotCore(discord.Client):
 
     async def on_member_join(self, member: discord.Member | discord.User):
         await self.callbacks.execute_async('member_join', member)
+
+    def guild_join_callback(
+        self,
+        callback: AsyncCallback[[discord.Guild]]
+    ):
+        self.callbacks.register('guild_join', callback)
+        return callback
+
+    async def on_guild_join(self, guild: discord.Guild):
+        await self.callbacks.execute_async('guild_join', guild)
     
+
     class _Discord:
         def __init__(self, outer: 'BotCore'):
             self.outer = outer

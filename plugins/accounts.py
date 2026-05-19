@@ -95,6 +95,13 @@ async def setup(bot: BotCore):
                 f"Automatically created an account for <@{member.id}> ({member.name}){f" from guild {member.guild.name} ({member.guild.id})" if isinstance(member, discord.Member) else ""}."
             )
     
+    @bot.guild_join_callback
+    async def on_guild_join(guild: discord.Guild):
+        bot.logger.info(
+            f"Bot joined new guild; restarting automatic account creation..."
+        )
+        await load_accounts()
+    
     @accounts.command(name="perm_edit", description="Edits a user's rank")
     async def perm_edit(
         interaction: discord.Interaction, action: Literal['promote', 'demote', 'set'],
