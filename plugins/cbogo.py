@@ -11,22 +11,15 @@ from bogobot_core import BotCore
 
 
 CBOGO_N = 10
-CBOGO_MIN_SHUFFLES = 253
-CBOGO_MAX_SHUFFLES = 378
+CBOGO_MIN_SHUFFLES = 25
+CBOGO_MAX_SHUFFLES = 300
 CBOGO_STORAGE_PATH = "cbogo.json"
 CBOGO_STATE_KEY = "state"
 CBOGO_ACCOUNT_KEY = "cbogo"
 CBOGO_LEADERBOARD_SECTION_LIMIT = 1200
-CBOGO_INFO = (
-    "Community Bogosort is a shared bogosort attempt. "
-    f"It starts with one shuffled list of {CBOGO_N} values, and everyone works on "
-    "the same list.\n\n"
-    f"Each run shuffles the list {CBOGO_MIN_SHUFFLES} to {CBOGO_MAX_SHUFFLES} times. "
-    "If any shuffle lands perfectly sorted, that runner solves the round. "
-    "Otherwise, the best shuffled list from the run becomes the starting point for the next run."
-)
 
-
+BOGOGREEN = 0x499D6A
+BOGORANGE = 0xDA7656
 class CbogoState(TypedDict):
     current_array: list[int]
     current_shuffle: int
@@ -38,6 +31,7 @@ class CbogoState(TypedDict):
     solved: bool
     winner_id: int | None
     winner_name: str | None
+    last_user: int | None
 
 
 class CbogoUserStats(TypedDict):
@@ -55,8 +49,7 @@ class CbogoView(discord.ui.LayoutView):
         title: str,
         state: CbogoState,
         run_shuffles: int | None = None,
-        previous_best_score: int | None = None,
-        show_info: bool = False,
+        previous_best_score: int | None = None
     ):
         super().__init__(timeout=None)
 
@@ -83,7 +76,15 @@ class CbogoView(discord.ui.LayoutView):
             previous_best_score is not None
             and state["best_score"] > previous_best_score
         )
-        accent_colour = discord.Colour(0x499D6A) if best_improved else discord.Colour(0xDA7656)
+        best_equal = (
+            previous_best_score is not None
+            and in_position(state["current_array"]) == previous_best_score
+        )
+        accent_colour = discord.Colour(BOGORANGE)
+        if best_improved:
+            accent_colour = discord.Colour.gold()
+        elif best_equal:
+            accent_colour = discord.Colour(BOGOGREEN)
         if state["solved"] and not best_improved:
             accent_colour = discord.Color.light_grey()
 
@@ -92,15 +93,6 @@ class CbogoView(discord.ui.LayoutView):
             discord.ui.TextDisplay("\n".join(body_lines)),
             accent_colour=accent_colour,
         ))
-        if show_info:
-            self.add_item(discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "**What is this?**\n"
-                    f"{CBOGO_INFO}"
-                ),
-                accent_colour=discord.Colour(0x499D6A),
-            ))
-
 
 class CbogoLeaderboard(discord.ui.LayoutView):
     def __init__(
@@ -111,7 +103,7 @@ class CbogoLeaderboard(discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
 
-        self.add_item(discord.ui.TextDisplay("## Community Bogosort Leaderboard"))
+        self.add_item(discord.ui.TextDisplay("## cbogo Leaderboard"))
         self.add_item(self.leaderboard_container(
             "Best Shuffles",
             ranked_best_shuffles(leaderboard),
@@ -123,7 +115,7 @@ class CbogoLeaderboard(discord.ui.LayoutView):
             "Shuffles",
             ranked_shuffles(leaderboard),
             lambda uid, stats: f"<@{uid}> `{stats['shuffles']:,}` shuffles",
-            discord.Colour(0x499D6A),
+            discord.Colour(BOGOGREEN),
             target=target,
         ))
         self.add_item(self.leaderboard_container(
@@ -229,6 +221,7 @@ def default_state() -> CbogoState:
         "solved": False,
         "winner_id": None,
         "winner_name": None,
+        "last_user": None
     }
 
 
@@ -318,6 +311,9 @@ def normalize_state(raw_state: object) -> CbogoState:
         winner_name = raw_state.get("winner_name")
         if winner_name is not None:
             winner_name = str(winner_name)
+        last_user = raw_state.get("last_user")
+        if last_user is not None:
+            last_user = int(last_user)
     except (TypeError, ValueError):
         return default_state()
 
@@ -332,6 +328,7 @@ def normalize_state(raw_state: object) -> CbogoState:
         "solved": solved,
         "winner_id": winner_id,
         "winner_name": winner_name,
+        "last_user": last_user
     }
 
 
@@ -351,7 +348,9 @@ def is_sorted(values: list[int]) -> bool:
 def in_position(values: list[int]) -> int:
     return sum(1 for index, value in enumerate(values) if index == value)
 
-HEIGHT_CHARS = " ▁▂▃▄▅▆▇█"
+HEIGHT_CHARS = [
+    " ̲", "▁", "▂", "▃", "▄", "▅", "▆", "█̲", "▇", "█"
+]
 
 
 def value_height_char(value: int) -> str:
@@ -362,26 +361,31 @@ def value_height_char(value: int) -> str:
     index = round(ratio * (len(HEIGHT_CHARS) - 1))
     return HEIGHT_CHARS[index]
 
+def bogo_color(text: str, is_green: bool):
+    RED = '\x1b[31m'
+    GREEN = '\x1b[32m'
+    RESET = '\x1b[0m'
+    return f"{GREEN if is_green else RED}{text}{RESET}"
 
 def render_array(values: list[int]) -> list[str]:
     width = len(str(CBOGO_N - 1))
 
-    height_line = "".join(
-        value_height_char(value) * (width + (0 if index == CBOGO_N - 1 else 1))
+    height_line = " ".join(
+        bogo_color(value_height_char(value) * width, value == index)
         for index, value in enumerate(values)
     )
 
-    bar_line = "".join(
-        ("█" if value == index else "░") * (width + (0 if index == CBOGO_N - 1 else 1))
-        for index, value in enumerate(values)
+    current_line = " ".join(
+        str(value).rjust(width)
+        for value in values
     )
-
-    current_line = " ".join(str(value).rjust(width) for value in values)
+    current_line = f"\x1b[37m{current_line}\x1b[0m"
 
     return [
-        f"`{height_line}`",
-        f"`{bar_line}`",
-        f"`{current_line}`",
+        "```ansi",
+        f"{height_line}",
+        f"{current_line}",
+        "```"
     ]
 
 def best_result_text(state: CbogoState, previous_best_score: int | None = None) -> str:
@@ -390,9 +394,24 @@ def best_result_text(state: CbogoState, previous_best_score: int | None = None) 
         return f"{current}/{CBOGO_N}"
     return f"{previous_best_score}/{CBOGO_N} → {current}/{CBOGO_N}"
 
+def get_shuffle_count(min_count: int, max_count: int) -> int:
+    """
+    Gets a random shuffle count nonlinearly, with the curve centered around min_count + 25% of the range.
+    """
+    if min_count >= max_count:
+        return min_count
+    range_size = max_count - min_count
+    center = min_count + range_size * 0.25
+    # Using a quadratic distribution for more values around the center
+    rand = random.random()
+    if rand < 0.5:
+        return int(center - (center - min_count) * (1 - (rand * 2) ** 2))
+    else:
+        return int(center + (max_count - center) * ((rand - 0.5) * 2) ** 2)
+
 def run_shuffles(values: list[int]) -> tuple[list[int], int, int]:
     current = values[:]
-    shuffles = random.randint(CBOGO_MIN_SHUFFLES, CBOGO_MAX_SHUFFLES)
+    shuffles = get_shuffle_count(CBOGO_MIN_SHUFFLES, CBOGO_MAX_SHUFFLES)
     best_score = -1
     best_array = current[:]
 
@@ -509,7 +528,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="cbogo",
-        description="Run the community bogosort",
+        description="Run cbogo",
         eph=False,
         perm_requirement=0,
     )
@@ -532,7 +551,7 @@ async def setup(bot: BotCore):
                 await save_state(state)
                 await reset_user_scores()
             await bot.discord.send(
-                view=CbogoView(title="Community Bogosort Reset", state=state),
+                view=CbogoView(title="cbogo reset", state=state),
                 response=True,
             )
             return
@@ -545,9 +564,8 @@ async def setup(bot: BotCore):
             state = await get_state()
             await bot.discord.send(
                 view=CbogoView(
-                    title="Community Bogosort Info",
-                    state=state,
-                    show_info=True,
+                    title="cbogo info",
+                    state=state
                 ),
                 response=True,
             )
@@ -557,10 +575,19 @@ async def setup(bot: BotCore):
             state = await get_state()
             if state["solved"]:
                 await bot.discord.send(
-                    view=CbogoView(title="Community Bogosort", state=state),
+                    view=CbogoView(title="cbogo sorted", state=state),
                     response=True,
                 )
                 return
+            if state["last_user"] == interaction.user.id:
+                await bot.discord.cleanup_defer_status(interaction)
+                await bot.discord.send(
+                    "You cannot use cbogo twice in a row!",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            state["last_user"] = interaction.user.id
 
             current_shuffle_start = state["current_shuffle"]
             previous_best_score = state["best_score"]
@@ -589,7 +616,7 @@ async def setup(bot: BotCore):
 
         message = await bot.discord.send(
             view=CbogoView(
-                title="Community Bogosort Sorted" if state["solved"] else "Community Bogosort",
+                title="cbogo sorted" if state["solved"] else "cbogo",
                 state=state,
                 run_shuffles=performed,
                 previous_best_score=previous_best_score,
