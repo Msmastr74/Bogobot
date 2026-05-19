@@ -368,7 +368,7 @@ async def setup(bot: "BotCore"):
     )
     async def state(
         interaction: discord.Interaction,
-        action: Literal["stop", "restart"],
+        action: Literal["restart", "stop"],
     ):
         if action == "restart":
             await bot.discord.send("Restarting...", response=True)
