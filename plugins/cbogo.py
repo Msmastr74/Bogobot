@@ -103,7 +103,7 @@ class CbogoLeaderboard(discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
 
-        self.add_item(discord.ui.TextDisplay("## cbogo Leaderboard"))
+        self.add_item(discord.ui.TextDisplay("## cbogo leaderboard"))
         self.add_item(self.leaderboard_container(
             "Best Shuffles",
             ranked_best_shuffles(leaderboard),
