@@ -9,12 +9,13 @@ from pyuca import Collator
 # here because Chat asked for it
 
 from bogobot_core import BotCore
+from utils import groups
 
 async def setup(bot: BotCore):
     unsorted_emoji = bot.discord.get_emoji('unsorted')
     sorted_emoji = bot.discord.get_emoji('sorted')
     collator = Collator()
-    bogo_group = bot.setup.group("bogo")
+    bogo = groups.bogo(bot)
 
     def split(text: str, delim: str):
         return list(
@@ -22,7 +23,7 @@ async def setup(bot: BotCore):
                 map(lambda t: t.strip(), text.split(delim))
             )
         )
-    @bogo_group.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
+    @bogo.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     async def roll(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.randint(1, 100)}", response=True)
     
@@ -37,7 +38,7 @@ async def setup(bot: BotCore):
             return
         await bot.discord.send(contents=f"{random.randint(min, max)}", response=True)
     
-    @bogo_group.command(name="choice", description="Chooses a random item from a list of items", defer=False, perm_requirement=0)
+    @bogo.command(name="choice", description="Chooses a random item from a list of items", defer=False, perm_requirement=0)
     async def choice(interaction: discord.Interaction, choices: str, delimiter: str = " "):
         choices_list = split(choices, delimiter)
         if len(choices_list) == 0:
@@ -48,13 +49,13 @@ async def setup(bot: BotCore):
             c = '\u200d'
         await bot.discord.send(contents=c, response=True, safety_filter=True)
 
-    @bogo_group.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
-    async def bogo(interaction: discord.Interaction, text: str):
+    @bogo.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
+    async def bogo_bogo(interaction: discord.Interaction, text: str):
         char_list = list(text)
         random.shuffle(char_list)
         await bot.discord.send(contents=f"{''.join(char_list)}", response=True, safety_filter=True)
     
-    @bogo_group.command(name="shuffle", description="shuffles", defer=False, perm_requirement=0)
+    @bogo.command(name="shuffle", description="shuffles", defer=False, perm_requirement=0)
     async def shuffle(
         interaction: discord.Interaction, items: str, delimiter: str = " "
     ):
@@ -135,7 +136,7 @@ async def setup(bot: BotCore):
     async def randbool(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.choice([True, False])}", response=True)
 
-    @bogo_group.command(name="sort-list", description="Bogosorts a list of numbers", defer=False, perm_requirement=0)
+    @bogo.command(name="sort-list", description="Bogosorts a list of numbers", defer=False, perm_requirement=0)
     async def bogosort_list(interaction: discord.Interaction, items: str, delimiter: str = " "):
         items_list = split(items, delimiter)
         arr: list[float | int] = []
@@ -179,7 +180,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
 
-    @bogo_group.command(name="sort-lexicographic", description="Bogosorts a list of strings", defer=False, perm_requirement=0)
+    @bogo.command(name="sort-lexicographic", description="Bogosorts a list of strings", defer=False, perm_requirement=0)
     async def bogosort_lexicographic(interaction: discord.Interaction, items: str, delimiter: str = " "):
         arr = [
             unicodedata.normalize("NFC", item)
@@ -216,7 +217,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
     
-    @bogo_group.command(name="sort-listr", description="bogosorts a list of number?", defer=False, perm_requirement=0)
+    @bogo.command(name="sort-listr", description="bogosorts a list of number?", defer=False, perm_requirement=0)
     async def bogosort_listr(interaction: discord.Interaction, items: str, percent: float, delimiter: str = " "):
         if percent < 0 or percent > 100:
             await bot.discord.send(
@@ -302,7 +303,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
 
-    @bogo_group.command(name="sort", description="Bogosorts", defer=False, perm_requirement=0)
+    @bogo.command(name="sort", description="Bogosorts", defer=False, perm_requirement=0)
     async def bogosort(interaction: discord.Interaction, item_count: Literal[1, 2, 3, 4, 5, 6, 7, 8]):
         items: list[tuple[int, str]] = [
             (i, chr(0x2580 + i)) for i in range(1, item_count + 1)

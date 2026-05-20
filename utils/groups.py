@@ -7,3 +7,6 @@ def manage(bot: 'BotCore'):
 
 def accounts(bot: 'BotCore'):
     return bot.setup.group("accounts", "Account management commands")
+
+def bogo(bot: 'BotCore'):
+    return bot.setup.group("bogo", "Fun /bogo commands")

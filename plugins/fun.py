@@ -4,6 +4,7 @@ import random
 import time
 
 from bogobot_core import BotCore
+from utils import groups
 
 class BogonameView(discord.ui.LayoutView):
     def __init__(self, original_name: str, new_name: str) -> None:
@@ -11,11 +12,13 @@ class BogonameView(discord.ui.LayoutView):
         self.add_item(discord.ui.TextDisplay('## Bogoname'))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(f"**Original Name**\n{discord.utils.escape_markdown(original_name)}"),
-            discord.ui.TextDisplay(f"**Bogoed name**\n{discord.utils.escape_markdown(new_name)}")
+            discord.ui.TextDisplay(f"**Bogoed name**\n{discord.utils.escape_markdown(new_name)}"),
+            accent_colour=discord.Colour.random()
         ))
         self.add_item(discord.ui.TextDisplay(f"-# <t:{int(time.time())}:f>"))
 
 async def setup(bot: BotCore):
+    bogo = groups.bogo(bot)
     @tasks.loop(seconds=15)
     async def update_status():
         if not bot.user:
@@ -54,8 +57,8 @@ async def setup(bot: BotCore):
         if update_status.is_running():
             update_status.cancel()
 
-    @bot.setup.command(name="bogoname", description="Bogoes your name", perm_requirement=0, defer=False)
-    async def bogoname(interaction: discord.Interaction):
+    @bogo.command(name="name", description="Bogoes your name", perm_requirement=0, defer=False)
+    async def bogo_name(interaction: discord.Interaction):
         member = interaction.user
         if isinstance(member, discord.User):
             await bot.discord.send(
