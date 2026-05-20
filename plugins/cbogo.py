@@ -677,7 +677,7 @@ async def setup(bot: BotCore):
             state = await get_state()
             if state["solved"]:
                 await bot.discord.send(
-                    view=CbogoView(title="cbogo sorted", state=state),
+                    view=CbogoView(title=f"cbogo {sorted_emoji}", state=state),
                     response=True,
                     safety_filter=True
                 )
