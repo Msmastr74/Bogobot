@@ -393,7 +393,10 @@ def render_array(
     )
     
     height_line += f" {in_position(values)}/{CBOGO_N}"
-
+    bar_line = " ".join(
+        ("█" if value == index else "░") * width
+        for index, value in enumerate(values)
+    ) # For mobile, which does not support ANSI colours
     current_line = " ".join(
         str(value).rjust(width)
         for value in values
@@ -403,8 +406,9 @@ def render_array(
     end_lines: list[str] = ["```"] if code_block else []
     return [
         *begin_lines,
-        f"{height_line}",
-        f"{current_line}",
+        height_line,
+        bar_line,
+        current_line,
         *end_lines
     ]
 
