@@ -449,7 +449,7 @@ def render_previous_array(
     height_line = " ".join(
         value_height_char(value) * width
         for value in values
-    ) + f" {in_position(values)}/{CBOGO_N}"
+    ) + f" \x1b[37m{in_position(values)}/{CBOGO_N}\x1b[0m"
     
     bar_line = " ".join(
         ("■" if value == index else " ") * width
