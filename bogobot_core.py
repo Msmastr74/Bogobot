@@ -387,7 +387,6 @@ class BotCore(discord.Client):
                 
                 if safety_filter:
                     kwargs["allowed_mentions"] = discord.AllowedMentions.none()
-                    kwargs["suppress"] = True
 
                 try:
                     self.content = kwargs.get("content", self.content)
