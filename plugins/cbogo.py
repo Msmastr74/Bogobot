@@ -722,7 +722,7 @@ async def setup(bot: BotCore):
 
         message = await bot.discord.send(
             view=CbogoView(
-                title="cbogo sorted" if state["solved"] else "cbogo",
+                title=f"cbogo {sorted_emoji}" if state["solved"] else "cbogo",
                 state=state,
                 run_shuffles=performed,
                 previous_best_score=previous_best_score,
