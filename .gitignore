@@ -11,3 +11,5 @@ tessdata/
 monitor.bga
 bogotree.json
 cbogo.json
+uv.lock
+.python-version

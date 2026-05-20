@@ -6,6 +6,7 @@ Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort 
 
 Python 3.10+ is required. The dependency scripts install the usual system tools:
 libtesseract/Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
+Android/Termux is a supported environment.
 
 ## Installation
 
@@ -62,33 +63,39 @@ python main.py
 
 Your terminal output should look similar to this:
 ```log
-[May 16 21:18:31.428 WARNING  | discord.client  ] PyNaCl is not installed, voice will NOT be supported
-[May 16 21:18:31.428 WARNING  | discord.client  ] davey is not installed, voice will NOT be supported
-[May 16 21:18:31.511 INFO     | Bogobot         ] Loaded Plugin: monitor.py
-[May 16 21:18:31.513 INFO     | Bogobot         ] Loaded Plugin: leaderboard.py
-[May 16 21:18:31.515 INFO     | Bogobot         ] Loaded Plugin: accounts.py
-[May 16 21:18:31.519 INFO     | Bogobot         ] Loaded Plugin: milestones.py
-[May 16 21:18:31.521 INFO     | Bogobot         ] Loaded Plugin: utility.py
-[May 16 21:18:31.522 INFO     | Bogobot         ] Loaded Plugin: activity.py
-[May 16 21:18:31.648 INFO     | Bogobot         ] Loaded Plugin: telemetry.py
-[May 16 21:18:31.649 INFO     | Bogobot         ] Loaded Plugin: get_stats.py
-[May 16 21:18:31.649 INFO     | Bogobot         ] Loaded Plugin: admin.py
-[May 16 21:18:31.651 INFO     | Bogobot         ] Loaded Plugin: stats.py
-[May 16 21:18:31.657 INFO     | Bogobot         ] Loaded Plugin: bogoscramble.py
-[May 16 21:18:31.658 INFO     | Bogobot         ] Loaded Plugin: roll.py
-[May 16 21:18:31.659 INFO     | discord.client  ] logging in using static token
-[May 16 21:18:32.036 INFO     | Bogobot         ] Syncing Discord command tree (command tree changed)
-[May 16 21:18:32.731 INFO     | discord.gateway ] Shard ID None has connected to Gateway (Session ID: 64e45a6cbc7030530954eb66dac06a9c).
-[May 16 21:18:34.733 INFO     | Bogobot         ] Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
-[May 16 21:18:34.735 INFO     | Bogobot         ] Beginning automatic account creation...
-[May 16 21:18:34.735 INFO     | Bogobot         ] Automatically created 0 accounts out of 4 members from REDACTED
-[May 16 21:18:34.735 INFO     | Bogobot         ] Automatically created 0 accounts out of 16 members from Bogobot development (1495827707085197385)
-[May 16 21:18:34.736 INFO     | Bogobot         ] Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 20 members from 2 servers
+May 20 18:25:29.825 WARNING  discord.client  PyNaCl is not installed, voice will NOT be supported
+May 20 18:25:29.826 WARNING  discord.client  davey is not installed, voice will NOT be supported
+May 20 18:25:29.901 INFO     Bogobot.Plugins Loading plugins...
+May 20 18:25:29.907 INFO     Bogobot.Plugins Loaded Plugin: fun.py
+May 20 18:25:29.911 INFO     Bogobot.Plugins Loaded Plugin: monitor.py
+May 20 18:25:29.912 INFO     Bogobot.Plugins Loaded Plugin: leaderboard.py
+May 20 18:25:29.912 INFO     Bogobot.Plugins Loaded Plugin: accounts.py
+May 20 18:25:29.913 INFO     Bogobot.Plugins Loaded Plugin: milestones.py
+May 20 18:25:29.914 INFO     Bogobot.Plugins Loaded Plugin: utility.py
+May 20 18:25:29.960 INFO     Bogobot.Plugins Loaded Plugin: bogo.py
+May 20 18:25:29.966 INFO     Bogobot.Plugins Loaded Plugin: telemetry.py
+May 20 18:25:29.966 INFO     Bogobot.Plugins Loaded Plugin: get_stats.py
+May 20 18:25:29.967 INFO     Bogobot.Plugins Loaded Plugin: admin.py
+May 20 18:25:29.967 INFO     Bogobot.Plugins Loaded Plugin: cbogo.py
+May 20 18:25:29.970 INFO     Bogobot.Plugins Loaded Plugin: stats.py
+May 20 18:25:29.971 INFO     Bogobot.Plugins Loaded Plugin: archival.py
+May 20 18:25:29.972 INFO     Bogobot.Plugins Loaded Plugin: bogoscramble.py
+May 20 18:25:29.973 INFO     Bogobot.Plugins Loaded Plugin: bogotree.py
+May 20 18:25:29.973 INFO     Bogobot.Plugins Finished loading plugins.
+May 20 18:25:29.973 INFO     discord.client  logging in using static token
+May 20 18:25:30.283 INFO     Bogobot         Syncing Discord command tree (command tree changed)
+May 20 18:25:31.134 INFO     discord.gateway Shard ID None has connected to Gateway (Session ID: ff59975845b575b0d98273c815eebb6b).
+May 20 18:25:33.145 INFO     Bogobot         Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
+May 20 18:25:33.266 INFO     Bogobot         Beginning automatic account creation...
+May 20 18:25:33.266 INFO     Bogobot         Automatically created 0 accounts out of 4 members from REDACTED.
+May 20 18:25:33.266 INFO     Bogobot         Automatically created 0 accounts out of 17 members from Bogobot development (1495827707085197385).
+May 20 18:25:33.266 INFO     Bogobot         Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 21 members from 2 servers.
 ```
 
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
+ * /get_sort: Retrieves the latest observed sort state and frame image when stream data is available.
  * /archive: Shows archived monitor values.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.
@@ -101,7 +108,8 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
  * /avatar and /ping: Small Discord utility commands.
- * /bogo and friends: Grouped roll, shuffle, choice, text bogo, and small bogosort utilities, plus top-level /sort and random number helpers.
+ * /bogo and friends: Grouped roll, shuffle, choice, text bogo, name bogo, and small bogosort utilities, plus top-level /sort and random number helpers.
+ * /cbogo: Runs the original collaborative community bogosort puzzle.
  * /bogotree: Advances or resets a collaborative random equalization puzzle.
  * /accounts: Manages account permission ranks.
 

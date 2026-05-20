@@ -194,13 +194,15 @@ Current plugin responsibilities:
 - `accounts.py`: `/accounts` permission commands.
 - `admin.py`: `/manage state`, `/manage logs`, and `/manage message`.
 - `archival.py`: compact append-only archive for observed monitor values and `/archive`.
+- `bogo.py`: random utility commands and small bogosort toys under `/bogo`, plus top-level `/sort` and random helpers.
 - `bogotree.py`: collaborative random equalization puzzle.
 - `bogoscramble.py`: Bogoscramble message/media utilities.
+- `cbogo.py`: original collaborative community bogosort puzzle and leaderboard.
+- `fun.py`: bot status bogoname loop and `/bogo name`.
 - `get_stats.py`: `/get_stats` display command.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
-- `roll.py`: random utility commands and small bogosort toys.
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
@@ -226,12 +228,14 @@ Several management commands use an explicit action parameter instead of separate
 - `/archive`: Shows archived monitor values with a public paginated view.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
+- `/get_sort`: Shows the latest observed sort state, including a frame image when available.
 - `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available.
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/sort`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexicographic` modes.
-- `/bogo roll|bogo|shuffle|choice|sort|sort-list|sort-listr|sort-lexicographic`: Dice roll, text bogo, shuffle/choice, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
+- `/bogo roll|bogo|shuffle|choice|name|sort|sort-list|sort-listr|sort-lexicographic`: Dice roll, text bogo, shuffle/choice, name bogo, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
+- `/cbogo [run|info|leaderboard|reset|reset_last_user] [target]`: Advances the original collaborative community bogosort puzzle, shows puzzle info, shows leaderboards, or resets the puzzle. `reset` requires mod rank.
 - `/bogotree [run|info|leaderboard|reset] [target]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `leaderboard` shows per-user calls, simulated steps, and best score, optionally forcing `target` into each leaderboard section; `reset` requires mod rank.
 
 Account commands live under `/accounts`:
