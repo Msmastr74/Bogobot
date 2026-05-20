@@ -12,13 +12,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageSequence
 
-from typing import Any, Optional, overload
-from types import CoroutineType
+from typing import Optional, overload
 from bogobot_core import current_interaction
 from utils.logger_pipe import log_subprocess_pipe
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from main import BotCore
+from utils.type import Coro
+from bogobot_core import BotCore
 
 MAXIMUM_FRAMES = 5000
 DEFAULT_SCRAMBLE_SHAPE = (10, 10)
@@ -27,7 +25,9 @@ MAXIMUM_SCRAMBLE_SHAPE = (30, 30)
 class BogoUserError(Exception):
     pass
 
-async def setup(bot: "BotCore"):
+FileList = list[Coro[discord.File | None]]
+
+async def setup(bot: BotCore):
     def get_scramble_shape(rows: int | None, columns: int | None) -> tuple[int, int]:
         if rows is None and columns is None:
             return DEFAULT_SCRAMBLE_SHAPE
@@ -42,7 +42,7 @@ async def setup(bot: "BotCore"):
         return rows or 1, columns or 1
     def message_bogoscramble_inputs(
         message: discord.Message,
-    ) -> tuple[str, list[discord.Embed], list[Any]]:
+    ) -> tuple[str, list[discord.Embed], list[discord.Attachment]]:
         sources: list[discord.Message | discord.MessageSnapshot] = [
             message,
             *message.message_snapshots
@@ -68,8 +68,9 @@ async def setup(bot: "BotCore"):
         *,
         content: str | None = None,
         embeds: list[discord.Embed] | None = None,
-        attachments: list[Any] | None = None,
-        scramble_shape: tuple[int, int] = DEFAULT_SCRAMBLE_SHAPE
+        attachments: list[discord.Attachment] | None = None,
+        scramble_shape: tuple[int, int] = DEFAULT_SCRAMBLE_SHAPE,
+        suppress_embeds: bool
     ):
         upload_limit = interaction.filesize_limit
         @overload
@@ -543,7 +544,7 @@ async def setup(bot: "BotCore"):
             path = urllib.parse.urlparse(url).path
             name = os.path.basename(path)
             return name or fallback
-        def embed_fetch_url(proxy: discord.embeds._EmbedMediaProxy) -> tuple[str, bool] | None:
+        def embed_fetch_url(proxy: 'discord.embeds._EmbedMediaProxy') -> tuple[str, bool] | None:
             if proxy.url and proxy.url.startswith("https://cdn.discordapp.com/"):
                 return proxy.url, False
             if proxy.proxy_url:
@@ -720,7 +721,7 @@ async def setup(bot: "BotCore"):
                 raise BogoUserError(attachment_too_big_message(file.filename, output_size))
             return file
         async def gather_bogo_files(
-            tasks: list[CoroutineType[Any, Any, discord.File | None]]
+            tasks: FileList
         ) -> list[discord.File]:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             files: list[discord.File] = []
@@ -762,7 +763,7 @@ async def setup(bot: "BotCore"):
             for index, (_, scrambled) in enumerate(embed_pairs)
             if index not in omit_embed_indexes
         ]
-        attachment_tasks = [
+        attachment_tasks: FileList = [
             bogo_attachment(attachment)
             for attachment in attachments
         ]
@@ -783,7 +784,7 @@ async def setup(bot: "BotCore"):
                 for kind, url, use_discord_headers in embed_media_jobs(original)
             ]
             available_file_slots = max(0, 10 - len(files))
-            embed_gifv_tasks = [
+            embed_gifv_tasks: FileList = [
                 bogo_embed_gifv(index, url, use_discord_headers)
                 for index, url, use_discord_headers in embed_gifv_candidates[:available_file_slots]
             ]
@@ -791,7 +792,7 @@ async def setup(bot: "BotCore"):
             available_file_slots = max(0, 10 - len(files))
             for _, embed, kind, _, _ in embed_image_candidates[available_file_slots:]:
                 set_embed_media(embed, kind, None)
-            embed_image_tasks = [
+            embed_image_tasks: FileList = [
                 bogo_embed_image(index, embed, kind, url, use_discord_headers)
                 for index, embed, kind, url, use_discord_headers in embed_image_candidates[:available_file_slots]
             ]
@@ -801,6 +802,7 @@ async def setup(bot: "BotCore"):
             send_kwargs = {
                 "content": content or None,
                 "allowed_mentions": discord.AllowedMentions.none(),
+                "suppress_embeds": suppress_embeds,
                 "response": True,
             }
             if embeds:
@@ -824,7 +826,7 @@ async def setup(bot: "BotCore"):
         await bot.discord.send(
             str(error),
             response=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+            safety_filter=True,
             ephemeral=True
         )
     @bot.setup.context_menu(
@@ -840,6 +842,7 @@ async def setup(bot: "BotCore"):
                 content=content,
                 embeds=embeds,
                 attachments=attachments,
+                suppress_embeds=False
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
@@ -861,7 +864,7 @@ async def setup(bot: "BotCore"):
             *,
             content: str,
             embeds: list[discord.Embed],
-            attachments: list[Any],
+            attachments: list[discord.Attachment],
         ):
             super().__init__()
             self.content = content
@@ -882,6 +885,7 @@ async def setup(bot: "BotCore"):
                     embeds=self.embeds,
                     attachments=self.attachments,
                     scramble_shape=get_scramble_shape(rows, columns),
+                    suppress_embeds=False
                 )
             except BogoUserError as e:
                 await send_bogo_error(interaction, e)
@@ -950,12 +954,20 @@ async def setup(bot: "BotCore"):
             )
             if attachment is not None
         ]
+        if not interaction.permissions.attach_files and attachments:
+            await bot.discord.send(
+                "You don't have permission to attach files, so the attachments couldn't be scrambled.",
+                response=True,
+                ephemeral=True,
+            )
+            return
         try:
             await send_bogoscramble(
                 interaction,
                 content=text,
                 attachments=attachments,
-                scramble_shape=scramble_shape
+                scramble_shape=scramble_shape,
+                suppress_embeds=not interaction.permissions.embed_links
             )
         except BogoUserError as e:
             await send_bogo_error(interaction, e)

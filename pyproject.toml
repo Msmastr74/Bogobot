@@ -1,0 +1,15 @@
+[project]
+name = "bogobot"
+version = "1.0"
+description = "Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/DgfiqGPmGWY). The bot uses OCR and stream-derived timing to provide high-accuracy statistics directly from the stream."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.13.5",
+    "discord-py>=2.7.1",
+    "numpy>=2.2.6",
+    "opencv-python>=4.13.0.92",
+    "pillow>=12.2.0",
+    "pyuca>=1.2",
+    "streamlink>=8.4.0",
+]

@@ -1,13 +1,14 @@
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import discord
+from logging import Logger
 
-if TYPE_CHECKING:
-    from logging import Logger
-
+# Maximum number of seconds to wait based on message send duration
+# This solution adapts to the hidden rate limiting handling behind the scenes of discord.py
+ADAPTIVE_MAX_DELAY_SECONDS = 10
 
 @dataclass(slots=True)
 class PendingEdit:
@@ -20,16 +21,15 @@ class MessageEditCoalescer:
         self,
         message: discord.PartialMessage,
         *,
-        logger: "Logger | None" = None,
-        min_interval: float = 0.15,
+        logger: Logger | None = None
     ):
         self.message = message
         self.logger = logger
-        self.min_interval = min_interval
         self._pending: PendingEdit | None = None
         self._changed = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
         self._closed = False
+        self.NotFound_or_Forbidden = False
 
     def start(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -68,15 +68,18 @@ class MessageEditCoalescer:
         return None
 
     async def _worker(self) -> None:
+        loop = asyncio.get_running_loop()
         while not self._closed:
             await self._changed.wait()
             self._changed.clear()
             while self._pending is not None and not self._closed:
                 pending = self._pending
                 self._pending = None
+                edit_start_time = loop.time()
                 try:
                     result = await self.message.edit(**pending.kwargs)
                 except (discord.NotFound, discord.Forbidden):
+                    self.NotFound_or_Forbidden = True
                     result = None
                 except Exception as exc:
                     if pending.future is not None and not pending.future.done():
@@ -84,37 +87,36 @@ class MessageEditCoalescer:
                     elif self.logger is not None:
                         self.logger.warning(
                             f"Coalesced edit failed for message {self.message.id}",
-                            exc_info=exc,
+                            exc_info=True
                         )
                     continue
+                edit_duration = loop.time() - edit_start_time
+
                 if pending.future is not None and not pending.future.done():
                     pending.future.set_result(result)
-                if self.min_interval > 0:
-                    await asyncio.sleep(self.min_interval)
+                
+                await asyncio.sleep(min(edit_duration, ADAPTIVE_MAX_DELAY_SECONDS))
 
 
 class EditCoalescer:
     def __init__(
         self,
         *,
-        logger: "Logger | None" = None,
-        min_interval: float = 0.15,
+        logger: Logger | None = None,
     ):
         self.logger = logger
-        self.min_interval = min_interval
         self._coalescers: dict[int, MessageEditCoalescer] = {}
 
     def register(
         self,
-        message: discord.Message | discord.PartialMessage,
+        message: discord.Message | discord.PartialMessage
     ) -> MessageEditCoalescer:
         coalescer = self._coalescers.get(message.id)
         if coalescer is not None:
             return coalescer
         coalescer = MessageEditCoalescer(
             message,
-            logger=self.logger,
-            min_interval=self.min_interval,
+            logger=self.logger
         )
         self._coalescers[message.id] = coalescer
         return coalescer

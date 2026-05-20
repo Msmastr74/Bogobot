@@ -1,13 +1,10 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, cast
 
 import discord
 from utils.tracker import Tracker
-
-if TYPE_CHECKING:
-    from logging import Logger
-
+from logging import Logger
 
 class NotificationBroadcaster:
     def __init__(
@@ -15,8 +12,8 @@ class NotificationBroadcaster:
         bot: discord.Client,
         *,
         subscriptions: dict[str, Any],
-        save_subscriptions: Callable[[dict[str, Any]], Awaitable[None]],
-        logger: "Logger | None" = None,
+        save_subscriptions: Callable[[dict[str, list[str]]], Awaitable[None]],
+        logger: Logger | None = None,
     ):
         self.bot = bot
         self.subscriptions = subscriptions
@@ -75,7 +72,7 @@ class NotificationBroadcaster:
         if not self._can_send_to(channel_id):
             return False
         store = await self.tracker.items()
-        topics = store.setdefault(channel_id, [])
+        topics = list(store.get(channel_id, []))
         if topic not in topics:
             topics.append(topic)
             topics.sort()
@@ -84,10 +81,13 @@ class NotificationBroadcaster:
 
     async def unsubscribe(self, topic: str, channel_id: int) -> bool:
         store = await self.tracker.items()
-        topics = store.get(channel_id)
-        if topics is None or topic not in topics:
+        existing_topics = store.get(channel_id)
+
+        if existing_topics is None or topic not in existing_topics:
             return False
+        topics = list(existing_topics)
         topics.remove(topic)
+
         if topics:
             await self.tracker.set(channel_id, topics)
         else:
@@ -111,6 +111,7 @@ class NotificationBroadcaster:
         self,
         topic: str,
         create_files: Callable[[], list[discord.File]] | None = None,
+        create_view: Callable[[], discord.ui.View | discord.ui.LayoutView] | None = None,
         **kwargs: Any,
     ) -> int:
         sent = 0
@@ -120,17 +121,21 @@ class NotificationBroadcaster:
             if channel is None or not hasattr(channel, "send"):
                 stale_channel_ids.append(channel_id)
                 continue
+            channel = cast('discord.abc.MessageableChannel', channel)
             try:
+                send_kwargs = kwargs.copy()
                 if create_files is not None:
-                    kwargs["files"] = create_files()
-                await cast(Any, channel).send(**kwargs)
+                    send_kwargs["files"] = create_files()
+                if create_view is not None:
+                    send_kwargs["view"] = create_view()
+                await channel.send(**send_kwargs)
             except (discord.NotFound, discord.Forbidden):
                 stale_channel_ids.append(channel_id)
-            except Exception as exc:
+            except Exception:
                 if self.logger is not None:
                     self.logger.warning(
                         f"Notification failed for topic {topic!r} in channel {channel_id}",
-                        exc_info=exc,
+                        exc_info=True,
                     )
             else:
                 sent += 1

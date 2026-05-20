@@ -7,13 +7,14 @@ import subprocess
 import threading
 import time
 from concurrent.futures import Future
-from typing import Any, Callable, Coroutine
+from typing import Callable
 
 from PIL import Image
 
 from utils.logger_pipe import PipeLogger, log_subprocess_pipe
+from utils.type import Coro
 
-FrameCallback = Callable[[Image.Image], None | Coroutine[Any, Any, None]]
+FrameCallback = Callable[[Image.Image], None | Coro[None]]
 
 
 class StreamHandler:

@@ -1,10 +1,8 @@
 {
     "bot_token": "BOT_TOKEN_HERE",
     "owner_uid": 12345678901234567,
-    "authorized_users": {},
     "sync": true,
     "debug": false,
-    "fallback_client": true,
     "save_ocr_debug": false,
     "save_live_frame": false,
     "channels": {}

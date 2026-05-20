@@ -1,138 +1,121 @@
-from PIL import Image
-import subprocess
+import asyncio
+
 import cv2
 import numpy as np
+from PIL import Image
 
-def _preprocess_cell(pil_cell: 'Image.Image', scale=5, pad=10, stroke_thickness=15, threshold=165):
-    # 1. Scaling + thresholding. Keep gray gaps as background so nearby digits do not merge.
-    img = np.array(pil_cell.convert("L"))
-    upscaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
-    _, mask = cv2.threshold(upscaled, threshold, 255, cv2.THRESH_BINARY_INV)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+from ocr import (
+    LibTesseractOCR,
+    OcrBox,
+    OcrCrop,
+    preprocess_cell,
+)
 
-    # 2. Contour Extraction & Sorting
-    contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    
-    bw = np.ones_like(mask) * 255
-    img_h, img_w = mask.shape
-    image_area = img_h * img_w
-    shells = [] 
 
-    def draw_inward_stroke(cnt: np.ndarray):
-        contour_mask = np.zeros_like(mask)
-        cv2.drawContours(contour_mask, [cnt], -1, 255, thickness=-1)
+TEST_CROPS = {
+    "shuffles": OcrCrop(81, 610, 312, 640, whitelist="0123456789,.KMBTQi"),
+    "comparisons": OcrCrop(331, 610, 551, 640, whitelist="0123456789,.KMBTQi"),
+    "best_run": OcrCrop(645, 610, 730, 640, whitelist="0123456789/"),
+    "shuffles_sec": OcrCrop(819, 610, 1043, 640),
+    "average_best_shuffle": OcrCrop(80, 670, 115, 685, whitelist="0123456789."),
+    "uptime": OcrCrop(1150, 10, 1260, 30, whitelist="0123456789dhm "),
+}
 
-        kernel = np.ones((stroke_thickness, stroke_thickness), np.uint8)
-        inner = cv2.erode(contour_mask, kernel, iterations=1)
-        stroke = cv2.subtract(contour_mask, inner)
-        bw[stroke > 0] = 0
 
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        x, y, w, h = cv2.boundingRect(cnt)
-        
-        # A: Ignore the image border
-        if area > (image_area * 0.9):
-          continue
+def print_boxes(label: str, boxes: list[OcrBox]) -> None:
+    print(f"{label}:")
+    if not boxes:
+        print("  none")
+        return
 
-        # B: Spatial Containment (Check if inside a Zero or Normal digit)
-        parent_shell = None
-        for s in shells:
-            sx, sy, sw, sh = s['box']
-            if x >= sx-2 and y >= sy-2 and (x+w) <= (sx+sw+2) and (y+h) <= (sy+sh+2):
-                parent_shell = s
-                break
-        
-        # C: Suppression: Don't draw the 'slash' inside a Zero
-        if parent_shell and parent_shell['type'] == 'zero':
-            continue
+    for box in boxes:
+        print(f"  {box.text!r} conf={box.confidence:.2f} box={box.box}")
 
-        # D: Normalization for scoring
-        norm_scale = 100.0 / h if h > 0 else 1
-        cnt_norm = ((cnt.astype(np.float32) - [x, y]) * norm_scale).astype(np.float32)
 
-        ellipse_score = 0
-        if len(cnt_norm) >= 5:
-            _, (MA, ma), _ = cv2.fitEllipse(cnt_norm)
-            ellipse_area = (np.pi * MA * ma) / 4.0
-            ellipse_score = cv2.contourArea(cnt_norm) / ellipse_area if ellipse_area > 0 else 0
+def draw_boxes(
+    image: np.ndarray,
+    boxes: list[OcrBox],
+    *,
+    colour: tuple[int, int, int],
+    label_prefix: str,
+) -> None:
+    for box in boxes:
+        left, top, right, bottom = box.box
+        cv2.rectangle(image, (left, top), (right, bottom), colour, 1)
+        cv2.putText(
+            image,
+            f"{label_prefix}{box.text}",
+            (left, max(10, top - 3)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            colour,
+            1,
+            cv2.LINE_AA,
+        )
 
-        # E: Solidity Check (Zero = High, 8 = Low due to waist)
-        hull = cv2.convexHull(cnt)
-        hull_area = cv2.contourArea(hull)
-        solidity = area / hull_area if hull_area > 0 else 0
 
-        # G: Hybrid Rendering
-        if parent_shell:
-            # Hole in 9, 8, etc -> Fill White
-            cv2.drawContours(bw, [cnt], -1, 255, thickness=-1)
-        else:
-            # New Shell -> Determine if it's a 0 or a normal digit
-            if ellipse_score > 0.88 and solidity > 0.94:
-                draw_inward_stroke(cnt)
-                shells.append({'box': (x, y, w, h), 'type': 'zero'})
-            else:
-                cv2.drawContours(bw, [cnt], -1, 0, thickness=-1)
-                shells.append({'box': (x, y, w, h), 'type': 'normal'})
-
-    # 3. Final Polish: Padding + Dilation (thins the black text)
-    bw = cv2.copyMakeBorder(bw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-    bw = cv2.dilate(bw, np.ones((2, 2), np.uint8), iterations=1) 
-    
-    return bw
-
-def test_on_file(file_path, coords, whitelist="0123456789"):
-    """
-    Crops the image and shows the original vs. Otsu-Contour-Stroke version.
-    """
-    x1, y1, x2, y2 = coords
+async def test_on_file(
+    ocr: LibTesseractOCR,
+    file_path: str,
+    name: str,
+    crop: OcrCrop,
+) -> None:
     full_img = Image.open(file_path)
-    cell_img = full_img.crop((x1, y1, x2, y2))
-    
-    cleaned_img = _preprocess_cell(cell_img)
+    cell_img = full_img.crop(crop.coords)
 
-    # Convert to BGR for OpenCV display
-    original_cv = cv2.cvtColor(np.array(cell_img), cv2.COLOR_RGB2BGR)
-    
-    cv2.imshow("Original (Cropped)", original_cv)
-    cv2.imshow("Otsu + External Stroke", cleaned_img)
-    
-    success, buffer = cv2.imencode(".png", cleaned_img)
-    if not success:
-        raise ValueError("Could not encode image")
-
-    image_bytes = buffer.tobytes()
-
-    
-    cmd = [
-        "tesseract",
-        "stdin",
-        "stdout",
-        "--psm", "7",
-        "--oem", "3",
-        "-c", "load_system_dawg=0",
-        "-c", "load_freq_dawg=0",
-        "-c", f"tessedit_char_whitelist={whitelist}",
-        "tsv"
-    ]
-
-    
-    print(f"Testing file: {file_path}")
-    out = subprocess.check_output(
-        cmd,
-        input=image_bytes
+    scale = 3 if crop.scale is None else crop.scale
+    threshold = 165 if crop.threshold is None else crop.threshold
+    close = True if crop.close is None else crop.close
+    dilate = True if crop.dilate is None else crop.dilate
+    cleaned_img, preprocess_debug_img = preprocess_cell(
+        cell_img,
+        scale=scale,
+        threshold=threshold,
+        close=close,
+        dilate=dilate,
+        canonicalize_q="Q" in crop.whitelist,
+        debug_draw=True,
     )
-    print(out.decode(errors='ignore'))
-      
-    print("Press any key to close the windows...")
+    print(cleaned_img.shape)
+    original_cv = cv2.cvtColor(np.array(cell_img), cv2.COLOR_RGB2BGR)
+
+    print(f"Testing file: {file_path}, stat={name}, crop={crop}")
+    result = await ocr.parse_debug(
+        cell_img,
+        crop.whitelist,
+        psm=7 if crop.psm is None else crop.psm,
+        scale=scale,
+        threshold=threshold,
+        close=close,
+        dilate=dilate,
+    )
+    print((result.text, result.confidence))
+    print(f"raw={result.debug.raw!r}")
+    print(f"filtered={result.debug.filtered!r}")
+    print_boxes("words", result.debug.words)
+    print_boxes("symbols", result.debug.symbols)
+
+    boxed_img = preprocess_debug_img.copy()
+    draw_boxes(boxed_img, result.debug.words, colour=(255, 0, 0), label_prefix="W:")
+    draw_boxes(boxed_img, result.debug.symbols, colour=(0, 200, 0), label_prefix="")
+
+    cv2.imshow("Original (Cropped)", original_cv)
+    cv2.imshow("Processed OCR Input", cleaned_img)
+    cv2.imshow("OCR Boxes", boxed_img)
+
+    print("Press any key to continue...")
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
-# --- RUN TEST ---
-# Note: Ensure coordinates match the digit location in your specific file
-test_on_file('live_720p.png', (1170, 665, 1195, 685))
-test_on_file('live_720p.png', (81, 610, 312, 640)) #long
-test_on_file('live_720p.png', (331, 610, 551, 640)) #comparisions
-test_on_file('live_720p.png', (645, 610, 730, 640), "01234568789/") #best_run
-test_on_file('live_720p.png', (819, 610, 1043, 640)) #shuffles/sec
+
+async def main() -> None:
+    ocr = LibTesseractOCR(tessdata_path="tessdata")
+    try:
+        for name, crop in TEST_CROPS.items():
+            await test_on_file(ocr, "live_720p.png", name, crop)
+    finally:
+        ocr.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,13 +1,50 @@
-# This script uses winget (Windows Package Manager) to install binaries
-# Ensure you run this in an Administrative terminal
+#!/bin/bash
+# This script uses winget (Windows Package Manager) to install binaries.
+# Run from an Administrative terminal if winget asks for elevation.
+set -e
 
-# Install Binaries
+# Install system binaries.
 winget install -e --id Python.Python.3.12
 winget install -e --id UB-Mannheim.TesseractOCR
-winget install -e --id gyan.ffmpeg
+winget install -e --id Gyan.FFmpeg
 
-# Install Python libraries
-pip install discord.py numpy Pillow aiohttp streamlink opencv-python
+# Install Python libraries.
+py -3 -m pip install --upgrade pip
+py -3 -m pip install discord.py numpy Pillow aiohttp streamlink opencv-python pyuca
 
-# Note: Manual verification of PATH environment variables for 
-# Tesseract and FFmpeg is recommended after installation.
+# Verify libtesseract can be loaded by Python's ctypes path.
+py -3 - <<'PY'
+import ctypes
+import ctypes.util
+import os
+
+candidate_paths = [
+    ctypes.util.find_library("tesseract"),
+    "libtesseract-5.dll",
+    "libtesseract-4.dll",
+    "libtesseract.dll",
+    os.path.join(os.environ.get("ProgramFiles", ""), "Tesseract-OCR", "libtesseract-5.dll"),
+    os.path.join(os.environ.get("ProgramFiles", ""), "Tesseract-OCR", "libtesseract-4.dll"),
+    os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Tesseract-OCR", "libtesseract-5.dll"),
+    os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Tesseract-OCR", "libtesseract-4.dll"),
+]
+
+errors = []
+dll_directories = []
+for path in candidate_paths:
+    if not path:
+        continue
+    try:
+        directory = os.path.dirname(path)
+        if directory and os.path.isdir(directory) and hasattr(os, "add_dll_directory"):
+            dll_directories.append(os.add_dll_directory(directory))
+        ctypes.CDLL(path)
+        print(f"libtesseract load check passed: {path}")
+        break
+    except OSError as e:
+        errors.append(f"{path}: {e}")
+else:
+    raise SystemExit("Could not load libtesseract. Tried: " + "; ".join(errors))
+PY
+
+echo "If streamlink, ffmpeg, or tesseract are not found in a new shell, restart the terminal so PATH updates apply."

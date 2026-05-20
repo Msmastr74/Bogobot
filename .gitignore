@@ -6,5 +6,10 @@ local_config.json
 .DS_Store
 channels.json
 telemetry.jsonl
-tessdata/
 accounts.json
+tessdata/
+monitor.bga
+bogotree.json
+cbogo.json
+uv.lock
+.python-version
