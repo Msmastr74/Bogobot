@@ -53,8 +53,8 @@ class SortView(discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "```ansi\n" +
                 ' '.join(
-                    map(
-                        lambda t: f"{colors[t[0]]}{t[1]}{self.RESET}"
+                    map( # Brackets are for mobile - which doesn't support colours in ANSI
+                        lambda t: f"{colors[t[0]]}{'[' if t[0] else ''}{t[1]}{']' if t[0] else ''}{self.RESET}"
                     , sort_state)
                 ) + "\n```"
             ),
