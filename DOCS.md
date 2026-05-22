@@ -41,7 +41,7 @@ User-edited settings:
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
 - `nl_model`: Model2Vec model used for @mention natural-language action matching. Defaults to `minishlab/potion-base-32M`.
-- `nl_action_threshold`: Minimum cosine-similarity score for @mention NL actions. Defaults to `0.58`.
+- `nl_action_threshold`: Minimum cosine-similarity score for @mention NL actions.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from logging import Logger
 from typing import Callable, Generic, Protocol, TypeVar, Any, cast
 
 import numpy as np
@@ -38,6 +39,7 @@ class NLCore(Generic[ContextT, ActionT]):
         *,
         model_name: str = "minishlab/potion-base-32M",
         threshold: float = 0.5,
+        logger: Logger | None = None,
     ):
         self.model_name = model_name
         self.threshold = threshold
@@ -53,6 +55,7 @@ class NLCore(Generic[ContextT, ActionT]):
         *,
         model_name: str | None = None,
         threshold: float | None = None,
+        logger: Logger | None = None,
     ) -> None:
         if model_name is not None and model_name != self.model_name:
             self.model_name = model_name
@@ -62,6 +65,9 @@ class NLCore(Generic[ContextT, ActionT]):
 
         if threshold is not None:
             self.threshold = threshold
+        
+        if logger is not None:
+            self.logger = logger
 
     def action(
         self,
@@ -102,10 +108,16 @@ class NLCore(Generic[ContextT, ActionT]):
             index = int(np.argmax(scores))
             score = float(scores[index])
 
+            action = self._description_actions[index]
             if score < self.threshold:
+                self.logger.debug(
+                    f"NL match failed for {text} with score {score}. Closest match was {action.name}."
+                )
                 return None
 
-            action = self._description_actions[index]
+            self.logger.debug(
+                f"NL match suceeded for {text} with score {score} and action {action.name}."
+            )
             return NLMatch(
                 name=action.name,
                 descriptions=action.descriptions,
@@ -145,7 +157,7 @@ class NLCore(Generic[ContextT, ActionT]):
                 "Install project dependencies before using @mention NL matching."
             ) from exc
 
-        return StaticModel.from_pretrained(self.model_name)
+        return StaticModel.from_pretrained(self.model_name, force_download=False)
 
     def _normalize(self, vector: np.ndarray) -> np.ndarray:
         norm = float(np.linalg.norm(vector))

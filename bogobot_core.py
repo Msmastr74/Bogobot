@@ -158,7 +158,8 @@ class BotCore(discord.Client):
         self.callbacks = CallbackRegistry()
         nl.configure(
             model_name=str(self.config.get("nl_model", nl.model_name)),
-            threshold=float(self.config.get("nl_action_threshold", 0.58)),
+            threshold=float(self.config.get("nl_action_threshold", 0.5)),
+            logger=self.logger.getChild("NL"),
         )
         
         self.milestones: 'MilestoneTracker | None' = None

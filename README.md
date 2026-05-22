@@ -45,7 +45,7 @@ Go into `config.json` and provide the main credentials:
  * `archive_chunk_event_limit`: Optional maximum monitor values per archive chunk. Defaults to `200`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
  * `nl_model`: Optional Model2Vec model for natural-language @mention actions. Defaults to `minishlab/potion-base-32M`.
- * `nl_action_threshold`: Optional cosine-similarity cutoff for natural-language @mention actions. Defaults to `0.58`.
+ * `nl_action_threshold`: Optional cosine-similarity cutoff for natural-language @mention actions.
 
 `DOCS.md` lists every supported user setting and every bot-managed storage field.
 
