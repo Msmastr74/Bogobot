@@ -6,6 +6,7 @@ from discord import app_commands
 from utils.transformers import ColourTransformer, IntTransformer
 from bogobot_core import BotCore, current_interaction
 from utils import groups
+from utils.nl import action
 
 class AvatarView(discord.ui.LayoutView):
     def __init__(
@@ -330,6 +331,15 @@ async def setup(bot: BotCore):
         )
     
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
+    @action(
+        "ping",
+        "ping",
+        "pong",
+        "latency",
+        "bot latency",
+        "how fast are you",
+        "are you online",
+    )
     async def ping(
         interaction: discord.Interaction,
         user: discord.User | discord.Member | None = None

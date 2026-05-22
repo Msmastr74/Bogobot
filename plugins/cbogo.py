@@ -8,6 +8,7 @@ import time
 import discord
 
 from bogobot_core import BotCore
+from utils.nl import action
 
 
 CBOGO_N = 10
@@ -603,6 +604,16 @@ async def setup(bot: BotCore):
         description="Run cbogo",
         defer=False,
         perm_requirement=0,
+    )
+    @action(
+        "cbogo",
+        "cbogo",
+        "run cbogo",
+        "play cbogo",
+        "community bogo",
+        "community bogosort",
+        "advance cbogo",
+        "do cbogo",
     )
     async def cbogo(
         interaction: discord.Interaction,

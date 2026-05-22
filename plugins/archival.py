@@ -7,6 +7,7 @@ import discord
 
 from bogobot_core import BotCore
 from utils.pagination import PageSection, PaginatedView, SectionRead
+from utils.nl import action
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
@@ -710,6 +711,16 @@ async def setup(bot: BotCore):
         description="View archived monitor values",
         perm_requirement=0,
         eph=False,
+    )
+    @action(
+        "archive",
+        "archive",
+        "show archive",
+        "monitor archive",
+        "archived values",
+        "show archived monitor values",
+        "view history",
+        "monitor history",
     )
     async def archive(
         interaction: discord.Interaction,

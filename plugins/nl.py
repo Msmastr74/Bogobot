@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime
+import random
+import re
 
 import discord
 from discord import File
@@ -21,6 +23,7 @@ class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
 
 BotAction: TypeAlias = Callable[[discord.Interaction], Coro[None]]
+CUSTOM_EMOJI_RE = re.compile(r"<a?:([A-Za-z0-9_]+):[0-9]{15,20}>")
 
 @dataclass(frozen=True, slots=True)
 class MessageInteractionCommand:
@@ -234,16 +237,40 @@ def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | No
     if bot.user is None or bot.user not in message.mentions:
         return None
 
-    text = message.content
-    for mention in (f"<@{bot.user.id}>", f"<@!{bot.user.id}>"):
-        text = text.replace(mention, " ")
+    text = message.clean_content
+    bot_mention = discord.utils.get(message.mentions, id=bot.user.id)
+    bot_names = {
+        getattr(bot_mention, "display_name", None),
+        getattr(bot_mention, "name", None),
+        getattr(bot.user, "display_name", None),
+        getattr(bot.user, "name", None),
+        str(bot.user),
+    }
+    for name in filter(None, bot_names):
+        text = text.replace(f"@{name}", " ")
 
+    text = CUSTOM_EMOJI_RE.sub(r":\1:", text)
     text = " ".join(text.split())
     return text or None
 
 
+async def default_handler(message: discord.Message) -> None:
+    responses = (
+        "I'm not sure I understand.",
+        "I'm not sure what you mean.",
+        "I don't think I know that one.",
+        "Hmm. I don't understand that yet.",
+        "I'm not sure how to respond to that.",
+    )
+    await message.reply(
+        random.choice(responses),
+        mention_author=False,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
 async def setup(bot: 'BotCore'):
-    from utils.nl import nl, action
+    from utils.nl import nl
 
     bot.event(bot.on_message)
 
@@ -258,6 +285,7 @@ async def setup(bot: 'BotCore'):
 
         match = await nl.match_info(text)
         if match is None:
+            await default_handler(message)
             return
 
         interaction = MessageInteraction(bot, message, match.name)
@@ -271,7 +299,3 @@ async def setup(bot: 'BotCore'):
             eph=False,
             defer=False,
         )
-    
-    @action("ping", "Ping!")
-    async def ping(interaction: discord.Interaction):
-        await bot.discord.send("Pong!")

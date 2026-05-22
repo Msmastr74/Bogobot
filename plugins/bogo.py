@@ -10,7 +10,9 @@ from pyuca import Collator
 
 from bogobot_core import BotCore
 from utils import groups
+from utils.nl import action
 
+FALSE_SPACE = '\u200d'
 async def setup(bot: BotCore):
     unsorted_emoji = bot.discord.get_emoji('unsorted')
     sorted_emoji = bot.discord.get_emoji('sorted')
@@ -24,6 +26,15 @@ async def setup(bot: BotCore):
             )
         )
     @bogo.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
+    @action(
+        "bogo roll",
+        "roll",
+        "roll a number",
+        "random number",
+        "dice roll",
+        "bogo roll",
+        "roll from 1 to 100",
+    )
     async def roll(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.randint(1, 100)}", response=True)
     
@@ -46,7 +57,7 @@ async def setup(bot: BotCore):
             return
         c = random.choice(choices_list)
         if not c:
-            c = '\u200d'
+            c = FALSE_SPACE
         await bot.discord.send(contents=c, response=True, safety_filter=True)
 
     @bogo.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
@@ -62,7 +73,7 @@ async def setup(bot: BotCore):
         items_list = split(items, delimiter)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         random.shuffle(items_list)
-        contents = f"{output_delimiter.join(items_list)}" or '\u200d'
+        contents = f"{output_delimiter.join(items_list)}" or FALSE_SPACE
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
 
     @bot.setup.command(name="sort", description="Sorts a list of items", defer=False, perm_requirement=0)
@@ -100,7 +111,7 @@ async def setup(bot: BotCore):
                 key=collator.sort_key,
             )
 
-        contents = output_delimiter.join(sorted_items) or '\u200d'
+        contents = output_delimiter.join(sorted_items) or FALSE_SPACE
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
     
     @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", 
@@ -156,7 +167,7 @@ async def setup(bot: BotCore):
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         output_delimiter = output_delimiter.replace('`', ' ')
         def text():
-            return f"`{output_delimiter.join(map(str, arr)) or '\u200d'}`"
+            return f"`{output_delimiter.join(map(str, arr)) or FALSE_SPACE}`"
 
         message = await bot.discord.send(
             contents=f"Sorting: {text()}", response=True
@@ -189,7 +200,7 @@ async def setup(bot: BotCore):
         random.shuffle(arr)
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         def text():
-            contents = output_delimiter.join(arr) or '\u200d'
+            contents = output_delimiter.join(arr) or FALSE_SPACE
             contents = contents.replace('`', ' ')
             return f"`{contents}`"
         def sorted_arr():
@@ -244,7 +255,7 @@ async def setup(bot: BotCore):
         output_delimiter = delimiter if delimiter == " " else f"{delimiter} "
         output_delimiter = output_delimiter.replace('`', ' ')
         def text():
-            return f"`{output_delimiter.join(map(str, arr)) or '\u200d'}`"
+            return f"`{output_delimiter.join(map(str, arr)) or FALSE_SPACE}`"
 
         should_succeed = random.random() < (percent / 100)
         sorted_arr = sorted(arr)

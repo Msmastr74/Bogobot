@@ -9,6 +9,7 @@ import time
 import discord
 
 from bogobot_core import BotCore
+from utils.nl import action
 
 
 BOGOTREE_N = 12
@@ -631,6 +632,16 @@ async def setup(bot: BotCore):
         description="Advance the collaborative bogotree",
         eph=False,
         perm_requirement=0,
+    )
+    @action(
+        "bogotree",
+        "bogotree",
+        "run bogotree",
+        "advance bogotree",
+        "play bogotree",
+        "do bogotree",
+        "tree",
+        "bogo tree",
     )
     async def bogotree(
         interaction: discord.Interaction,

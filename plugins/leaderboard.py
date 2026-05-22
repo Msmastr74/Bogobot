@@ -6,6 +6,7 @@ import discord
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups, tasks
+from utils.nl import action
 
 from bogobot_core import BotCore
 
@@ -137,6 +138,17 @@ async def setup(bot: BotCore):
         eph=False,
         perm_requirement=0,
     )
+    @action(
+        "top",
+        "top",
+        "leaderboard",
+        "top leaderboard",
+        "show leaderboard",
+        "show top leaderboard",
+        "top players",
+        "best players",
+        "sortoff leaderboard",
+    )
     async def top(interaction: discord.Interaction):
         await bot.discord.send(
             response=True,
@@ -151,6 +163,15 @@ async def setup(bot: BotCore):
         description="Gets the bottom 10 players in sortoffs!",
         eph=False,
         perm_requirement=0,
+    )
+    @action(
+        "bottom",
+        "bottom",
+        "bottom leaderboard",
+        "show bottom leaderboard",
+        "bottom players",
+        "worst players",
+        "lowest leaderboard",
     )
     async def bottom(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
@@ -168,6 +189,15 @@ async def setup(bot: BotCore):
         description="Gets the middle 10 players in sortoffs!",
         eph=False,
         perm_requirement=0,
+    )
+    @action(
+        "middle",
+        "middle",
+        "middle leaderboard",
+        "show middle leaderboard",
+        "middle players",
+        "mid leaderboard",
+        "average leaderboard",
     )
     async def middle(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
