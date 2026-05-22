@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Generic, TypeAlias, TypeVar, Any, TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    from model2vec import StaticModel
+from typing import Callable, Generic, Protocol, TypeVar, Any, cast
 
 import numpy as np
-from plugins.nl import BotActionParameters, BotActionContext
+from plugins.nl import BotAction, BotActionParameters
 
 ContextT = TypeVar("ContextT")
 ActionT = TypeVar("ActionT")
+
+
+class EmbeddingModel(Protocol):
+    def encode(self, sentences: str | list[str]) -> Any:
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +42,7 @@ class NLCore(Generic[ContextT, ActionT]):
         self.model_name = model_name
         self.threshold = threshold
         self._actions: list[_NLAction[ContextT, ActionT]] = []
-        self._model: 'StaticModel | None' = None
+        self._model: EmbeddingModel | None = None
         self._description_embeddings: np.ndarray | None = None
         self._description_actions: list[_NLAction[ContextT, ActionT]] = []
         self._dirty = True
@@ -126,17 +128,17 @@ class NLCore(Generic[ContextT, ActionT]):
                 descriptions.append(description)
                 description_actions.append(action)
 
-        embeddings = await asyncio.to_thread(
-            self._model.encode, descriptions
-        )
+        model = self._model
+        assert model is not None
+        embeddings = await asyncio.to_thread(model.encode, descriptions)
         matrix = np.asarray(embeddings, dtype=np.float32)
         self._description_embeddings = self._normalize_matrix(matrix)
         self._description_actions = description_actions
         self._dirty = False
 
-    def _load_model(self):
+    def _load_model(self) -> EmbeddingModel:
         try:
-            from model2vec import StaticModel
+            from model2vec import StaticModel  # type: ignore[reportMissingImports]
         except ImportError as exc:
             raise RuntimeError(
                 "The model2vec package is required for natural-language actions. "
@@ -154,8 +156,6 @@ class NLCore(Generic[ContextT, ActionT]):
     def _normalize_matrix(self, matrix: np.ndarray) -> np.ndarray:
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
         return matrix / np.maximum(norms, 1e-12)
-
-BotAction: TypeAlias = Callable[[BotActionContext], Awaitable[None]]
 
 nl = NLCore[BotActionParameters, BotAction]()
 def action(

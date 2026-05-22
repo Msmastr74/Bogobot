@@ -6,7 +6,7 @@ import datetime
 from typing import Iterable
 from bogobot_core import BotCore
 from PIL import Image
-from utils.nl import BotActionContext, action
+from utils.nl import action
 
 class StatsView(discord.ui.LayoutView):
     def __init__(
@@ -76,37 +76,7 @@ class SortView(discord.ui.LayoutView):
             ))
 
 async def setup(bot: BotCore):
-    async def stats_view() -> StatsView:
-        stats_list = bot.stats
-
-        # Use .get() to prevent future KeyErrors if the cache is empty
-        shuffles = stats_list.get("shuffles", "Loading...")
-        comparisons = stats_list.get("comparisons", "Loading...")
-        best_run = stats_list.get("best_run", "Loading...")
-        shuffles_sec = stats_list.get("shuffles_sec", "Loading...")
-        average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
-        uptime = stats_list.get("uptime", "Loading...")
-        elapsed_time = await bot.get_stream_uptime()
-        return StatsView(
-            fields=[
-                ("Shuffles", shuffles),
-                ("Comparisons", comparisons),
-                ("Best Run", best_run),
-                ("Shuffles Per Second", shuffles_sec),
-                ("Average Best Shuffle", average_best_shuffle),
-                ("Uptime [STREAM]", uptime),
-                ("Elapsed Time [STATIC]", elapsed_time),
-            ],
-            updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
-        )
-
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
-    async def get_stats(interaction: discord.Interaction):
-        await bot.discord.send(
-            view=await stats_view(),
-            response=True
-        )
-
     @action(
         "get_stats",
         "stats",
@@ -120,8 +90,33 @@ async def setup(bot: BotCore):
         "how many shuffles",
         "what are the stream numbers",
     )
-    async def get_stats_mention(ctx: BotActionContext):
-        await ctx.reply(view=await stats_view())
+    async def get_stats(interaction: discord.Interaction):
+        
+        stats_list = bot.stats
+
+        # Use .get() to prevent future KeyErrors if the cache is empty
+        shuffles = stats_list.get("shuffles", "Loading...")
+        comparisons = stats_list.get("comparisons", "Loading...")
+        best_run = stats_list.get("best_run", "Loading...")
+        shuffles_sec = stats_list.get("shuffles_sec", "Loading...")
+        average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
+        uptime = stats_list.get("uptime", "Loading...")
+        elapsed_time = await bot.get_stream_uptime()
+        await bot.discord.send(
+            view=StatsView(
+                fields=[
+                    ("Shuffles", shuffles),
+                    ("Comparisons", comparisons),
+                    ("Best Run", best_run),
+                    ("Shuffles Per Second", shuffles_sec),
+                    ("Average Best Shuffle", average_best_shuffle),
+                    ("Uptime [STREAM]", uptime),
+                    ("Elapsed Time [STATIC]", elapsed_time),
+                ],
+                updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
+            ),
+            response=True
+        )
 
     last_frame: Image.Image | None = None
     last_value: tuple[
@@ -160,6 +155,16 @@ async def setup(bot: BotCore):
         ), file
 
     @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False, perm_requirement=0)
+    @action(
+        "get_sort",
+        "sort",
+        "current sort",
+        "sort state",
+        "show the sort",
+        "what is the current sort",
+        "current best shuffle",
+        "best run state",
+    )
     async def get_sort(interaction: discord.Interaction):
         view, file = await sort_payload()
         if view is None:
@@ -173,30 +178,6 @@ async def setup(bot: BotCore):
         await bot.discord.send(
             view=view,
             files=[file] if file else None,
-            response=True
-        )
-
-    @action(
-        "get_sort",
-        "sort",
-        "current sort",
-        "sort state",
-        "show the sort",
-        "what is the current sort",
-        "current best shuffle",
-        "best run state",
-    )
-    async def get_sort_mention(ctx: BotActionContext):
-        view, file = await sort_payload()
-        if view is None:
-            await ctx.reply(
-                "No sort data available yet.",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-
-        await ctx.reply(
-            view=view,
-            files=[file] if file else None,
+            response=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
