@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from logging import Logger
+from logging import Logger, getLogger
 from typing import Callable, Generic, Protocol, TypeVar, Any, cast
 
 import numpy as np
@@ -49,6 +49,7 @@ class NLCore(Generic[ContextT, ActionT]):
         self._description_actions: list[_NLAction[ContextT, ActionT]] = []
         self._dirty = True
         self._lock = asyncio.Lock()
+        self.logger = logger or getLogger("Bogobot.NL")
 
     def configure(
         self,
@@ -97,6 +98,10 @@ class NLCore(Generic[ContextT, ActionT]):
         if not text.strip() or not self._actions:
             return None
 
+        exact_match = self._exact_match(text)
+        if exact_match is not None:
+            return exact_match
+
         async with self._lock:
             await self._ensure_embeddings()
             assert self._model is not None
@@ -125,6 +130,24 @@ class NLCore(Generic[ContextT, ActionT]):
                 action=action.action,
                 score=score,
             )
+
+    def _exact_match(self, text: str) -> NLMatch[ContextT, ActionT] | None:
+        normalized = self._normalize_text(text)
+        for action in self._actions:
+            for description in action.descriptions:
+                if normalized == self._normalize_text(description):
+                    self.logger.debug(f"NL exact match for {text} with action {action.name}.")
+                    return NLMatch(
+                        name=action.name,
+                        descriptions=action.descriptions,
+                        context=action.context,
+                        action=action.action,
+                        score=1.0,
+                    )
+        return None
+
+    def _normalize_text(self, text: str) -> str:
+        return " ".join(text.casefold().split())
 
     async def _ensure_embeddings(self) -> None:
         if self._model is None:
