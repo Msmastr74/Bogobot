@@ -335,6 +335,7 @@ async def setup(bot: BotCore):
         "ping",
         "ping",
         "pong",
+        "🏓",
         "latency",
         "bot latency",
         "how fast are you",
@@ -362,7 +363,7 @@ async def setup(bot: BotCore):
         
         user = user or interaction.user
         try:
-            user_msg = await bot.wait_for(
+            user_msg = interaction.message or await bot.wait_for(
                 "message",
                 check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
                 timeout=60

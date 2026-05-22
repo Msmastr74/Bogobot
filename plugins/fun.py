@@ -58,6 +58,9 @@ async def setup(bot: BotCore):
 
     conversational_actions: dict[tuple[str, ...], tuple[str, ...]] = {
         ("hello", "hi", "hey"): ("hi", "hello", "hey"),
+        ("1 + 2",): ("3", "three"),
+        ("1 + 3",): ("3", "three"),
+        ("bogo",): ("bogo", "bogo²", "bogo³"),
         ("bye", "goodbye", "see you"): ("bye", "goodbye", "see you"),
         ("you can talk", "can you talk", "can you speak"): ("yes", "yep", "i can"),
         ("thank you", "thanks", "thank you bot"): ("you're welcome", "no problem", "anytime"),
