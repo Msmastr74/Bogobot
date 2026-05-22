@@ -44,6 +44,8 @@ Go into `config.json` and provide the main credentials:
  * `archive_flush_interval`: Optional seconds between archive flushes. Defaults to `60`.
  * `archive_chunk_event_limit`: Optional maximum monitor values per archive chunk. Defaults to `200`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
+ * `nl_model`: Optional Model2Vec model for natural-language @mention actions. Defaults to `minishlab/potion-base-32M`.
+ * `nl_action_threshold`: Optional cosine-similarity cutoff for natural-language @mention actions. Defaults to `0.58`.
 
 `DOCS.md` lists every supported user setting and every bot-managed storage field.
 
@@ -96,6 +98,7 @@ May 20 18:25:33.266 INFO     Bogobot         Automatic account creation finished
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
  * /get_sort: Retrieves the latest observed sort state and frame image when stream data is available.
+ * @mention NL actions: Mention Bogobot and it will interpret the text based on predefined actions.
  * /archive: Shows archived monitor values.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.

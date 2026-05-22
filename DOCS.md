@@ -40,6 +40,8 @@ User-edited settings:
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
+- `nl_model`: Model2Vec model used for @mention natural-language action matching. Defaults to `minishlab/potion-base-32M`.
+- `nl_action_threshold`: Minimum cosine-similarity score for @mention NL actions. Defaults to `0.58`.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
@@ -188,6 +190,9 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
 - `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives `new_values: list[tuple[bool, int]]`, `new_value: int`, and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
+- `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
+
+Plugins can also register natural-language actions for @mentions with `@utils.nl.action(...)`. The shared `utils.nl.NLCore` embeds action descriptions with Model2Vec, embeds the user's mention text, then chooses the action with the highest cosine similarity above `nl_action_threshold`. The `utils.nl` module exposes `nl = NLCore[BotContext, BotAction]()` and `action = nl.action`; action metadata such as `perm_requirement` is passed as decorator keyword arguments. `plugins/nl.py` attaches `bot.on_message` as a Discord event, strips the mention, matches the remaining text, checks permissions, and runs the best matching action.
 
 Current plugin responsibilities:
 
@@ -203,6 +208,7 @@ Current plugin responsibilities:
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
+- `nl.py`: @mention natural-language action dispatch.
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.

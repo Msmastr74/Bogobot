@@ -17,6 +17,7 @@ from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
 from utils.callbacks import CallbackRegistry, AsyncCallback, MaybeAwaitableT
+from utils.nl import nl
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -151,9 +152,14 @@ class BotCore(discord.Client):
         self._connected = False
         
         self.event(self.on_ready)
+        self.event(self.on_message)
         self.event(self.on_member_join)
         self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
+        nl.configure(
+            model_name=str(self.config.get("nl_model", nl.model_name)),
+            threshold=float(self.config.get("nl_action_threshold", 0.58)),
+        )
         
         self.milestones: 'MilestoneTracker | None' = None
     
@@ -300,7 +306,16 @@ class BotCore(discord.Client):
 
     async def on_guild_join(self, guild: discord.Guild):
         await self.callbacks.execute_async('guild_join', guild)
-    
+
+    def message_callback(
+        self,
+        callback: AsyncCallback[[discord.Message], MaybeAwaitableT],
+    ):
+        self.callbacks.register('message', callback)
+        return callback
+
+    async def on_message(self, message: discord.Message):
+        await self.callbacks.execute_async('message', message)
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):

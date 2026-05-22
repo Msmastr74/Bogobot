@@ -6,6 +6,7 @@ import datetime
 from typing import Iterable
 from bogobot_core import BotCore
 from PIL import Image
+from utils.nl import BotActionContext, action
 
 class StatsView(discord.ui.LayoutView):
     def __init__(
@@ -75,10 +76,9 @@ class SortView(discord.ui.LayoutView):
             ))
 
 async def setup(bot: BotCore):
-    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
-    async def get_stats(interaction: discord.Interaction):
+    async def stats_view() -> StatsView:
         stats_list = bot.stats
-        
+
         # Use .get() to prevent future KeyErrors if the cache is empty
         shuffles = stats_list.get("shuffles", "Loading...")
         comparisons = stats_list.get("comparisons", "Loading...")
@@ -87,8 +87,7 @@ async def setup(bot: BotCore):
         average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
         uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = await bot.get_stream_uptime()
-        
-        view = StatsView(
+        return StatsView(
             fields=[
                 ("Shuffles", shuffles),
                 ("Comparisons", comparisons),
@@ -100,11 +99,29 @@ async def setup(bot: BotCore):
             ],
             updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
         )
-        
+
+    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
+    async def get_stats(interaction: discord.Interaction):
         await bot.discord.send(
-            view=view,
+            view=await stats_view(),
             response=True
         )
+
+    @action(
+        "get_stats",
+        "stats",
+        "statistics",
+        "stream stats",
+        "current stats",
+        "show me the stats",
+        "shuffles",
+        "comparisons",
+        "uptime",
+        "how many shuffles",
+        "what are the stream numbers",
+    )
+    async def get_stats_mention(ctx: BotActionContext):
+        await ctx.reply(view=await stats_view())
 
     last_frame: Image.Image | None = None
     last_value: tuple[
@@ -121,16 +138,10 @@ async def setup(bot: BotCore):
         nonlocal last_frame
         last_frame = frame
     
-    @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False, perm_requirement=0)
-    async def get_sort(interaction: discord.Interaction):
+    async def sort_payload() -> tuple[SortView | None, discord.File | None]:
         if last_value is None:
-            await bot.discord.send(
-                "No sort data available yet.",
-                response=True,
-                ephemeral=True
-            )
-            return
-        
+            return None, None
+
         sort_state, correct_count, timestamp, frame = last_value
         file: discord.File | None = None
         if frame:
@@ -140,14 +151,52 @@ async def setup(bot: BotCore):
             file = discord.File(buffer, filename=f"sort_{timestamp}.png")
 
         total_count = len(sort_state)
+        return SortView(
+            sort_state=sort_state,
+            correct_count=correct_count,
+            total_count=total_count,
+            timestamp=datetime.datetime.fromtimestamp(timestamp),
+            image=file
+        ), file
+
+    @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False, perm_requirement=0)
+    async def get_sort(interaction: discord.Interaction):
+        view, file = await sort_payload()
+        if view is None:
+            await bot.discord.send(
+                "No sort data available yet.",
+                response=True,
+                ephemeral=True
+            )
+            return
+
         await bot.discord.send(
-            view=SortView(
-                sort_state=sort_state,
-                correct_count=correct_count,
-                total_count=total_count,
-                timestamp=datetime.datetime.fromtimestamp(timestamp),
-                image=file
-            ),
+            view=view,
             files=[file] if file else None,
             response=True
+        )
+
+    @action(
+        "get_sort",
+        "sort",
+        "current sort",
+        "sort state",
+        "show the sort",
+        "what is the current sort",
+        "current best shuffle",
+        "best run state",
+    )
+    async def get_sort_mention(ctx: BotActionContext):
+        view, file = await sort_payload()
+        if view is None:
+            await ctx.reply(
+                "No sort data available yet.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        await ctx.reply(
+            view=view,
+            files=[file] if file else None,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
