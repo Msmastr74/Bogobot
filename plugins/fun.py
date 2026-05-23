@@ -88,11 +88,14 @@ async def setup(bot: BotCore):
     }
     literal_actions: dict[tuple[str, ...], tuple[str, ...]] = {
         (":steamhappy:", ":steamhappybutiaddeditwrong:"): (":steamhappybutiaddeditwrong:",),
-        (":steamsadbutialsoaddeditwrong:", ":steamsad:"): (":steamsadbutialsoaddeditwrong:",)
+        (":steamsad:", ":steamsadbutialsoaddeditwrong:"): (":steamsadbutialsoaddeditwrong:",)
     }
 
     for phrases, responses in conversational_actions.items():
-        @action(phrases[0], *phrases)
+        @action(
+            phrases[0],
+            f"Casual conversational response. Match short messages like {', '.join(phrases)}.",
+        )
         async def conversational_reply(
             interaction: discord.Interaction,
             responses: tuple[str, ...] = responses,
@@ -100,7 +103,10 @@ async def setup(bot: BotCore):
             await send_fun_text(interaction, casual_response(responses))
     
     for phrases, responses in literal_actions.items():
-        @action(phrases[0], *phrases)
+        @action(
+            phrases[0],
+            f"The user's entire message is one of these exact custom emoji alias tokens: {', '.join(phrases)}. Match the literal colon-delimited text tokens themselves, not the emotion or meaning of the words.",
+        )
         async def literal_reply(
             interaction: discord.Interaction,
             responses: tuple[str, ...] = responses,
@@ -148,11 +154,7 @@ async def setup(bot: BotCore):
     @bogo.command(name="name", description="Bogoes your name", perm_requirement=0, defer=False)
     @action(
         "bogo name",
-        "bogo name",
-        "shuffle my name",
-        "scramble my name",
-        "bogo my name",
-        "bogofy my name",
+        "Shuffle or bogofy the requesting user's Discord display name. Match requests like bogo name, shuffle my name, scramble my name, bogo my name, or bogofy my name.",
     )
     async def bogo_name(interaction: discord.Interaction):
         member = interaction.user

@@ -140,14 +140,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "top",
-        "top",
-        "leaderboard",
-        "top leaderboard",
-        "show leaderboard",
-        "show top leaderboard",
-        "top players",
-        "best players",
-        "sortoff leaderboard",
+        "Show the top sortoff leaderboard with the best players by ELO. Match requests like leaderboard, top leaderboard, show leaderboard, show top leaderboard, top players, best players, or sortoff leaderboard.",
     )
     async def top(interaction: discord.Interaction):
         await bot.discord.send(
@@ -166,12 +159,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "bottom",
-        "bottom",
-        "bottom leaderboard",
-        "show bottom leaderboard",
-        "bottom players",
-        "worst players",
-        "lowest leaderboard",
+        "Show the bottom sortoff leaderboard with the lowest-ranked players by ELO. Match requests like bottom leaderboard, show bottom leaderboard, bottom players, worst players, or lowest leaderboard.",
     )
     async def bottom(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
@@ -192,12 +180,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "middle",
-        "middle",
-        "middle leaderboard",
-        "show middle leaderboard",
-        "middle players",
-        "mid leaderboard",
-        "average leaderboard",
+        "Show the middle of the sortoff leaderboard around the average-ranked players by ELO. Match requests like middle leaderboard, show middle leaderboard, middle players, mid leaderboard, or average leaderboard.",
     )
     async def middle(interaction: discord.Interaction):
         rows = await fetch_leaderboard()

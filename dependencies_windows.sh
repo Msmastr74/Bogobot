@@ -9,9 +9,9 @@ winget install -e --id UB-Mannheim.TesseractOCR
 winget install -e --id Gyan.FFmpeg
 
 # Install Python libraries.
-# model2vec provides lightweight local NL action matching.
+# gliner2 provides local NL action matching and parameter extraction.
 py -3 -m pip install --upgrade pip
-py -3 -m pip install discord.py model2vec numpy Pillow aiohttp streamlink opencv-python pyuca
+py -3 -m pip install discord.py gliner2 numpy Pillow aiohttp streamlink opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 py -3 - <<'PY'

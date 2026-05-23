@@ -635,13 +635,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "bogotree",
-        "bogotree",
-        "run bogotree",
-        "advance bogotree",
-        "play bogotree",
-        "do bogotree",
-        "tree",
-        "bogo tree",
+        "Advance or play the collaborative Bogotree puzzle. Match requests like run bogotree, advance bogotree, play bogotree, do bogotree, tree, or bogo tree.",
     )
     async def bogotree(
         interaction: discord.Interaction,

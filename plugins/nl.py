@@ -22,7 +22,7 @@ from dataclasses import dataclass
 class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
 
-BotAction: TypeAlias = Callable[[discord.Interaction], Coro[None]]
+BotAction: TypeAlias = Callable[..., Coro[None]]
 CUSTOM_EMOJI_RE = re.compile(r"<a?:([A-Za-z0-9_]+):[0-9]{15,20}>")
 
 @dataclass(frozen=True, slots=True)
@@ -233,11 +233,19 @@ class MessageInteraction(discord.Interaction[discord.Client]):
     def is_expired(self) -> bool:
         return False
 
-def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | None:
+def mentioned_message_text(
+    bot: 'BotCore',
+    message: discord.Message,
+    *,
+    normalize_discord: bool = True,
+) -> str | None:
     if bot.user is None or bot.user not in message.mentions:
         return None
 
-    text = message.clean_content
+    text = message.clean_content if normalize_discord else message.content
+    text = text.replace(f"<@{bot.user.id}>", " ")
+    text = text.replace(f"<@!{bot.user.id}>", " ")
+
     bot_mention = discord.utils.get(message.mentions, id=bot.user.id)
     bot_names = {
         getattr(bot_mention, "display_name", None),
@@ -246,10 +254,11 @@ def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | No
         getattr(bot.user, "name", None),
         str(bot.user),
     }
-    for name in filter(None, bot_names):
-        text = text.replace(f"@{name}", " ")
+    if normalize_discord:
+        for name in filter(None, bot_names):
+            text = text.replace(f"@{name}", " ")
+        text = CUSTOM_EMOJI_RE.sub(r":\1:", text)
 
-    text = CUSTOM_EMOJI_RE.sub(r":\1:", text)
     text = " ".join(text.split())
     return text or None
 
@@ -279,22 +288,26 @@ async def setup(bot: 'BotCore'):
         if message.author.bot or bot.user is None:
             return
 
-        text = mentioned_message_text(bot, message)
+        text = mentioned_message_text(
+            bot,
+            message,
+            normalize_discord=bool(bot.config.get("nl_normalize_discord", True)),
+        )
         if text is None:
             return
 
-        match = await nl.match_info(text)
+        match = await nl.match_info(text, message=message)
         if match is None:
             await default_handler(message)
             return
 
-        interaction = MessageInteraction(bot, message, match.name)
+        interaction = MessageInteraction(bot, message, match.command_name)
 
         await bot.setup._run_command(
             interaction,
             match.action,
             (),
-            {},
+            match.kwargs or {},
             perm_requirement=match.context.get("perm_requirement", 0),
             eph=False,
             defer=False,

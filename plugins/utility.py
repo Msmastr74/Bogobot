@@ -333,13 +333,10 @@ async def setup(bot: BotCore):
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     @action(
         "ping",
-        "ping",
-        "pong",
-        "🏓",
-        "latency",
-        "bot latency",
-        "how fast are you",
-        "are you online",
+        "Show bot latency and respond to simple ping requests. Match requests like ping, pong, 🏓, latency, bot latency, how fast are you, or are you online. Do not match mixed requests that mention other commands.",
+        params={
+            "user": ("Discord user or member.", discord.User | discord.Member | None)
+        }
     )
     async def ping(
         interaction: discord.Interaction,
@@ -363,7 +360,8 @@ async def setup(bot: BotCore):
         
         user = user or interaction.user
         try:
-            user_msg = interaction.message or await bot.wait_for(
+            can_use_msg = interaction.message if interaction.user.id == user.id else None
+            user_msg = can_use_msg or await bot.wait_for(
                 "message",
                 check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
                 timeout=60

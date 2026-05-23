@@ -17,12 +17,12 @@ brew install python tesseract ffmpeg streamlink
 
 # Install Python libraries
 # discord.py: Bot API
-# model2vec: lightweight local NL action matching
+# gliner2: local NL action matching and parameter extraction
 # numpy & Pillow: Image manipulation for OCR
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # opencv-python: image preprocessing
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py model2vec numpy Pillow aiohttp opencv-python pyuca
+python3 -m pip install discord.py gliner2 numpy Pillow aiohttp opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'
