@@ -797,6 +797,9 @@ class BotCore(discord.Client):
                 })
                 if not allowed:
                     status = "unauthorized"
+                    if interaction.response.is_done():
+                        await self.outer.discord.cleanup_defer_status(interaction)
+                        return await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
                     return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
                 if defer:
                     await interaction.response.defer(ephemeral=(eph))
