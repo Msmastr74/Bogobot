@@ -871,8 +871,8 @@ async def setup(bot: BotCore):
             self.embeds = embeds
             self.attachments = attachments
         async def on_submit(self, interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=False)
             token = current_interaction.set(interaction)
+            await bot.discord.defer(ephemeral=False)
             try:
                 try:
                     rows = int(str(self.rows.value).strip())
@@ -937,7 +937,7 @@ async def setup(bot: BotCore):
                 ephemeral=True,
             )
             return
-        await interaction.response.defer()
+        await bot.discord.defer()
         attachments = [
             attachment
             for attachment in (

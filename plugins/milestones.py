@@ -555,7 +555,7 @@ async def setup(bot: BotCore):
                 response=True, ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=ephemeral)
+        await bot.discord.defer(ephemeral=ephemeral)
 
         history = milestone_tracker.history.get(milestone_name)
         history_count = len(history) if history else 0

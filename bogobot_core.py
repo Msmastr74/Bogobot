@@ -373,6 +373,11 @@ class BotCore(discord.Client):
                 return await interaction.channel.send(**kwargs) # pyright: ignore
 
             return None
+        
+        async def defer(self, ephemeral=False, thinking=False):
+            interaction = current_interaction.get()
+            if interaction and not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=ephemeral, thinking=thinking)
 
         class MessageHandle:
             def __init__(
@@ -801,7 +806,7 @@ class BotCore(discord.Client):
                         await self.outer.discord.cleanup_defer_status(interaction)
                         return await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
                     return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
-                if defer:
+                if defer and not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=(eph))
                 await func(interaction, *args, **kwargs)
             except Exception as e:

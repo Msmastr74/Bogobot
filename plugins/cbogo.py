@@ -694,7 +694,7 @@ async def setup(bot: BotCore):
                     ephemeral=True,
                 )
                 return
-            await interaction.response.defer()
+            await bot.discord.defer()
             state["last_user"] = interaction.user.id
 
             shuffle_start = state["shuffles"]

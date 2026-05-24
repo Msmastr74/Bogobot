@@ -686,7 +686,7 @@ async def setup(bot: BotCore):
             )
             return
 
-        await interaction.response.defer()
+        await bot.discord.defer()
 
         ranked = ranked_usage(requested_commands)
         view = UsageView(
