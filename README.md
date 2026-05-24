@@ -44,8 +44,12 @@ Go into `config.json` and provide the main credentials:
  * `archive_flush_interval`: Optional seconds between archive flushes. Defaults to `60`.
  * `archive_chunk_event_limit`: Optional maximum monitor values per archive chunk. Defaults to `200`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
- * `nl_model`: Optional GLiNER2 model for natural-language @mention actions. Defaults to `fastino/gliner2-base-v1`.
- * `nl_action_threshold`: Optional confidence cutoff for natural-language @mention actions.
+ * `nl`: Optional boolean for enabling natural-language @mention actions. Defaults to `true`.
+ * `nl_ranker_model`: Optional cross-encoder model for ranking natural-language tools. Defaults to `cross-encoder/ms-marco-MiniLM-L6-v2`.
+ * `nl_function_model`: Optional instruct model for choosing tools and arguments with guided DSL generation. Defaults to `HuggingFaceTB/SmolLM2-135M-Instruct`.
+ * `nl_quantization`: Optional function model quantization mode: `none`, `fp16`, `4bit`, or `8bit`. Defaults to `none`.
+ * `nl_top_k`: Optional number of ranked tools shown to the function model. Defaults to `6`.
+ * `nl_action_threshold`: Optional ranker score cutoff for natural-language @mention actions.
  * `nl_normalize_discord`: Optional boolean for whether @mention NL text resolves Discord mentions and emojis before matching. Defaults to `true`.
 
 `DOCS.md` lists every supported user setting and every bot-managed storage field.

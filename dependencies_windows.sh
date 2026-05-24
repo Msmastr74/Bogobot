@@ -9,9 +9,9 @@ winget install -e --id UB-Mannheim.TesseractOCR
 winget install -e --id Gyan.FFmpeg
 
 # Install Python libraries.
-# gliner2 provides local NL action matching and parameter extraction.
+# torch and transformers provide local NL routing and function calling.
 py -3 -m pip install --upgrade pip
-py -3 -m pip install discord.py gliner2 numpy Pillow aiohttp streamlink opencv-python pyuca
+py -3 -m pip install discord.py torch transformers numpy Pillow aiohttp streamlink opencv-python pyuca bitsandbytes accelerate
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 py -3 - <<'PY'

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import random
 import re
 
 import discord
@@ -23,7 +22,10 @@ class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
 
 BotAction: TypeAlias = Callable[..., Coro[None]]
-CUSTOM_EMOJI_RE = re.compile(r"<a?:([A-Za-z0-9_]+):[0-9]{15,20}>")
+ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
+USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
+ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
+CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 
 @dataclass(frozen=True, slots=True)
 class MessageInteractionCommand:
@@ -94,7 +96,11 @@ class MessageInteractionResponse(discord.InteractionResponse[discord.Client]):
     def __init__(self, parent: "MessageInteraction"):
         super().__init__(parent)
         self._message_interaction = parent
-        self._response_type = None
+        self._response_type = (
+            discord.InteractionResponseType.channel_message
+            if parent._followup_only else
+            None
+        )
         self._message: discord.Message | None = None
 
     async def defer(
@@ -154,9 +160,17 @@ class MessageInteraction(discord.Interaction[discord.Client]):
     __slots__ = (
         "source_message",
         "_message_command",
+        "_followup_only",
     )
 
-    def __init__(self, bot: "BotCore", message: discord.Message, command_name: str):
+    def __init__(
+        self,
+        bot: "BotCore",
+        message: discord.Message,
+        command_name: str,
+        *,
+        followup_only: bool = False,
+    ):
         self._state = message._state
         self._client = bot
         self._session = getattr(self._state.http, "_HTTPClient__session")
@@ -185,6 +199,7 @@ class MessageInteraction(discord.Interaction[discord.Client]):
         self._permissions = 0
         self._app_permissions = 0
         self._message_command = MessageInteractionCommand(command_name)
+        self._followup_only = followup_only
 
     @discord.utils.cached_slot_property("_cs_response")
     def response(self: discord.Interaction[discord.Client]) -> MessageInteractionResponse:
@@ -242,39 +257,70 @@ def mentioned_message_text(
     if bot.user is None or bot.user not in message.mentions:
         return None
 
-    text = message.clean_content if normalize_discord else message.content
-    text = text.replace(f"<@{bot.user.id}>", " ")
-    text = text.replace(f"<@!{bot.user.id}>", " ")
-
-    bot_mention = discord.utils.get(message.mentions, id=bot.user.id)
-    bot_names = {
-        getattr(bot_mention, "display_name", None),
-        getattr(bot_mention, "name", None),
-        getattr(bot.user, "display_name", None),
-        getattr(bot.user, "name", None),
-        str(bot.user),
-    }
+    text = message.content
     if normalize_discord:
-        for name in filter(None, bot_names):
-            text = text.replace(f"@{name}", " ")
-        text = CUSTOM_EMOJI_RE.sub(r":\1:", text)
+        text = annotate_discord_references(message, text)
 
     text = " ".join(text.split())
     return text or None
 
 
-async def default_handler(message: discord.Message) -> None:
-    responses = (
-        "I'm not sure I understand.",
-        "I'm not sure what you mean.",
-        "I don't think I know that one.",
-        "Hmm. I don't understand that yet.",
-        "I'm not sure how to respond to that.",
-    )
-    await message.reply(
-        random.choice(responses),
-        mention_author=False,
-        allowed_mentions=discord.AllowedMentions.none(),
+def annotate_discord_references(message: discord.Message, text: str) -> str:
+    user_names = {
+        str(user.id): _discord_reference_name(user)
+        for user in message.mentions
+    }
+    role_names = {
+        str(role.id): role.name
+        for role in getattr(message, "role_mentions", ())
+    }
+    channel_names = {
+        str(channel.id): channel.name
+        for channel in getattr(message, "channel_mentions", ())
+        if getattr(channel, "name", None) is not None
+    }
+
+    def annotate_user(match: re.Match[str]) -> str:
+        prefix, snowflake = match.groups()
+        name = user_names.get(snowflake)
+        if name is None:
+            return match[0]
+        return f"<{prefix}{snowflake} {json_string(name)}>"
+
+    def annotate_role(match: re.Match[str]) -> str:
+        snowflake = match[1]
+        name = role_names.get(snowflake)
+        if name is None:
+            return match[0]
+        return f"<@&{snowflake} {json_string(name)}>"
+
+    def annotate_channel(match: re.Match[str]) -> str:
+        snowflake = match[1]
+        name = channel_names.get(snowflake)
+        if name is None:
+            return match[0]
+        return f"<#{snowflake} {json_string(name)}>"
+
+    text = USER_MENTION_RE.sub(annotate_user, text)
+    text = ROLE_MENTION_RE.sub(annotate_role, text)
+    return CHANNEL_MENTION_RE.sub(annotate_channel, text)
+
+
+def strip_discord_reference_annotations(text: str) -> str:
+    return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
+
+
+def json_string(text: str) -> str:
+    import json
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _discord_reference_name(entity: Any) -> str:
+    return str(
+        getattr(entity, "display_name", None) or
+        getattr(entity, "global_name", None) or
+        getattr(entity, "name", None) or
+        entity
     )
 
 
@@ -287,6 +333,8 @@ async def setup(bot: 'BotCore'):
     async def on_message(message: discord.Message):
         if message.author.bot or bot.user is None:
             return
+        if not bool(bot.config.get("nl", True)):
+            return
 
         text = mentioned_message_text(
             bot,
@@ -296,19 +344,42 @@ async def setup(bot: 'BotCore'):
         if text is None:
             return
 
-        match = await nl.match_info(text, message=message)
-        if match is None:
-            await default_handler(message)
+        matches = await nl.match_infos(text, message=message)
+        if not matches:
             return
 
-        interaction = MessageInteraction(bot, message, match.command_name)
+        for index, match in enumerate(matches):
+            followup_only = index > 0
+            if match.reply is not None:
+                reply = strip_discord_reference_annotations(match.reply)
+                if followup_only:
+                    await message.channel.send(
+                        reply,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                    await message.reply(
+                        reply,
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                continue
+            if match.action is None:
+                continue
 
-        await bot.setup._run_command(
-            interaction,
-            match.action,
-            (),
-            match.kwargs or {},
-            perm_requirement=match.context.get("perm_requirement", 0),
-            eph=False,
-            defer=False,
-        )
+            interaction = MessageInteraction(
+                bot,
+                message,
+                match.command_name,
+                followup_only=followup_only,
+            )
+
+            await bot.setup._run_command(
+                interaction,
+                match.action,
+                (),
+                match.kwargs or {},
+                perm_requirement=match.context.get("perm_requirement", 0),
+                eph=False,
+                defer=False,
+            )

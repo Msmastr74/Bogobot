@@ -333,7 +333,7 @@ async def setup(bot: BotCore):
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     @action(
         "ping",
-        "Show bot latency and respond to simple ping requests. Match requests like ping, pong, 🏓, latency, bot latency, how fast are you, or are you online. Do not match mixed requests that mention other commands.",
+        "Show bot latency and respond to simple ping requests.",
         params={
             "user": ("Discord user or member.", discord.User | discord.Member | None)
         }

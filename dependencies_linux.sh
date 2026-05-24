@@ -12,12 +12,12 @@ sudo apt install python3 python3-pip tesseract-ocr libtesseract-dev ffmpeg -y
 
 # Install Python libraries
 # discord.py: Bot API
-# gliner2: local NL action matching and parameter extraction
+# torch/transformers: local NL routing and function calling
 # numpy, Pillow & opencv-python: Image manipulation for OCR
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # streamlink: Livestream data extraction
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py gliner2 numpy Pillow aiohttp streamlink opencv-python pyuca
+python3 -m pip install discord.py torch transformers numpy Pillow aiohttp streamlink opencv-python pyuca bitsandbytes accelerate
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'

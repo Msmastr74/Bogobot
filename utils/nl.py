@@ -2,41 +2,29 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from logging import Logger, getLogger
+import json
+from logging import Logger, getLogger, WARNING
 import re
 import types
-from typing import Callable, Generic, TypeVar, Any, Literal, Union, get_args, get_origin, cast, TYPE_CHECKING
-if TYPE_CHECKING:
-    from gliner2.inference.engine import GLiNER2
+from typing import Any, Callable, Generic, Literal, TypeVar, Union, cast, get_args, get_origin
 
 import discord
 from plugins.nl import BotAction, BotActionParameters
+getLogger('httpx').setLevel(WARNING)
 
 ContextT = TypeVar("ContextT")
 ActionT = TypeVar("ActionT")
-_NO_ACTION_LABEL = "no_action"
-_PARAM_STRUCTURE_PREFIX = "parameters_for"
-_PARAM_EXTRACTION_THRESHOLD = 0.01
-_INTEGER_PATTERN = r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)"
-_FLOAT_PATTERN = r"[+-]?(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?|\.\d+)"
-_NO_ACTION_DESCRIPTION = (
-    "no matching bot action: the message is unclear, contains unrelated words, "
-    "combines multiple commands, does not ask the bot to do one known action, "
-    "or asks for a known action with invalid parameter types such as decimal "
-    "numbers for integer-only parameters"
+
+NLParamsTable = dict[str, str | tuple[str, object] | tuple[str, object, bool]]
+QuantizationMode = Literal["none", "fp16", "4bit", "8bit"]
+_MAX_DSL_COMMANDS = 4
+_REPLY_ACTION_NAME = "reply"
+_ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
+
+INSTRUCTION_TEXT = (
+    "You are Bogobot, a helpful, friendly, and slightly chaotic Discord bot. "
+    "You have a unique persona and love to assist users with their requests while being entertaining."
 )
-
-@dataclass(frozen=True, slots=True)
-class NLMatch(Generic[ContextT, ActionT]):
-    name: str
-    command_name: str
-    description: str
-    context: ContextT
-    action: ActionT
-    score: float
-    args: tuple[Any, ...] = ()
-    kwargs: dict[str, Any] | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class NLParam:
@@ -44,7 +32,18 @@ class NLParam:
     type: object
     required: bool
 
-NLParamsTable = dict[str, str | tuple[str, object] | tuple[str, object, bool]]
+
+@dataclass(frozen=True, slots=True)
+class NLMatch(Generic[ContextT, ActionT]):
+    name: str
+    command_name: str
+    description: str
+    context: ContextT
+    action: ActionT | None
+    score: float
+    kwargs: dict[str, Any] | None = None
+    reply: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class _NLAction(Generic[ContextT, ActionT]):
@@ -60,31 +59,67 @@ class NLCore(Generic[ContextT, ActionT]):
     def __init__(
         self,
         *,
-        model_name: str = "fastino/gliner2-base-v1",
-        threshold: float = 0.5,
+        enabled: bool = True,
+        ranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L6-v2",
+        function_model_name: str = "HuggingFaceTB/SmolLM2-360M-Instruct",
+        quantization: QuantizationMode = "4bit",
+        threshold: float = 0.0,
+        top_k: int = 2,
         logger: Logger | None = None,
     ):
-        self.model_name = model_name
+        self.enabled = enabled
+        self.ranker_model_name = ranker_model_name
+        self.function_model_name = function_model_name
+        self.quantization = quantization
         self.threshold = threshold
+        self.top_k = top_k
         self._actions: list[_NLAction[ContextT, ActionT]] = []
-        self._model: 'GLiNER2 | None' = None
+        self._ranker: Any = None
+        self._function_tokenizer: Any = None
+        self._function_model: Any = None
+        self._function_device: str = "cpu"
         self._lock = asyncio.Lock()
         self.logger = logger or getLogger("Bogobot.NL")
 
     def configure(
         self,
         *,
-        model_name: str | None = None,
+        enabled: bool | None = None,
+        ranker_model_name: str | None = None,
+        function_model_name: str | None = None,
+        quantization: str | None = None,
         threshold: float | None = None,
+        top_k: int | None = None,
         logger: Logger | None = None,
+        # Back-compat with the old GLiNER config name.
+        model_name: str | None = None,
     ) -> None:
-        if model_name is not None and model_name != self.model_name:
-            self.model_name = model_name
-            self._model = None
+        if enabled is not None:
+            self.enabled = enabled
+
+        ranker_model_name = ranker_model_name or model_name
+        if ranker_model_name is not None and ranker_model_name != self.ranker_model_name:
+            self.ranker_model_name = ranker_model_name
+            self._ranker = None
+
+        if function_model_name is not None and function_model_name != self.function_model_name:
+            self.function_model_name = function_model_name
+            self._function_tokenizer = None
+            self._function_model = None
+
+        if quantization is not None and quantization != self.quantization:
+            if quantization not in ("none", "fp16", "4bit", "8bit"):
+                raise ValueError(f"Unsupported NL quantization mode: {quantization}")
+            self.quantization = cast(QuantizationMode, quantization)
+            self._function_tokenizer = None
+            self._function_model = None
 
         if threshold is not None:
             self.threshold = threshold
-        
+
+        if top_k is not None:
+            self.top_k = top_k
+
         if logger is not None:
             self.logger = logger
 
@@ -120,44 +155,74 @@ class NLCore(Generic[ContextT, ActionT]):
         *,
         message: discord.Message | None = None,
     ) -> NLMatch[ContextT, ActionT] | None:
-        if not text.strip() or not self._actions:
-            return None
+        matches = await self.match_infos(text, message=message)
+        return matches[0] if matches else None
+
+    async def match_infos(
+        self,
+        text: str,
+        *,
+        message: discord.Message | None = None,
+    ) -> list[NLMatch[ContextT, ActionT]]:
+        if not self.enabled or not text.strip():
+            return []
 
         async with self._lock:
-            model = await self._ensure_model()
-            candidates = await asyncio.to_thread(self._classify_actions, model, text)
-            if not candidates:
-                return None
+            candidates: list[tuple[_NLAction[ContextT, ActionT], float]] = []
+            if self._actions:
+                ranker = await self._ensure_ranker()
+                candidates = await asyncio.to_thread(self._rank_actions, ranker, text)
 
-            action: _NLAction[ContextT, ActionT] | None = None
-            score = 0.0
-            kwargs: dict[str, Any] | None = None
-            for candidate_action, candidate_score in candidates:
-                if candidate_score < self.threshold:
-                    self.logger.debug(
-                        f"NL match failed for {text} with score {candidate_score}. Closest match was {candidate_action.name}."
-                    )
-                    return None
-
-                candidate_kwargs = await self._extract_kwargs(model, candidate_action, text, message=message)
-                if candidate_kwargs is None:
-                    self.logger.debug(
-                        f"NL candidate {candidate_action.name} rejected for {text} because parameters did not validate."
-                    )
-                    continue
-
-                action = candidate_action
-                score = candidate_score
-                kwargs = candidate_kwargs
-                break
-
-            if action is None or kwargs is None:
-                return None
-
-            self.logger.debug(
-                f"NL match suceeded for {text} with score {score} and action {action.name}."
+            tokenizer, model = await self._ensure_function_model()
+            dsl = await asyncio.to_thread(
+                self._decide_dsl,
+                tokenizer,
+                model,
+                text,
+                self._dsl_candidates([action for action, _score in candidates]),
             )
-            return NLMatch(
+
+        action_by_name = {action.name: (action, score) for action, score in candidates}
+        matches: list[NLMatch[ContextT, ActionT]] = []
+        for command in self._parse_dsl_commands(dsl):
+            tool_name = command.get("name")
+            if not isinstance(tool_name, str):
+                continue
+
+            if tool_name == _REPLY_ACTION_NAME:
+                raw_args = command.get("arguments", {})
+                raw_reply = raw_args.get("message", "") if isinstance(raw_args, dict) else ""
+                reply = str(raw_reply).strip()
+                if reply:
+                    matches.append(NLMatch(
+                        name="conversation",
+                        command_name="conversation",
+                        description="Conversational NL response",
+                        context=cast(ContextT, {}),
+                        action=None,
+                        score=1.0,
+                        reply=reply,
+                    ))
+                continue
+
+            action_score = action_by_name.get(tool_name)
+            if action_score is None:
+                self.logger.debug(f"NL DSL command rejected unknown action {tool_name!r}.")
+                continue
+
+            action, score = action_score
+            raw_args = command.get("arguments", {})
+            kwargs = self._coerce_arguments(
+                action,
+                raw_args if isinstance(raw_args, dict) else {},
+                message=message,
+            )
+            if kwargs is None:
+                self.logger.debug(f"NL DSL command {tool_name} rejected because arguments did not validate: {raw_args!r}.")
+                continue
+
+            self.logger.debug(f"NL match succeeded for {text} with score {score} and action {action.name}.")
+            matches.append(NLMatch(
                 name=action.name,
                 command_name=action.command_name,
                 description=action.description,
@@ -165,427 +230,790 @@ class NLCore(Generic[ContextT, ActionT]):
                 action=action.action,
                 score=score,
                 kwargs=kwargs,
+            ))
+
+        return matches
+
+    async def _ensure_ranker(self):
+        if self._ranker is None:
+            self._ranker = await asyncio.to_thread(self._load_ranker)
+        return self._ranker
+
+    def _load_ranker(self):
+        try:
+            import torch
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError("The transformers and torch packages are required when NL is enabled.") from exc
+
+        tokenizer = AutoTokenizer.from_pretrained(self.ranker_model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(self.ranker_model_name)
+        device = "cuda" if bool(torch.cuda.is_available()) else "cpu"
+        model = model.to(device)
+        model.eval()
+        return tokenizer, model, device
+
+    async def _ensure_function_model(self):
+        if self._function_model is None or self._function_tokenizer is None:
+            self._function_tokenizer, self._function_model = await asyncio.to_thread(self._load_function_model)
+        return self._function_tokenizer, self._function_model
+
+    def _load_function_model(self):
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError("The transformers and torch packages are required when NL is enabled.") from exc
+
+        tokenizer = AutoTokenizer.from_pretrained(self.function_model_name)
+        cuda = bool(torch.cuda.is_available())
+        self._function_device = "cuda" if cuda else "cpu"
+
+        kwargs: dict[str, Any] = {}
+        if self.quantization in ("4bit", "8bit"):
+            from transformers import BitsAndBytesConfig
+            kwargs["device_map"] = "auto"
+            
+            if self.quantization == "4bit":
+                kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=getattr(torch, "float16"),
+                    bnb_4bit_use_double_quant=True,
+                )
+            else:
+                kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
+        else:
+            kwargs["dtype"] = (
+                getattr(torch, "float16")
+                if cuda and self.quantization in ("fp16", "none")
+                else getattr(torch, "float32")
             )
 
-    def _normalize_text(self, text: str) -> str:
-        return " ".join(text.casefold().split())
+        model = AutoModelForCausalLM.from_pretrained(self.function_model_name, **kwargs)
+        if self.quantization not in ("4bit", "8bit"):
+            model = cast(Any, model).to(self._function_device)
+        model.eval()
+        return tokenizer, model
 
-    async def _ensure_model(self) -> 'GLiNER2':
-        if self._model is None:
-            self._model = await asyncio.to_thread(self._load_model)
-        return self._model
-
-    def _load_model(self) -> 'GLiNER2':
-        try:
-            from gliner2.inference.engine import GLiNER2
-        except ImportError as exc:
-            raise RuntimeError(
-                "The gliner2 package is required for natural-language actions. "
-                "Install project dependencies before using @mention NL matching."
-            ) from exc
-
-        return GLiNER2.from_pretrained(self.model_name)
-
-    def _classify_actions(
+    def _rank_actions(
         self,
-        model: 'GLiNER2',
+        ranker: tuple[Any, Any, str],
         text: str,
     ) -> list[tuple[_NLAction[ContextT, ActionT], float]]:
-        action_by_label: dict[str, _NLAction[ContextT, ActionT]] = {}
-        label_descriptions: dict[str, str] = {}
-        for action in self._actions:
-            label = self._action_label(action, action_by_label)
-            action_by_label[label] = action
-            label_descriptions[label] = self._classification_description(action)
+        import torch
 
-        label_descriptions[_NO_ACTION_LABEL] = _NO_ACTION_DESCRIPTION
-        result = model.classify_text(
-            text,
-            {
-                "action": {
-                    "labels": label_descriptions,
-                    "multi_label": True,
-                    "cls_threshold": 0.0,
-                }
-            },
-            threshold=self.threshold,
-            include_confidence=True,
+        tokenizer, model, device = ranker
+        documents = [self._rank_document(action) for action in self._actions]
+        inputs = tokenizer(
+            [text] * len(documents),
+            documents,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
         )
-        classifications = self._classification_results(result)
-        if not classifications:
-            self.logger.debug(f"NL raw classification result for {text}: {result!r}.")
-        self.logger.debug(f"NL classification results for {text}: {classifications}.")
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        with torch.no_grad():
+            logits = model(**inputs).logits
 
-        candidates: list[tuple[_NLAction[ContextT, ActionT], float]] = []
-        for label, score in classifications:
-            if label == _NO_ACTION_LABEL:
-                continue
+        if logits.shape[-1] == 1:
+            scores = logits.squeeze(-1)
+        else:
+            scores = logits[:, -1]
 
-            action = action_by_label.get(label)
-            if action is None:
-                normalized_label = self._normalize_text(label)
-                for candidate, candidate_action in action_by_label.items():
-                    if self._normalize_text(candidate) == normalized_label:
-                        action = candidate_action
-                        break
-
-            if action is not None:
-                candidates.append((action, score))
+        score_values = [float(score) for score in scores.detach().cpu().tolist()]
+        ranked = sorted(
+            zip(self._actions, score_values),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        self.logger.debug(f"Raw NL ranker actions for {text}: {[(a.name, s) for a, s in ranked]}.")
+        candidates = [
+            (action, score)
+            for action, score in ranked[:max(1, self.top_k)]
+            if score >= self.threshold
+        ]
+        self.logger.debug(f"NL ranker candidates for {text}: {[(a.name, s) for a, s in candidates]}.")
         return candidates
 
-    def _action_label(
+    def _rank_document(self, action: _NLAction[ContextT, ActionT]) -> str:
+        params = "\n".join(
+            f"- {name}: {self._json_type(param.type)}. {param.description}"
+            for name, param in action.params.items()
+        )
+        return f"Tool: {action.name}\nDescription: {action.description}\nParameters:\n{params or 'none'}"
+
+    def _decide_dsl(
         self,
-        action: _NLAction[ContextT, ActionT],
-        existing: dict[str, _NLAction[ContextT, ActionT]],
-    ) -> str:
-        normalized = re.sub(r"[^a-z0-9]+", "_", action.name.casefold()).strip("_")
-        label = normalized or "literal"
-        if label == _NO_ACTION_LABEL:
-            label = f"{label}_action"
-
-        if label not in existing:
-            return label
-
-        suffix = 2
-        while f"{label}_{suffix}" in existing:
-            suffix += 1
-        return f"{label}_{suffix}"
-
-    def _classification_description(self, action: _NLAction[ContextT, ActionT]) -> str:
-        if not action.params:
-            return action.description
-
-        param_descriptions = []
-        for name, param in action.params.items():
-            requirement = "required" if param.required else "optional"
-            param_descriptions.append(
-                f"{name} is a {requirement} {self._type_description(param.type)} parameter: {param.description}"
-            )
-        return f"{action.description} Parameters: {' '.join(param_descriptions)}"
-
-    def _type_description(self, annotation: object) -> str:
-        target_type = self._non_none_type(annotation)
-        literal_choices = self._literal_choices(target_type)
-        if literal_choices is not None:
-            return f"choice of {', '.join(literal_choices)}"
-        if target_type is int:
-            return "integer, whole-number only, not decimal or floating point"
-        if target_type is float:
-            return "floating point number"
-        if target_type is str:
-            return "text"
-        if self._is_discord_user_type(target_type):
-            return "Discord user or member mention"
-        if target_type in (None, type(None)):
-            return "empty/null"
-        return str(target_type)
-
-    def _classification_result(self, result: Any) -> tuple[str | None, float]:
-        results = self._classification_results(result)
-        if not results:
-            return None, 0.0
-        return results[0]
-
-    def _classification_results(self, result: Any) -> list[tuple[str, float]]:
-        if isinstance(result, dict):
-            value = result.get("action")
-            values = self._classification_values(value)
-            if values:
-                return values
-            relation_values = self._relation_classification_values(result.get("relation_extraction"))
-            if relation_values:
-                return relation_values
-
-            if result:
-                scored_items = [
-                    (label, score)
-                    for label, score in (
-                        self._classification_value(value)
-                        for value in result.values()
-                    )
-                    if label is not None
-                ]
-                if scored_items:
-                    return sorted(scored_items, key=lambda item: item[1], reverse=True)
-
-                numeric_items = [
-                    (str(label), score)
-                    for label, score in result.items()
-                    if isinstance(score, (int, float))
-                ]
-                if numeric_items:
-                    return sorted(numeric_items, key=lambda item: item[1], reverse=True)
-
-        if isinstance(result, str):
-            return [(result, 1.0)]
-        return []
-
-    def _relation_classification_values(self, value: Any) -> list[tuple[str, float]]:
-        if not isinstance(value, dict):
-            return []
-        results: list[tuple[str, float]] = []
-        for items in value.values():
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if (
-                    isinstance(item, tuple) and
-                    len(item) >= 2 and
-                    isinstance(item[1], (int, float))
-                ):
-                    results.append((str(item[0]), float(item[1])))
-        return sorted(results, key=lambda item: item[1], reverse=True)
-
-    def _classification_value(self, value: Any) -> tuple[str | None, float]:
-        values = self._classification_values(value)
-        if not values:
-            return None, 0.0
-        return values[0]
-
-    def _classification_values(self, value: Any) -> list[tuple[str, float]]:
-        if isinstance(value, str):
-            return [(value, 1.0)]
-        if isinstance(value, tuple) and len(value) >= 2:
-            label, score = value[0], value[1]
-            if isinstance(score, (int, float)):
-                return [(str(label), float(score))]
-        if isinstance(value, dict):
-            label = value.get("label") or value.get("value") or value.get("text")
-            score = value.get("score", value.get("confidence", 1.0))
-            if label is not None and isinstance(score, (int, float)):
-                return [(str(label), float(score))]
-
-            mapped: list[tuple[str, float]] = []
-            for key, item in value.items():
-                if isinstance(item, (int, float)):
-                    mapped.append((str(key), float(item)))
-                    continue
-                if isinstance(item, dict):
-                    item_score = item.get("score", item.get("confidence"))
-                    if isinstance(item_score, (int, float)):
-                        mapped.append((str(key), float(item_score)))
-            if mapped:
-                return sorted(mapped, key=lambda item: item[1], reverse=True)
-        if isinstance(value, list) and value:
-            results: list[tuple[str, float]] = []
-            for item in value:
-                results.extend(self._classification_values(item))
-            return sorted(results, key=lambda item: item[1], reverse=True)
-        return []
-
-    async def _extract_kwargs(
-        self,
-        model: 'GLiNER2',
-        action: _NLAction[ContextT, ActionT],
+        tokenizer: Any,
+        model: Any,
         text: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+    ) -> str:
+        import torch
+        from transformers import StoppingCriteria, StoppingCriteriaList
+
+        prompt = self._dsl_prompt(tokenizer, text, candidates)
+        inputs = tokenizer(prompt, return_tensors="pt")
+        inputs = {key: value.to(getattr(model, "device", self._function_device)) for key, value in inputs.items()}
+        prompt_len = int(inputs["input_ids"].shape[1])
+        allows_multiple = self._allows_multiple_dsl_commands(text)
+        max_lines = _MAX_DSL_COMMANDS
+        min_lines = 2 if allows_multiple else 1
+        prefix_allowed_tokens_fn = self._dsl_prefix_allowed_tokens_fn(
+            tokenizer,
+            prompt_len,
+            candidates,
+            max_lines=max_lines,
+        )
+        self_outer = self
+
+        class DSLStoppingCriteria(StoppingCriteria):
+            def __call__(
+                self,
+                input_ids: Any,
+                scores: Any,
+                **kwargs: Any,
+            ) -> Any:
+                generated = tokenizer.decode(
+                    input_ids[0][prompt_len:].tolist(),
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+                lines = [line.strip() for line in generated.strip().splitlines() if line.strip()]
+                return len(lines) >= min_lines and self_outer._dsl_text_complete(
+                    generated,
+                    candidates,
+                    max_lines=max_lines,
+                )
+
+        with torch.no_grad():
+            outputs = cast(Any, model).generate(
+                **inputs,
+                max_new_tokens=1024,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id,
+                repetition_penalty=1.2,
+                prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
+                stopping_criteria=StoppingCriteriaList([DSLStoppingCriteria()]),
+            )
+        response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        self.logger.debug(f"NL DSL raw response: {response!r}.")
+        return response
+
+    def _dsl_prompt(
+        self,
+        tokenizer: Any,
+        text: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+    ) -> str:
+        actions = "\n".join(self._dsl_action_spec(action) for action in candidates)
+        system = (
+            f"{INSTRUCTION_TEXT}\n"
+            "Your task is to select appropriate actions based on the user's message and output them in the specified DSL. "
+            "If no other appropriate actions exist, use the reply action to answer or respond to their message. Do not repeat the user's message or say 'I understand your request.'. Do not pick actions that have no relation to the user's message.\n"
+            "Output only DSL lines. "
+            "Each DSL line starts with a JSON-quoted action name, followed by optional name=value arguments.\n"
+            "Output exactly one DSL line by default. Output multiple DSL lines only when the user explicitly asks "
+            "for multiple actions.\n"
+            "Use only the listed action names and parameter names. Argument values must be actual values to use.\n\n"
+            f"Available actions:\n{actions}"
+        )
+        user = text
+        if getattr(tokenizer, "chat_template", None):
+            return cast(Any, tokenizer).apply_chat_template(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        return f"System: {system}\n\nUser: {user}\nAssistant:"
+
+    def _dsl_candidates(
+        self,
+        candidates: list[_NLAction[ContextT, ActionT]],
+    ) -> list[_NLAction[ContextT, ActionT]]:
+        return [
+            *candidates,
+            _NLAction(
+                name=_REPLY_ACTION_NAME,
+                command_name=_REPLY_ACTION_NAME,
+                description=(
+                    "Reply conversationally when the user is talking casually, asking something that is not "
+                    "a bot command, or when no listed bot command should be called."
+                ),
+                params={
+                    "message": NLParam(
+                        description="Non-empty response text to send to the user.",
+                        type=str,
+                        required=True,
+                    ),
+                },
+                context=cast(ContextT, {}),
+                action=cast(ActionT, None),
+            ),
+        ]
+
+    def _dsl_action_spec(self, action: _NLAction[ContextT, ActionT]) -> str:
+        if action.name == _REPLY_ACTION_NAME:
+            return (
+                f"- {json.dumps(action.name, ensure_ascii=False)}: {action.description}. "
+                "Params: message (required string): the actual helpful response or answer to send back to the user."
+            )
+        if not action.params:
+            return f"- {json.dumps(action.name, ensure_ascii=False)}: {action.description}. Params: none."
+        params = ", ".join(
+            f"{name} ({'required' if param.required and not self._allows_none(param.type) else 'optional'} {self._json_type(param.type)}): {param.description}"
+            for name, param in action.params.items()
+        )
+        return f"- {json.dumps(action.name, ensure_ascii=False)}: {action.description}. Params: {params}."
+
+    def _json_schema(self, param: NLParam) -> dict[str, Any]:
+        choices = self._literal_choices(param.type)
+        if choices is not None:
+            return {"type": "string", "enum": choices, "description": param.description}
+        return {"type": self._json_type(param.type), "description": param.description}
+
+    def _json_type(self, annotation: object) -> str:
+        target = self._non_none_type(annotation)
+        if target is int:
+            return "integer"
+        if target is float:
+            return "number"
+        if target is bool:
+            return "boolean"
+        if self._is_discord_user_type(target):
+            return "string"
+        return "string"
+
+    def _parse_dsl_commands(self, text: str) -> list[dict[str, Any]]:
+        commands: list[dict[str, Any]] = []
+        for line in (line.strip() for line in text.strip().splitlines()):
+            if not line:
+                continue
+            command = self._parse_dsl_call(line)
+            if command is not None:
+                commands.append(command)
+            if len(commands) >= _MAX_DSL_COMMANDS:
+                break
+        return commands
+
+    def _parse_dsl_call(self, text: str) -> dict[str, Any] | None:
+        decoded = self._parse_json_prefix(text)
+        if decoded is None:
+            return None
+        action_name, end = decoded
+        if not isinstance(action_name, str):
+            return None
+
+        arguments: dict[str, Any] = {}
+        rest = text[end:].strip()
+        while rest:
+            match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)=", rest)
+            if match is None:
+                return None
+            param_name = match[1]
+            value, rest = self._parse_dsl_value(rest[match.end():])
+            arguments[param_name] = value
+            rest = rest.strip()
+        return {"name": action_name, "arguments": arguments}
+
+    def _parse_dsl_value(self, text: str) -> tuple[Any, str]:
+        text = text.lstrip()
+        if text.startswith('"'):
+            decoded = self._parse_json_prefix(text)
+            if decoded is None:
+                return "", ""
+            value, end = decoded
+            if isinstance(value, str):
+                value = self._strip_discord_reference_annotations(value)
+            return value, text[end:]
+
+        match = re.match(r"\S+", text)
+        if match is None:
+            return "", ""
+        raw = match[0]
+        rest = text[match.end():]
+        if raw == "null":
+            return None, rest
+        if raw == "true":
+            return True, rest
+        if raw == "false":
+            return False, rest
+        if re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)", raw):
+            return int(raw.replace(",", "")), rest
+        try:
+            if "." in raw:
+                return float(raw.replace(",", "")), rest
+        except ValueError:
+            pass
+        return raw, rest
+
+    def _parse_json_string_value(self, text: str) -> str | None:
+        decoded = self._parse_json_prefix(text)
+        if decoded is None:
+            return None
+        value, end = decoded
+        if not isinstance(value, str) or text[end:].strip():
+            return None
+        return value
+
+    def _parse_json_prefix(self, text: str) -> tuple[Any, int] | None:
+        try:
+            value, end = json.JSONDecoder().raw_decode(text)
+        except json.JSONDecodeError:
+            return None
+        return value, end
+
+    def _strip_discord_reference_annotations(self, text: str) -> str:
+        return _ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
+
+    def _dsl_prefix_allowed_tokens_fn(
+        self,
+        tokenizer: Any,
+        prompt_len: int,
+        candidates: list[_NLAction[ContextT, ActionT]],
+        *,
+        max_lines: int,
+    ) -> Callable[[int, Any], list[int]]:
+        eos_token_id = tokenizer.eos_token_id
+        token_pieces: list[tuple[int, str]] = []
+        special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
+        for token_id in range(len(tokenizer)):
+            if token_id in special_ids:
+                continue
+            piece = tokenizer.decode(
+                [token_id],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+            if piece:
+                token_pieces.append((token_id, piece))
+
+        def allowed(_batch_id: int, input_ids: Any) -> list[int]:
+            generated_ids = input_ids[prompt_len:].tolist()
+            generated = tokenizer.decode(
+                generated_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            cached = allowed_cache.get(generated)
+            if cached is not None:
+                return cached
+
+            allowed_ids: list[int] = []
+            if eos_token_id is not None and self._dsl_text_complete(generated, candidates, max_lines=max_lines):
+                allowed_ids.append(int(eos_token_id))
+
+            for token_id, piece in token_pieces:
+                if self._dsl_prefix_valid(generated + piece, candidates, max_lines=max_lines):
+                    allowed_ids.append(token_id)
+
+            if allowed_ids:
+                allowed_cache[generated] = allowed_ids
+                return allowed_ids
+            fallback = [int(eos_token_id)] if eos_token_id is not None else []
+            allowed_cache[generated] = fallback
+            return fallback
+
+        allowed_cache: dict[str, list[int]] = {}
+        return allowed
+
+    def _dsl_prefix_valid(
+        self,
+        text: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+        *,
+        max_lines: int = _MAX_DSL_COMMANDS,
+    ) -> bool:
+        if not text:
+            return True
+        lines = text.split("\n")
+        if len(lines) > max_lines:
+            return False
+
+        for line in lines[:-1]:
+            if not line or not self._dsl_line_complete(line, candidates):
+                return False
+
+        current = lines[-1]
+        if not current:
+            return True
+        return self._dsl_line_prefix_valid(current, candidates)
+
+    def _dsl_text_complete(
+        self,
+        text: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+        *,
+        max_lines: int = _MAX_DSL_COMMANDS,
+    ) -> bool:
+        lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+        return (
+            bool(lines) and
+            len(lines) <= max_lines and
+            all(self._dsl_line_complete(line, candidates) for line in lines)
+        )
+
+    def _allows_multiple_dsl_commands(self, text: str) -> bool:
+        normalized = f" {text.casefold()} "
+        return any(
+            marker in normalized
+            for marker in (
+                "\n",
+                ";",
+                " and ",
+                " and then ",
+                " then ",
+                " also ",
+                " plus ",
+            )
+        )
+
+    def _dsl_line_prefix_valid(
+        self,
+        line: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+    ) -> bool:
+        return self._dsl_call_prefix_valid(line, candidates)
+
+    def _dsl_line_complete(
+        self,
+        line: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+    ) -> bool:
+        command = self._parse_dsl_call(line.strip())
+        if command is None:
+            return False
+        action = next((candidate for candidate in candidates if candidate.name == command["name"]), None)
+        if action is None:
+            return False
+        arguments = command.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return False
+        for name, value in arguments.items():
+            param = action.params.get(name)
+            if param is None:
+                return False
+            dsl_value = json.dumps(value) if isinstance(value, str) else str(value).lower() if isinstance(value, bool) else "null" if value is None else str(value)
+            if not self._dsl_value_complete_valid(dsl_value, param.type):
+                return False
+        return all(
+            name in arguments
+            for name, param in action.params.items()
+            if param.required and not self._allows_none(param.type)
+        )
+
+    def _dsl_call_prefix_valid(
+        self,
+        text: str,
+        candidates: list[_NLAction[ContextT, ActionT]],
+    ) -> bool:
+        for action in candidates:
+            action_literal = json.dumps(action.name, ensure_ascii=False)
+            if action_literal.startswith(text):
+                return True
+            if text.startswith(action_literal):
+                rest = text[len(action_literal):]
+                if not rest:
+                    return True
+                if not action.params or not rest.startswith(" "):
+                    continue
+                if rest == " ":
+                    return True
+                if rest[1].isspace():
+                    continue
+                if self._dsl_params_prefix_valid(rest[1:], action):
+                    return True
+        return False
+
+    def _dsl_params_prefix_valid(
+        self,
+        text: str,
+        action: _NLAction[ContextT, ActionT],
+    ) -> bool:
+        if not text:
+            return True
+        parts = self._split_dsl_param_parts(text)
+        if parts is None:
+            return False
+        complete_parts, current = parts
+        used: set[str] = set()
+        for part in complete_parts:
+            name = self._dsl_complete_param_name(part, action)
+            if name is None or name in used:
+                return False
+            used.add(name)
+        if not current:
+            return True
+        return self._dsl_param_prefix_valid(current, action, used)
+
+    def _split_dsl_param_parts(self, text: str) -> tuple[list[str], str] | None:
+        parts: list[str] = []
+        current = ""
+        in_string = False
+        escaped = False
+        for char in text:
+            if in_string:
+                current += char
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                current += char
+                in_string = True
+                continue
+            if char.isspace():
+                if current:
+                    parts.append(current)
+                    current = ""
+                continue
+            current += char
+        if in_string:
+            return parts, current
+        return parts, current
+
+    def _dsl_complete_param_name(
+        self,
+        part: str,
+        action: _NLAction[ContextT, ActionT],
+    ) -> str | None:
+        if "=" not in part:
+            return None
+        name, value = part.split("=", 1)
+        param = action.params.get(name)
+        if param is None:
+            return None
+        return name if self._dsl_value_complete_valid(value, param.type) else None
+
+    def _dsl_param_prefix_valid(
+        self,
+        part: str,
+        action: _NLAction[ContextT, ActionT],
+        used: set[str],
+    ) -> bool:
+        if "=" not in part:
+            return any(name not in used and name.startswith(part) for name in action.params)
+        name, value = part.split("=", 1)
+        param = action.params.get(name)
+        if param is None or name in used:
+            return False
+        return self._dsl_value_prefix_valid(value, param.type)
+
+    def _dsl_value_prefix_valid(self, value: str, annotation: object) -> bool:
+        target = self._non_none_type(annotation)
+        if self._allows_none(annotation) and "null".startswith(value):
+            return True
+        choices = self._literal_choices(annotation)
+        if choices is not None:
+            return any(json.dumps(choice).startswith(value) for choice in choices)
+        if target is bool:
+            return "true".startswith(value) or "false".startswith(value)
+        if target is int:
+            return bool(re.fullmatch(r"[+-]?(?:\d[\d,]*)?", value))
+        if target is float:
+            return bool(re.fullmatch(r"[+-]?(?:(?:\d[\d,]*)?(?:\.\d*)?)", value))
+        if self._is_discord_user_type(target):
+            return bool(re.fullmatch(r"(?:<@!?)?\d*", value))
+        return self._json_string_prefix_valid(value) and self._json_string_prefix_has_text(value)
+
+    def _dsl_value_complete_valid(self, value: str, annotation: object) -> bool:
+        target = self._non_none_type(annotation)
+        if self._allows_none(annotation) and value == "null":
+            return True
+        choices = self._literal_choices(annotation)
+        if choices is not None:
+            parsed = self._parse_json_string_value(value)
+            return parsed in choices
+        if target is bool:
+            return value in ("true", "false")
+        if target is int:
+            return bool(re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)", value))
+        if target is float:
+            try:
+                float(value.replace(",", ""))
+            except ValueError:
+                return False
+            return bool(re.fullmatch(r"[+-]?(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?|\.\d+)", value))
+        if self._is_discord_user_type(target):
+            return bool(re.fullmatch(r"(?:<@!?)?\d+>?", value))
+        parsed = self._parse_json_string_value(value)
+        return parsed is not None and self._dsl_string_value_valid(parsed)
+
+    def _json_string_prefix_valid(self, text: str) -> bool:
+        if not text:
+            return True
+        if not text.startswith('"'):
+            return False
+
+        if len(text) > 1:
+            if text[1].isspace():
+                return False
+            if text[1] == '"':
+                return False
+
+        escaped = False
+        for index, char in enumerate(text[1:], start=1):
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                if index > 1 and text[index - 1].isspace() and text[index - 2] != "\\":
+                    return False
+                return index == len(text) - 1
+        return True
+
+    def _json_string_prefix_has_text(self, text: str) -> bool:
+        parsed = self._parse_json_string_value(text)
+        if parsed is not None:
+            return self._dsl_string_value_valid(parsed)
+        if not text.startswith('"'):
+            return False
+
+        content = text[1:]
+        if content.endswith("\\"):
+            content = content[:-1]
+        if any(char in content for char in "{}[]"):
+            return False
+        if content.startswith("#"):
+            return False
+        if content.startswith("<") and not content.startswith(("<@", "<@!", "<@&", "<#")):
+            return False
+        return True
+
+    def _dsl_string_value_valid(self, value: str) -> bool:
+        if not value:
+            return False
+        if value[0].isspace() or value[-1].isspace():
+            return False
+        if any(char in value for char in "{}[]"):
+            return False
+        if value.startswith("#"):
+            return False
+        if value.startswith("<") and not value.startswith(("<@", "<@!", "<@&", "<#")):
+            return False
+        return True
+
+    def _parse_json_object(self, text: str) -> dict[str, Any] | None:
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", text):
+            try:
+                value, _end = decoder.raw_decode(text[match.start():])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+        return None
+
+    def _coerce_arguments(
+        self,
+        action: _NLAction[ContextT, ActionT],
+        raw_args: dict[str, Any],
         *,
         message: discord.Message | None,
     ) -> dict[str, Any] | None:
-        if not action.params:
-            return {}
-
-        raw_fields: dict[str, Any] = {}
-        if any(not self._is_discord_user_type(param.type) for param in action.params.values()):
-            result = await asyncio.to_thread(
-                self._extract_structured_params,
-                model,
-                action,
-                text,
-            )
-            self.logger.debug(f"NL raw param extraction result for {action.name} from {text}: {result!r}.")
-            raw_fields = self._structure_result(result, action)
-            self.logger.debug(f"NL parsed param extraction result for {action.name} from {text}: {raw_fields!r}.")
-
         kwargs: dict[str, Any] = {}
         for name, param in action.params.items():
-            value = self._extract_param_value(
-                param,
-                raw_fields.get(name, _MISSING),
-                message=message,
-            )
+            raw_value = raw_args.get(name, _MISSING)
+            value = self._coerce_value(param.type, raw_value, message=message)
             if value is _MISSING:
-                if not param.required:
-                    continue
-                if self._allows_none(param.type):
+                if param.required and not self._allows_none(param.type):
+                    return None
+                if name in raw_args or self._allows_none(param.type):
                     kwargs[name] = None
-                    continue
-                self.logger.debug(
-                    f"NL param extraction failed for required param {name}. Raw value was {raw_fields.get(name, _MISSING)!r}."
-                )
-                return None
+                continue
             kwargs[name] = value
         return kwargs
 
-    def _extract_structured_params(
+    def _coerce_value(
         self,
-        model: 'GLiNER2',
-        action: _NLAction[ContextT, ActionT],
-        text: str,
-    ) -> Any:
-        from gliner2.inference.schema import RegexValidator
-        
-        schema = model.create_schema()
-        structure_name = self._param_structure_name(action)
-        structure = schema.structure(structure_name)
-        field_labels = self._param_field_labels(action)
-        for name, param in action.params.items():
-            if self._is_discord_user_type(param.type):
-                continue
-
-            target_type = self._non_none_type(param.type)
-            validators: list[RegexValidator] = []
-            if target_type is int:
-                validators.append(RegexValidator(_INTEGER_PATTERN))
-            elif target_type is float:
-                validators.append(RegexValidator(_FLOAT_PATTERN))
-
-            structure.field(
-                field_labels[name],
-                dtype=self._schema_dtype(param.type),
-                choices=self._literal_choices(param.type),
-                description=self._param_field_description(param),
-                validators=validators,
-            )
-
-        return model.extract(
-            text,
-            schema,
-            threshold=_PARAM_EXTRACTION_THRESHOLD,
-            include_confidence=False,
-        )
-
-    def _structure_result(
-        self,
-        result: Any,
-        action: _NLAction[ContextT, ActionT],
-    ) -> dict[str, Any]:
-        params = None
-        if isinstance(result, dict):
-            params = result.get(self._param_structure_name(action))
-            if params is None:
-                params = result.get("params")
-            if params is None:
-                params = result.get("parameters")
-        else:
-            params = result
-        if isinstance(params, list):
-            first = params[0] if params else {}
-            params = first
-        if isinstance(params, dict):
-            field_labels = self._param_field_labels(action)
-            return {
-                name: params[label]
-                for name, label in field_labels.items()
-                if label in params
-            }
-        if not isinstance(result, dict):
-            return {}
-        field_labels = self._param_field_labels(action)
-        return {
-            name: result[label]
-            for name, label in field_labels.items()
-            if label in result
-        }
-
-    def _param_structure_name(self, action: _NLAction[ContextT, ActionT]) -> str:
-        return f"{_PARAM_STRUCTURE_PREFIX}_{self._action_label(action, {})}"
-
-    def _param_field_labels(self, action: _NLAction[ContextT, ActionT]) -> dict[str, str]:
-        labels: dict[str, str] = {}
-        for name, param in action.params.items():
-            if self._is_discord_user_type(param.type):
-                continue
-
-            label = self._param_field_label(name, param)
-            if label in labels.values():
-                suffix = 2
-                while f"{label}_{suffix}" in labels.values():
-                    suffix += 1
-                label = f"{label}_{suffix}"
-            labels[name] = label
-        return labels
-
-    def _param_field_label(self, name: str, param: NLParam) -> str:
-        target_type = self._non_none_type(param.type)
-        if name == "max":
-            return "maximum_number" if target_type in (int, float) else "maximum_value"
-        if name == "min":
-            return "minimum_number" if target_type in (int, float) else "minimum_value"
-
-        type_suffix = ""
-        if target_type is int:
-            type_suffix = "_integer"
-        elif target_type is float:
-            type_suffix = "_number"
-
-        normalized = re.sub(r"[^a-z0-9]+", "_", name.casefold()).strip("_")
-        return f"{normalized}{type_suffix}" if normalized else f"parameter{type_suffix}"
-
-    def _param_field_description(self, param: NLParam) -> str:
-        target_type = self._non_none_type(param.type)
-        if target_type is int:
-            return f"{param.description} Extract a whole integer number only, such as 5 or 1,000. Do not extract decimal numbers."
-        if target_type is float:
-            return f"{param.description} Extract a number, including decimals like 0.5, 1.0, or 1,000.25."
-        return param.description
-
-    def _extract_param_value(
-        self,
-        param: NLParam,
-        raw_value: Any,
+        annotation: object,
+        value: Any,
         *,
         message: discord.Message | None,
     ) -> Any:
-        target_type = self._non_none_type(param.type)
-        if self._is_discord_user_type(target_type):
-            return self._extract_user(message)
-        if target_type in (None, type(None)):
-            return None
-        if raw_value is _MISSING or raw_value is None or raw_value == "":
+        target = self._non_none_type(annotation)
+        if value is _MISSING or value is None:
             return _MISSING
+        if self._is_discord_user_type(target):
+            return self._coerce_discord_user(target, value, message=message)
+        choices = self._literal_choices(annotation)
+        if choices is not None:
+            return value if isinstance(value, str) and value in choices else _MISSING
 
-        raw = self._raw_param_text(raw_value)
-        if raw is None:
+        if target is int:
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+            if isinstance(value, str) and re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)", value.strip()):
+                return int(value.replace(",", ""))
             return _MISSING
+        if target is float:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    return float(value.strip().replace(",", ""))
+                except ValueError:
+                    return _MISSING
+            return _MISSING
+        if target in (str, object):
+            return self._strip_discord_reference_annotations(str(value))
+        return value
 
-        literal_choices = self._literal_choices(param.type)
-        if literal_choices is not None:
-            return raw if raw in literal_choices else _MISSING
-
-        if target_type is int:
-            try:
-                return int(raw.replace(",", ""))
-            except ValueError:
-                return _MISSING
-        if target_type is float:
-            try:
-                return float(raw.replace(",", ""))
-            except ValueError:
-                return _MISSING
-        if target_type in (str, object):
-            return raw
-        return raw
-
-    def _raw_param_text(self, value: Any) -> str | None:
-        if isinstance(value, dict):
-            value = value.get("text")
-        if isinstance(value, list):
-            if not value:
-                return None
-            return self._raw_param_text(value[0])
-        if value is None:
-            return None
-        return str(value).strip()
-
-    def _extract_user(self, message: discord.Message | None) -> Any:
+    def _coerce_discord_user(
+        self,
+        annotation: object,
+        value: Any,
+        *,
+        message: discord.Message | None,
+    ) -> Any:
+        if isinstance(value, (discord.User, discord.Member)):
+            return value
         if message is None:
             return _MISSING
-        state_user = getattr(message._state, "user", None)
-        state_user_id = getattr(state_user, "id", None)
+
+        user_id = self._discord_user_id(value)
+        if user_id is None:
+            return _MISSING
+
+        if message.guild is not None:
+            member = message.guild.get_member(user_id)
+            if member is not None:
+                return member
+
         for user in message.mentions:
-            if user.id != state_user_id:
+            if user.id == user_id:
                 return user
+
+        state = getattr(message, "_state", None)
+        cached_user = getattr(state, "get_user", lambda _user_id: None)(user_id)
+        if cached_user is not None and annotation is not discord.Member:
+            return cached_user
         return _MISSING
+
+    def _discord_user_id(self, value: Any) -> int | None:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if not isinstance(value, str):
+            return None
+        value = self._strip_discord_reference_annotations(value.strip())
+        match = re.fullmatch(r"<@!?([0-9]{15,20})>", value)
+        if match is not None:
+            return int(match[1])
+        if re.fullmatch(r"[0-9]{15,20}", value):
+            return int(value)
+        return None
 
     def _normalize_params(
         self,
@@ -603,32 +1031,21 @@ class NLCore(Generic[ContextT, ActionT]):
                 description, param_type, required = value, str, True
             if not self._supported_param_type(param_type):
                 raise TypeError(f"Unsupported NL parameter type for {name}: {param_type!r}")
-            normalized[name] = NLParam(
-                description=description, type=param_type,
-                required=required
-            )
+            normalized[name] = NLParam(description=description, type=param_type, required=required)
         return normalized
 
     def _supported_param_type(self, annotation: object) -> bool:
         non_none = self._non_none_type(annotation)
         return (
-            non_none in (str, int, float, object, None, type(None)) or
+            non_none in (str, int, float, bool, object, None, type(None)) or
             self._literal_choices(non_none) is not None or
             self._is_discord_user_type(non_none)
         )
-
-    def _schema_dtype(self, annotation: object) -> Literal["str", "list"]:
-        target_type = self._non_none_type(annotation)
-        origin = get_origin(target_type)
-        if origin in (list, set, tuple):
-            return "list"
-        return "str"
 
     def _literal_choices(self, annotation: object) -> list[str] | None:
         target_type = self._non_none_type(annotation)
         if get_origin(target_type) is not Literal:
             return None
-
         choices: list[str] = []
         for choice in get_args(target_type):
             if not isinstance(choice, str):

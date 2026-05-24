@@ -157,8 +157,12 @@ class BotCore(discord.Client):
         self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
         nl.configure(
-            model_name=str(self.config.get("nl_model", nl.model_name)),
-            threshold=float(self.config.get("nl_action_threshold", 0.5)),
+            enabled=bool(self.config.get("nl", True)),
+            ranker_model_name=str(self.config.get("nl_ranker_model", nl.ranker_model_name)),
+            function_model_name=str(self.config.get("nl_function_model", nl.function_model_name)),
+            quantization=str(self.config.get("nl_quantization", nl.quantization)),
+            threshold=float(self.config.get("nl_action_threshold", nl.threshold)),
+            top_k=int(self.config.get("nl_top_k", nl.top_k)),
             logger=self.logger.getChild("NL"),
         )
         

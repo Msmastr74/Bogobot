@@ -40,8 +40,12 @@ User-edited settings:
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
-- `nl_model`: GLiNER2 model used for @mention natural-language action matching. Defaults to `fastino/gliner2-base-v1`.
-- `nl_action_threshold`: Minimum confidence score for @mention NL actions.
+- `nl`: Enables natural-language @mention actions. Defaults to true.
+- `nl_ranker_model`: Cross-encoder model used to rank natural-language tools. Defaults to `cross-encoder/ms-marco-MiniLM-L6-v2`.
+- `nl_function_model`: Function-calling model used to choose a tool and arguments. Defaults to `gvij/SmolLM2-135M-Function-Calling`.
+- `nl_quantization`: Function model quantization mode: `none`, `fp16`, `4bit`, or `8bit`. Defaults to `none`.
+- `nl_top_k`: Number of ranked tools shown to the function model. Defaults to 6.
+- `nl_action_threshold`: Minimum ranker score for @mention NL actions.
 - `nl_normalize_discord`: Whether @mention NL text resolves Discord mentions and custom emoji before matching. Defaults to true. When false, the bot's own raw mention is still removed.
 
 Bot-managed storage:
@@ -193,7 +197,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
 
-Plugins can also register natural-language actions for @mentions with `@utils.nl.action(...)`. The shared `utils.nl.NLCore` uses GLiNER2 to classify the user's mention text against one rich action description, then extracts declared parameters before running the best action above `nl_action_threshold`. The `utils.nl` module exposes `nl = NLCore[BotActionParameters, BotAction]()` and `action = nl.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments, and command parameters can be declared with `params={"name": "description"}` or `params={"name": ("description", int | None)}`. `plugins/nl.py` attaches `bot.on_message` as a Discord event, strips the mention, optionally normalizes Discord mention and emoji text according to `nl_normalize_discord`, matches the remaining text, checks permissions, and runs the best matching action.
+Plugins can also register natural-language actions for @mentions with `@utils.nl.action(...)`. The shared `utils.nl.NLCore` uses a cross-encoder to rank registered tools, then a small function-calling model to select a tool and arguments or return a conversational message. The `utils.nl` module exposes `nl = NLCore[BotActionParameters, BotAction]()` and `action = nl.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments, and command parameters can be declared with `params={"name": "description"}` or `params={"name": ("description", int | None)}`. `plugins/nl.py` attaches `bot.on_message` as a Discord event, strips the mention, optionally normalizes Discord mention and emoji text according to `nl_normalize_discord`, matches the remaining text, checks permissions, and runs the selected action.
 
 Current plugin responsibilities:
 

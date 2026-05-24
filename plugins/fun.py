@@ -3,7 +3,6 @@ from utils import tasks
 import random
 import re
 import time
-from typing import Sequence
 
 from bogobot_core import BotCore
 from utils import groups
@@ -24,94 +23,6 @@ EMOJI_ALIAS_RE = re.compile(r":([A-Za-z0-9_]+):")
 
 async def setup(bot: BotCore):
     bogo = groups.bogo(bot)
-
-    def casual_response(words: Sequence[str]) -> str:
-        text = random.choice(words)
-        if random.choice([True, False]):
-            text = text.capitalize()
-        punctuation = random.choice(["", "", "!", ".", "!!"])
-        return f"{text}{punctuation}"
-
-    def resolve_guild_emojis(
-        text: str,
-        guild: discord.Guild | None,
-    ) -> str:
-        if guild is None:
-            return text
-
-        def replace(match: re.Match[str]) -> str:
-            emoji = discord.utils.get(guild.emojis, name=match[1])
-            if emoji is None:
-                return match[0]
-            return str(emoji)
-
-        return EMOJI_ALIAS_RE.sub(replace, text)
-
-    async def send_fun_text(
-        interaction: discord.Interaction,
-        text: str,
-    ) -> None:
-        await bot.discord.send(
-            resolve_guild_emojis(text, interaction.guild),
-            response=True,
-        )
-
-    conversational_actions: dict[tuple[str, ...], tuple[str, ...]] = {
-        ("hello", "hi", "hey"): ("hi", "hello", "hey"),
-        ("1 + 2",): ("3", "three"),
-        ("1 + 3",): ("3", "three"),
-        ("bogo",): ("bogo", "bogo²", "bogo³"),
-        ("bye", "goodbye", "see you"): ("bye", "goodbye", "see you"),
-        ("you can talk", "can you talk", "can you speak"): ("yes", "yep", "i can"),
-        ("thank you", "thanks", "thank you bot"): ("you're welcome", "no problem", "anytime"),
-        ("good bot", "nice bot", "great bot"): ("thanks", "thank you", "i try"),
-        ("bad bot", "mean bot", "rude bot"): ("sorry", "oops", "i'll do better"),
-        ("how are you", "how are you doing", "you okay"): ("good", "doing fine", "pretty good"),
-        ("what are you", "who are you", "what is this bot"): ("bogobot", "i'm bogobot", "bot, mostly"),
-        ("are you alive", "are you awake", "you there"): ("yes", "i'm here", "awake enough"),
-        ("good morning", "morning", "gm"): ("good morning", "morning", "gm"),
-        ("good night", "night", "gn"): ("good night", "night", "sleep well"),
-        ("lol", "haha", "that is funny"): ("lol", "heh", "nice"),
-        ("wow", "whoa", "amazing"): ("wow", "whoa", "neat"),
-        ("sorry", "my bad", "oops sorry"): ("it's okay", "no worries", "all good"),
-        ("help", "what can you do", "commands"): ("try stats", "try ping", "ask for the leaderboard"),
-        ("what is bogosort", "explain bogosort", "bogosort"): ("random sorting", "shuffle until sorted", "chaos sorting"),
-        ("love you", "i love you", "ily"): ("aw", "thanks", "likewise"),
-        ("are you real", "are you sentient", "are you human"): ("not human", "bot-shaped", "real enough"),
-        ("sing", "sing a song", "can you sing"): ("la la", "maybe later", "not well"),
-        ("dance", "do a dance", "can you dance"): ("shuffle shuffle", "sort of", "imagine it"),
-        ("favorite number", "pick a favorite number", "best number"): ("42", "7", "100"),
-        ("favorite color", "best color", "what color do you like"): ("green", "blurple", "sort green"),
-        ("tell me something", "say something", "talk to me"): ("something", "bogosort persists", "numbers are moving"),
-        ("be quiet", "shush", "stop talking"): ("ok", "quiet mode", "shh"),
-        ("wake up", "wake up bot", "rise and shine"): ("awake", "i'm up", "ready"),
-    }
-    literal_actions: dict[tuple[str, ...], tuple[str, ...]] = {
-        (":steamhappy:", ":steamhappybutiaddeditwrong:"): (":steamhappybutiaddeditwrong:",),
-        (":steamsad:", ":steamsadbutialsoaddeditwrong:"): (":steamsadbutialsoaddeditwrong:",)
-    }
-
-    for phrases, responses in conversational_actions.items():
-        @action(
-            phrases[0],
-            f"Casual conversational response. Match short messages like {', '.join(phrases)}.",
-        )
-        async def conversational_reply(
-            interaction: discord.Interaction,
-            responses: tuple[str, ...] = responses,
-        ):
-            await send_fun_text(interaction, casual_response(responses))
-    
-    for phrases, responses in literal_actions.items():
-        @action(
-            phrases[0],
-            f"The user's entire message is one of these exact custom emoji alias tokens: {', '.join(phrases)}. Match the literal colon-delimited text tokens themselves, not the emotion or meaning of the words.",
-        )
-        async def literal_reply(
-            interaction: discord.Interaction,
-            responses: tuple[str, ...] = responses,
-        ):
-            await send_fun_text(interaction, random.choice(responses))
 
     @tasks.loop(seconds=15)
     async def update_status():
@@ -182,4 +93,25 @@ async def setup(bot: BotCore):
             view=BogonameView(original_name, new_name),
             response=True,
             safety_filter=True
+        )
+    
+    EMOJI_RE = re.compile(r"<a?:[\w-]+:\d+>")
+    @action(
+        "emoji reply",
+        "Reply to any messages containing a discord emoji similar to: '<:emoji_name:123456789012345678>' by repeating that emoji.",
+        command_name="emoji_reply",
+        params={
+            "emoji": "The emoji the user sent in the message."
+        }
+    )
+    async def emoji_reply(interaction: discord.Interaction, emoji: str):
+        emoji = emoji.strip()
+        is_emoji = EMOJI_RE.fullmatch(emoji) or len(emoji) <= 5
+        if not is_emoji:
+            return
+        await bot.discord.send(
+            contents=emoji,
+            response=True,
+            ephemeral=True,
+            safety_filter=True,
         )
