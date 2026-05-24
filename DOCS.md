@@ -46,6 +46,7 @@ Bot-managed storage:
 - `channels`: Notification topic subscriptions by Discord channel ID. Older `channels.json` data is imported into this field when `channels` is missing.
 - `monitor_messages`: Persistent monitor message IDs by Discord channel ID.
 - `leaderboard_monitor_messages`: Persistent leaderboard monitor message IDs by Discord channel ID.
+- `stats_monitor_messages`: Persistent stats monitor message IDs by Discord channel ID.
 - `milestones`: Latest confirmed value for each milestone name.
 
 Bogotree storage:
@@ -199,7 +200,7 @@ Current plugin responsibilities:
 - `bogoscramble.py`: Bogoscramble message/media utilities.
 - `cbogo.py`: original collaborative community bogosort puzzle and leaderboard.
 - `fun.py`: bot status bogoname loop and `/bogo name`.
-- `get_stats.py`: `/get_stats` display command.
+- `get_stats.py`: `/get_stats`, `/get_sort`, and `/manage stats_monitor`.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
@@ -217,6 +218,7 @@ Several management commands use an explicit action parameter instead of separate
 
 - `/manage monitor start|stop|resend`: Creates, removes, or resends the persistent monitor message in the current channel. `resend` requires an existing accessible monitor message, sends the replacement first, then deletes the old message.
 - `/manage leaderboard_monitor start|stop|resend`: Creates, removes, or resends a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes. `resend` sends the replacement first, then deletes the old message.
+- `/manage stats_monitor start|stop|resend`: Creates, removes, or resends a persistent stream-stats monitor in the current channel. It uses the same data as `/get_stats` and updates when new stream stats are available.
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
