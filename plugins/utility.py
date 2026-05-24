@@ -335,7 +335,7 @@ async def setup(bot: BotCore):
         "ping",
         "Show bot latency.",
         params={
-            "user": ("Optional discord user id to target. Use only when the user mentions a user to target.", discord.User | discord.Member | None)
+            "user": ("Optional discord user id to target. Omit when the message does not mention a user to target.", discord.User | discord.Member | None)
         }
     )
     async def ping(
