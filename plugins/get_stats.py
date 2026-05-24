@@ -98,6 +98,7 @@ async def setup(bot: BotCore):
         elapsed_time = bot.get_stream_uptime()
         
         view = StatsView(
+            title=title,
             fields=[
                 ("Shuffles", shuffles),
                 ("Comparisons", comparisons),
