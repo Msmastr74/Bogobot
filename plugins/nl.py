@@ -370,6 +370,7 @@ async def setup(bot: 'BotCore'):
                     await message.reply(
                         reply,
                         allowed_mentions=discord.AllowedMentions.none(),
+                        mention_author=False
                     )
                 continue
             if match.action is None:
