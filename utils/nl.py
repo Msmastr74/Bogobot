@@ -296,6 +296,12 @@ class NLCore(Generic[ContextT, ActionT]):
             }
         else:
             schema = {"type": self._json_schema_type(param.type)}
+        if self._allows_none(param.type):
+            raw_type = schema.get("type")
+            if isinstance(raw_type, str):
+                schema["type"] = [raw_type, "null"]
+            if "enum" in schema:
+                schema["enum"] = [*schema["enum"], None]
         if param.description is not None and "description" not in schema:
             schema["description"] = self._compact_description(param.description)
         if not param.required:
