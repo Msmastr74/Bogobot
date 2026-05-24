@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import re
 
@@ -35,6 +36,7 @@ USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
 ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 MAX_ASSISTANT_CONTEXT_CHARS = 3000
+_nl_break_until: datetime.datetime | None = None
 
 @dataclass(frozen=True, slots=True)
 class MessageInteractionCommand:
@@ -358,10 +360,31 @@ def _discord_reference_name(entity: Any) -> str:
     )
 
 
+def nl_on_break() -> bool:
+    return _nl_break_until is not None and discord.utils.utcnow() < _nl_break_until
+
+
 async def setup(bot: 'BotCore'):
     from utils.nl import nl
 
     bot.event(bot.on_message)
+    break_task: asyncio.Task[None] | None = None
+
+    async def nl_break_cycle() -> None:
+        global _nl_break_until
+        active_minutes = max(0.0, float(bot.config.get("nl_active_minutes", 20)))
+        break_minutes = max(0.0, float(bot.config.get("nl_break_minutes", 10)))
+        if active_minutes <= 0 or break_minutes <= 0:
+            return
+
+        while not bot.is_closed():
+            _nl_break_until = None
+            await asyncio.sleep(active_minutes * 60)
+            _nl_break_until = discord.utils.utcnow() + datetime.timedelta(minutes=break_minutes)
+            await bot.discord.change_presence(status=discord.Status.idle)
+            await asyncio.sleep(break_minutes * 60)
+            _nl_break_until = None
+            await bot.discord.change_presence(status=discord.Status.online)
 
     @bot.message_callback
     async def on_message(message: discord.Message):
@@ -377,6 +400,8 @@ async def setup(bot: 'BotCore'):
             normalize_discord=normalize_discord,
         )
         if text is None:
+            return
+        if nl_on_break():
             return
         assistant_context = replied_assistant_text(
             bot,
@@ -433,7 +458,7 @@ async def setup(bot: 'BotCore'):
         name="ai",
         description="Ask Bogobot",
         perm_requirement=0,
-        defer=True,
+        defer=False,
         eph=False,
     )
     async def ai(interaction: discord.Interaction, prompt: str):
@@ -444,7 +469,10 @@ async def setup(bot: 'BotCore'):
                 ephemeral=True,
             )
             return
+        if nl_on_break():
+            return
 
+        await bot.discord.defer(ephemeral=False)
         matches = await nl.match_infos(prompt, interaction=interaction)
         if not matches:
             await bot.discord.send(
@@ -477,6 +505,7 @@ async def setup(bot: 'BotCore'):
 
     @bot.init_callback
     async def init():
+        nonlocal break_task
         global INSTRUCTION_TEXT
         if not bot.user:
             return
@@ -484,3 +513,12 @@ async def setup(bot: 'BotCore'):
             "Bogobot",
             f'Bogobot (<@{bot.user.id} {json_string(bot.user.name)}>)'
         )
+        if bool(bot.config.get("nl_breaks", True)) and (break_task is None or break_task.done()):
+            break_task = asyncio.create_task(nl_break_cycle())
+
+    @bot.close_callback
+    async def close():
+        global _nl_break_until
+        _nl_break_until = None
+        if break_task is not None and not break_task.done():
+            break_task.cancel()

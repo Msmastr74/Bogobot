@@ -7,6 +7,7 @@ import time
 from bogobot_core import BotCore
 from utils import groups
 from utils.nl import action
+from plugins import nl as nl_plugin
 
 class BogonameView(discord.ui.LayoutView):
     def __init__(self, original_name: str, new_name: str) -> None:
@@ -27,6 +28,8 @@ async def setup(bot: BotCore):
     @tasks.loop(seconds=15)
     async def update_status():
         if not bot.user:
+            return
+        if nl_plugin.nl_on_break():
             return
         text = bot.user.name
         tlist = list(text)
@@ -50,7 +53,7 @@ async def setup(bot: BotCore):
         shuffled_text = ''.join(tlist)
         if bot.is_closed():
             return
-        await bot.change_presence(activity=discord.CustomActivity(name=shuffled_text))
+        await bot.discord.change_presence(activity=discord.CustomActivity(name=shuffled_text))
     
     @bot.init_callback
     async def init():

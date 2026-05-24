@@ -325,6 +325,8 @@ class BotCore(discord.Client):
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
             self._app_emoji_cache: dict[str, discord.Emoji] | None = None
+            self._previous_status: discord.Status | None = None
+            self._previous_activity: discord.BaseActivity | None = None
 
         async def send(
             self,
@@ -517,6 +519,18 @@ class BotCore(discord.Client):
             emojis = await self.outer.fetch_application_emojis()
             for emoji in emojis:
                 self._app_emoji_cache[emoji.name.lower()] = emoji
+        
+        async def change_presence(
+            self, *, 
+            activity: discord.BaseActivity | None = None,
+            status: discord.Status | None = None
+        ):
+            if status is None:
+                status = self._previous_status
+            if activity is None:
+                activity = self._previous_activity
+            self._previous_status, self._previous_activity = status, activity
+            await self.outer.change_presence(activity=activity, status=status)
 
     async def setup_hook(self):
         command_tree_hash = self._command_tree_hash()
