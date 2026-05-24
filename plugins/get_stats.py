@@ -11,9 +11,6 @@ from utils.nl import action
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups
 
-from utils.monitoring import PersistentChannelMonitor
-from utils import groups
-
 class StatsView(discord.ui.LayoutView):
     def __init__(
         self,
