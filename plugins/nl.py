@@ -392,6 +392,52 @@ async def setup(bot: 'BotCore'):
                 defer=False,
             )
 
+    @bot.setup.command(
+        name="ai",
+        description="Ask Bogobot",
+        perm_requirement=0,
+        defer=True,
+        eph=False,
+    )
+    async def ai(interaction: discord.Interaction, prompt: str):
+        if not bool(bot.config.get("nl", True)):
+            await bot.discord.send(
+                contents="NL is disabled.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        matches = await nl.match_infos(prompt, interaction=interaction)
+        if not matches:
+            await bot.discord.send(
+                contents="I'm not sure I understand.",
+                response=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        for match in matches:
+            if match.reply is not None:
+                await bot.discord.send(
+                    contents=strip_discord_reference_annotations(match.reply),
+                    response=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                continue
+            if match.action is None:
+                continue
+
+            await bot.setup._run_command(
+                interaction,
+                match.action,
+                (),
+                match.kwargs or {},
+                perm_requirement=match.context.get("perm_requirement", 0),
+                eph=False,
+                defer=False,
+            )
+
     @bot.init_callback
     async def init():
         global INSTRUCTION_TEXT

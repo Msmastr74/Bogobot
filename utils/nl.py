@@ -137,8 +137,9 @@ class NLCore(Generic[ContextT, ActionT]):
         text: str,
         *,
         message: discord.Message | None = None,
+        interaction: discord.Interaction | None = None,
     ) -> NLMatch[ContextT, ActionT] | None:
-        matches = await self.match_infos(text, message=message)
+        matches = await self.match_infos(text, message=message, interaction=interaction)
         return matches[0] if matches else None
 
     async def match_infos(
@@ -146,6 +147,7 @@ class NLCore(Generic[ContextT, ActionT]):
         text: str,
         *,
         message: discord.Message | None = None,
+        interaction: discord.Interaction | None = None,
     ) -> list[NLMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
@@ -177,7 +179,12 @@ class NLCore(Generic[ContextT, ActionT]):
                 self.logger.debug(f"NL tool call rejected unknown action {call.name!r}.")
                 continue
 
-            kwargs = self._coerce_arguments(action, call.arguments, message=message)
+            kwargs = self._coerce_arguments(
+                action,
+                call.arguments,
+                message=message,
+                interaction=interaction,
+            )
             if kwargs is None:
                 self.logger.debug(f"NL tool call {call.name} rejected because arguments did not validate: {call.arguments!r}.")
                 continue
@@ -337,6 +344,7 @@ class NLCore(Generic[ContextT, ActionT]):
         raw_args: dict[str, Any],
         *,
         message: discord.Message | None,
+        interaction: discord.Interaction | None,
     ) -> dict[str, Any] | None:
         kwargs: dict[str, Any] = {}
         allowed = set(action.params)
@@ -345,7 +353,12 @@ class NLCore(Generic[ContextT, ActionT]):
 
         for name, param in action.params.items():
             raw_value = raw_args.get(name, _MISSING)
-            value = self._coerce_value(param.type, raw_value, message=message)
+            value = self._coerce_value(
+                param.type,
+                raw_value,
+                message=message,
+                interaction=interaction,
+            )
             if value is _MISSING:
                 if param.required and not self._allows_none(param.type):
                     return None
@@ -361,12 +374,18 @@ class NLCore(Generic[ContextT, ActionT]):
         value: Any,
         *,
         message: discord.Message | None,
+        interaction: discord.Interaction | None,
     ) -> Any:
         target = self._non_none_type(annotation)
         if value is _MISSING or value is None:
             return _MISSING
         if self._is_discord_user_type(target):
-            return self._coerce_discord_user(target, value, message=message)
+            return self._coerce_discord_user(
+                target,
+                value,
+                message=message,
+                interaction=interaction,
+            )
 
         choices = self._literal_choices(annotation)
         if choices is not None:
@@ -404,26 +423,31 @@ class NLCore(Generic[ContextT, ActionT]):
         value: Any,
         *,
         message: discord.Message | None,
+        interaction: discord.Interaction | None,
     ) -> Any:
         if isinstance(value, (discord.User, discord.Member)):
             return value
-        if message is None:
-            return _MISSING
 
         user_id = self._discord_user_id(value)
         if user_id is None:
             return _MISSING
 
-        if message.guild is not None:
-            member = message.guild.get_member(user_id)
+        guild = message.guild if message is not None else interaction.guild if interaction is not None else None
+        if guild is not None:
+            member = guild.get_member(user_id)
             if member is not None:
                 return member
 
-        for user in message.mentions:
-            if user.id == user_id:
-                return user
+        if message is not None:
+            for user in message.mentions:
+                if user.id == user_id:
+                    return user
 
-        state = getattr(message, "_state", None)
+        if interaction is not None and interaction.user.id == user_id:
+            return interaction.user
+
+        source = message if message is not None else interaction
+        state = getattr(source, "_state", None)
         cached_user = getattr(state, "get_user", lambda _user_id: None)(user_id)
         if cached_user is not None and annotation is not discord.Member:
             return cached_user
