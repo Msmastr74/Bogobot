@@ -333,6 +333,7 @@ class NLCore(Generic[ContextT, ActionT]):
         if not isinstance(value, str):
             return None
         value = self._strip_discord_reference_annotations(value)
+        value = value.strip()
         return value if self._discord_string_valid(value) else None
 
     def _discord_string_valid(self, value: str) -> bool:
@@ -360,11 +361,12 @@ class NLCore(Generic[ContextT, ActionT]):
                 interaction=interaction,
             )
             if value is _MISSING:
-                if param.required and not self._allows_none(param.type):
-                    return None
-                if name in raw_args or self._allows_none(param.type):
+                if not param.required:
+                    continue
+                if self._allows_none(param.type):
                     kwargs[name] = None
-                continue
+                    continue
+                return None
             kwargs[name] = value
         return kwargs
 
@@ -414,6 +416,7 @@ class NLCore(Generic[ContextT, ActionT]):
             return _MISSING
         if target in (str, object):
             string = self._strip_discord_reference_annotations(str(value))
+            string = string.strip()
             return string if self._discord_string_valid(string) else _MISSING
         return value
 
