@@ -316,6 +316,8 @@ class NLCore(Generic[ContextT, ActionT]):
             except json.JSONDecodeError:
                 self.logger.debug(f"NL tool call {name} rejected invalid JSON arguments: {raw_arguments!r}.")
                 continue
+            if arguments is None:
+                arguments = {}
             if isinstance(arguments, dict):
                 calls.append(_ToolCall(name, arguments))
         return calls
