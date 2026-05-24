@@ -333,9 +333,9 @@ async def setup(bot: BotCore):
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     @action(
         "ping",
-        "Show bot latency.",
+        "Show bot latency. Omit the user parameter when the message does not mention a user to target.",
         params={
-            "user": ("Optional discord user id to target. Omit when the message does not mention a user to target.", discord.User | discord.Member | None)
+            "user": ("Optional discord user id to target.", discord.User | discord.Member | None)
         }
     )
     async def ping(
