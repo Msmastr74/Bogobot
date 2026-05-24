@@ -9,7 +9,7 @@ from PIL import Image
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.nl import action
+from utils.nl import NLParam, action
 from discord import app_commands
 
 
@@ -549,8 +549,8 @@ async def setup(bot: BotCore):
         "milestone_info",
         "Show milestone history.",
         params={
-            "milestone_name": (None, str),
-            "ephemeral": (None, bool, False),
+            "milestone_name": NLParam(),
+            "ephemeral": NLParam(type=bool, required=False, default=True),
         },
     )
     async def milestone_info(

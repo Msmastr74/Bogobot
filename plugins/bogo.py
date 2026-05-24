@@ -10,7 +10,7 @@ from pyuca import Collator
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.nl import action
+from utils.nl import NLParam, action
 
 FALSE_SPACE = '\u200d'
 async def setup(bot: BotCore):
@@ -39,8 +39,8 @@ async def setup(bot: BotCore):
         "randint",
         "Roll a random integer.",
         params={
-            "max": (None, int),
-            "min": (None, int, False)
+            "max": NLParam(type=int),
+            "min": NLParam(type=int, required=False, default=1),
         }
     )
     async def randint(interaction: discord.Interaction, max: int, min: int = 1):
@@ -57,8 +57,8 @@ async def setup(bot: BotCore):
         "bogo choice",
         "Choose a random item.",
         params={
-            "choices": (None, str),
-            "delimiter": ("The delimiter of the choices (default space).", str, False),
+            "choices": NLParam(),
+            "delimiter": NLParam("Delimiter between choices.", required=False, default=" "),
         },
     )
     async def choice(interaction: discord.Interaction, choices: str, delimiter: str = " "):
@@ -76,7 +76,7 @@ async def setup(bot: BotCore):
         "bogo",
         "Shuffle text characters.",
         params={
-            "text": None,
+            "text": NLParam(),
         },
     )
     async def bogo_bogo(interaction: discord.Interaction, text: str):
@@ -89,8 +89,8 @@ async def setup(bot: BotCore):
         "bogo shuffle",
         "Shuffle list items.",
         params={
-            "items": (None, str),
-            "delimiter": ("The delimiter of the items (default space).", str, False),
+            "items": NLParam(),
+            "delimiter": NLParam("Delimiter between items.", required=False, default=" "),
         },
     )
     async def shuffle(
@@ -107,9 +107,9 @@ async def setup(bot: BotCore):
         "sort",
         "Sort list items.",
         params={
-            "mode": (None, Literal["numerical", "lexicographic"]),
-            "items": (None, str),
-            "delimiter": ("The delimiter of the items (default space).", str, False),
+            "mode": NLParam(type=Literal["numerical", "lexicographic"]),
+            "items": NLParam(),
+            "delimiter": NLParam("Delimiter between items.", required=False, default=" "),
         },
     )
     async def sort(
@@ -155,10 +155,10 @@ async def setup(bot: BotCore):
         "randlist",
         "Generate random integers.",
         params={
-            "length": (None, int),
-            "max": (None, int),
-            "min": (None, int, False),
-            "delimiter": ("The delimiter of the items (default space).", str, False),
+            "length": NLParam(type=int),
+            "max": NLParam(type=int),
+            "min": NLParam(type=int, required=False, default=1),
+            "delimiter": NLParam("Delimiter between numbers.", required=False, default=" "),
         },
     )
     async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1, delimiter: str = " "):
@@ -183,8 +183,8 @@ async def setup(bot: BotCore):
         "randfloat",
         "Roll a random float.",
         params={
-            "max": (None, float),
-            "min": (None, float, False)
+            "max": NLParam(type=float),
+            "min": NLParam(type=float, required=False, default=0.0),
         }
     )
     async def randfloat(interaction: discord.Interaction, max: float, min: float = 0.0):
@@ -209,8 +209,8 @@ async def setup(bot: BotCore):
         "bogo sort-list",
         "Bogosort numbers.",
         params={
-            "items": (None, str),
-            "delimiter": ("The delimiter of the items (default space).", str, False),
+            "items": NLParam(),
+            "delimiter": NLParam("Delimiter between numbers.", required=False, default=" "),
         },
     )
     async def bogosort_list(interaction: discord.Interaction, items: str, delimiter: str = " "):
@@ -261,8 +261,8 @@ async def setup(bot: BotCore):
         "bogo sort-lexicographic",
         "Bogosort strings.",
         params={
-            "items": (None, str),
-            "delimiter": ("The delimiter of the items (default space).", str, False),
+            "items": NLParam(),
+            "delimiter": NLParam("Delimiter between strings.", required=False, default=" "),
         },
     )
     async def bogosort_lexicographic(interaction: discord.Interaction, items: str, delimiter: str = " "):
@@ -306,9 +306,9 @@ async def setup(bot: BotCore):
         "bogo sort-listr",
         "Bogosort numbers with success chance.",
         params={
-            "items": (None, str),
-            "percent": (None, float),
-            "delimiter": ("The delimiter of the items (default space).", str, False),
+            "items": NLParam(),
+            "percent": NLParam(type=float),
+            "delimiter": NLParam("Delimiter between numbers.", required=False, default=" "),
         },
     )
     async def bogosort_listr(interaction: discord.Interaction, items: str, percent: float, delimiter: str = " "):
@@ -401,7 +401,7 @@ async def setup(bot: BotCore):
         "bogo sort",
         "Bogosort a tiny list.",
         params={
-            "item_count": (None, int),
+            "item_count": NLParam(type=int),
         },
     )
     async def bogosort(interaction: discord.Interaction, item_count: Literal[1, 2, 3, 4, 5, 6, 7, 8]):

@@ -6,7 +6,7 @@ from discord import app_commands
 from utils.transformers import ColourTransformer, IntTransformer
 from bogobot_core import BotCore, current_interaction
 from utils import groups
-from utils.nl import action
+from utils.nl import NLParam, action
 
 class AvatarView(discord.ui.LayoutView):
     def __init__(
@@ -325,7 +325,7 @@ async def setup(bot: BotCore):
         "avatar",
         "Show a user's avatar.",
         params={
-            "user": (None, discord.User | discord.Member | None),
+            "user": NLParam(type=discord.User | discord.Member | None, required=False),
         },
     )
     async def avatar(interaction: discord.Interaction, user: discord.Member | discord.User | None = None) -> None:
@@ -342,7 +342,7 @@ async def setup(bot: BotCore):
         "ping",
         "Show bot latency. Omit the user parameter when the message does not mention a user to target.",
         params={
-            "user": ("Optional discord user id to target.", discord.User | discord.Member | None)
+            "user": NLParam("Discord user id to target.", discord.User | discord.Member | None, required=False),
         }
     )
     async def ping(

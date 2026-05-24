@@ -9,7 +9,7 @@ import time
 import discord
 
 from bogobot_core import BotCore
-from utils.nl import action
+from utils.nl import NLParam, action
 
 
 BOGOTREE_N = 12
@@ -637,8 +637,8 @@ async def setup(bot: BotCore):
         "bogotree",
         "Advance the Bogotree puzzle.",
         params={
-            "action": (None, Literal["run", "info", "leaderboard"], False),
-            "target": (None, discord.User | discord.Member | None),
+            "action": NLParam(type=Literal["run", "info", "leaderboard"], required=False, default="run"),
+            "target": NLParam("Force a user to be shown on the leaderboard.", type=discord.User | discord.Member | None, required=False),
         },
     )
     async def bogotree(

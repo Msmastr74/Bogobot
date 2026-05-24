@@ -11,7 +11,7 @@ import discord
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
 from utils import groups
-from utils.nl import action
+from utils.nl import NLParam, action
 from discord import app_commands
 
 class CommandTelemetryBase(TypedDict):
@@ -673,7 +673,7 @@ async def setup(bot: BotCore):
         "usage",
         "Show command usage totals.",
         params={
-            "commands": (None, str | None),
+            "commands": NLParam(type=str | None, required=False),
         },
     )
     async def usage(interaction: discord.Interaction, commands: str | None = None):

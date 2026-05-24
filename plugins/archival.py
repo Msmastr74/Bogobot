@@ -7,7 +7,7 @@ import discord
 
 from bogobot_core import BotCore
 from utils.pagination import PageSection, PaginatedView, SectionRead
-from utils.nl import action
+from utils.nl import NLParam, action
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
@@ -716,7 +716,7 @@ async def setup(bot: BotCore):
         "archive",
         "View monitor archive.",
         params={
-            "value": (None, int | None),
+            "value": NLParam(type=int | None, required=False),
         },
     )
     async def archive(

@@ -9,7 +9,7 @@ import os
 import re
 import time
 import types
-from typing import Any, Callable, Generic, Literal, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
+from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
 if TYPE_CHECKING:
     from groq import Groq
     from groq.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCall
@@ -22,18 +22,17 @@ getLogger("httpx").setLevel(WARNING)
 ContextT = TypeVar("ContextT")
 ActionT = TypeVar("ActionT")
 
-NLParamDescription = str | None
-NLParamSpec = NLParamDescription | tuple[NLParamDescription, object] | tuple[NLParamDescription, object, bool]
-NLParamsTable = dict[str, NLParamSpec]
+NLParamsTable: TypeAlias = dict[str, "NLParam"]
 _MAX_CALLS = 4
 _REQUEST_INTERVAL_SECONDS = 60.0
 _ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
 
 @dataclass(frozen=True, slots=True)
 class NLParam:
-    description: str | None
-    type: object
-    required: bool
+    description: str | None = None
+    type: object = str
+    required: bool = True
+    default: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,12 +113,13 @@ class NLCore(Generic[ContextT, ActionT]):
         **kwargs: Any,
     ) -> Callable[[ActionT], ActionT]:
         def decorator(action: ActionT) -> ActionT:
+            normalized_params = self._normalize_params(params or {})
             self._actions.append(_NLAction(
                 name=name,
                 command_name=command_name or name,
                 tool_name=self._unique_tool_name(name),
                 description=description,
-                params=self._normalize_params(params or {}),
+                params=normalized_params,
                 context=cast(ContextT, kwargs),
                 action=action,
             ))
@@ -298,6 +298,8 @@ class NLCore(Generic[ContextT, ActionT]):
             schema = {"type": self._json_schema_type(param.type)}
         if param.description is not None and "description" not in schema:
             schema["description"] = self._compact_description(param.description)
+        if not param.required:
+            schema["default"] = param.default
         return schema
 
     def _json_schema_type(self, annotation: object) -> str:
@@ -493,18 +495,12 @@ class NLCore(Generic[ContextT, ActionT]):
         params: NLParamsTable,
     ) -> dict[str, NLParam]:
         normalized: dict[str, NLParam] = {}
-        for name, value in params.items():
-            if isinstance(value, tuple):
-                if len(value) == 3:
-                    description, param_type, required = value
-                else:
-                    description, param_type = value
-                    required = True
-            else:
-                description, param_type, required = value, str, True
-            if not self._supported_param_type(param_type):
-                raise TypeError(f"Unsupported NL parameter type for {name}: {param_type!r}")
-            normalized[name] = NLParam(description=description, type=param_type, required=required)
+        for name, param in params.items():
+            if not isinstance(param, NLParam):
+                raise TypeError(f"NL parameter {name} must be an NLParam, got {type(param).__name__}")
+            if not self._supported_param_type(param.type):
+                raise TypeError(f"Unsupported NL parameter type for {name}: {param.type!r}")
+            normalized[name] = param
         return normalized
 
     def _supported_param_type(self, annotation: object) -> bool:
