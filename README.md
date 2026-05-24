@@ -47,7 +47,11 @@ Go into `config.json` and provide the main credentials:
  * `nl`: Optional boolean for enabling natural-language @mention actions. Defaults to `true`.
  * `nl_model`: Optional Groq chat model for choosing tools and replying. Defaults to `llama-3.1-8b-instant`.
  * `nl_api_key_env`: Optional environment variable containing the Groq API key. Defaults to `GROQ_API_KEY`.
+ * `GROQ_API_KEY`, or the config key named by `nl_api_key_env`: Optional Groq API key copied into the configured environment variable at startup.
  * `nl_normalize_discord`: Optional boolean for whether @mention NL text resolves Discord mentions and emojis before matching. Defaults to `true`.
+ * `nl_breaks`: Optional boolean for enabling AI break periods. Defaults to `true`.
+ * `nl_active_minutes`: Optional number of minutes NL stays active before a break. Defaults to `20`.
+ * `nl_break_minutes`: Optional number of minutes NL ignores mentions and `/ai` while on break. Defaults to `10`.
 
 `DOCS.md` lists every supported user setting and every bot-managed storage field.
 

@@ -43,7 +43,11 @@ User-edited settings:
 - `nl`: Enables natural-language @mention actions. Defaults to true.
 - `nl_model`: Groq chat model used to choose tools and conversational replies. Defaults to `llama-3.1-8b-instant`.
 - `nl_api_key_env`: Environment variable containing the Groq API key. Defaults to `GROQ_API_KEY`.
+- `GROQ_API_KEY`, or the config key named by `nl_api_key_env`: Optional Groq API key. When present in config, the bot copies it into the configured environment variable at startup.
 - `nl_normalize_discord`: Whether @mention NL text annotates Discord mentions and channels with readable names before matching. Defaults to true.
+- `nl_breaks`: Enables the natural-language break cycle. Defaults to true.
+- `nl_active_minutes`: Number of minutes NL stays active before taking a break. Defaults to 20.
+- `nl_break_minutes`: Number of minutes NL ignores mentions and `/ai` while on break. Defaults to 10.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
@@ -194,7 +198,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
 
-Plugins can also register natural-language actions for @mentions with `@utils.nl.action(...)`. The shared `utils.nl.NLCore` sends Groq native tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.nl` module exposes `nl = NLCore[BotActionParameters, BotAction]()` and `action = nl.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments, and command parameters can be declared with `params={"name": None}`, `params={"name": (None, int)}`, or `params={"name": ("description", int | None)}`. `plugins/nl.py` attaches `bot.on_message` as a Discord event, annotates Discord references according to `nl_normalize_discord`, matches the text, checks permissions, and runs the selected action.
+Plugins can also register natural-language actions for @mentions and `/ai` with `@utils.nl.action(...)`. The shared `utils.nl.NLCore` sends Groq native tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.nl` module exposes `nl = NLCore[BotActionParameters, BotAction]()` and `action = nl.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `NLParam`, for example `params={"user": NLParam("Discord user id to target.", type=discord.User | discord.Member | None, required=False)}` or `params={"mode": NLParam(type=Literal["numerical", "lexicographic"])}`. `plugins/nl.py` attaches `bot.on_message` as a Discord event, annotates Discord references according to `nl_normalize_discord`, passes replied bot messages as assistant context, matches the text, checks permissions, and runs the selected action.
 
 Current plugin responsibilities:
 
