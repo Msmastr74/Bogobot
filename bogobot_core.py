@@ -162,6 +162,8 @@ class BotCore(discord.Client):
             api_key_env=str(self.config.get("nl_api_key_env", nl.api_key_env)),
             logger=self.logger.getChild("NL"),
         )
+        if nl.enabled and self.config.get(nl.api_key_env):
+            os.environ[nl.api_key_env] = self.config[nl.api_key_env]
         
         self.milestones: 'MilestoneTracker | None' = None
     
