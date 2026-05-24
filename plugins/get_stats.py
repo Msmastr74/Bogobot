@@ -15,11 +15,12 @@ class StatsView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
+        title = "Bogostream Statistics",
         fields: Iterable[tuple[str, str]],
         updated_at: datetime.datetime | None = None
     ):
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay("## Bogosort Stream Statistics"))
+        self.add_item(discord.ui.TextDisplay(f"## {title}"))
         field_container = discord.ui.Container()
         for header, content in fields:
             field_container.add_item(
@@ -84,7 +85,7 @@ class StatsPayload(TypedDict):
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
     
-    def stats_payload() -> StatsPayload:
+    def stats_payload(title="Bogostream Statistics Monitor") -> StatsPayload:
         stats_list = bot.stats
 
         # Use .get() to prevent future KeyErrors if the cache is empty
@@ -117,7 +118,7 @@ async def setup(bot: BotCore):
     )
     async def get_stats(interaction: discord.Interaction):
         await bot.discord.send(
-            **stats_payload(),
+            **stats_payload(title="Bogostream Statistics"),
             response=True
         )
 
