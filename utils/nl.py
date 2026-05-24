@@ -189,7 +189,7 @@ class NLCore(Generic[ContextT, ActionT]):
         for call in calls[:_MAX_CALLS]:
             action = action_by_tool.get(call.name)
             if action is None:
-                self.logger.debug(f"NL tool call rejected unknown action {call.name!r}.")
+                self.logger.debug(f"tool call rejected unknown action {call.name!r}.")
                 continue
 
             kwargs = self._coerce_arguments(
@@ -199,10 +199,10 @@ class NLCore(Generic[ContextT, ActionT]):
                 interaction=interaction,
             )
             if kwargs is None:
-                self.logger.debug(f"NL tool call {call.name} rejected because arguments did not validate: {call.arguments!r}.")
+                self.logger.debug(f"tool call {call.name} rejected because arguments did not validate: {call.arguments!r}.")
                 continue
 
-            self.logger.debug(f"NL match succeeded for {text} with action {action.name}.")
+            self.logger.debug(f"match succeeded for {text} with action {action.name}.")
             matches.append(NLMatch(
                 name=action.name,
                 command_name=action.command_name,
@@ -220,7 +220,7 @@ class NLCore(Generic[ContextT, ActionT]):
         if self._last_request_at is not None:
             wait_seconds = _REQUEST_INTERVAL_SECONDS - (now - self._last_request_at)
             if wait_seconds > 0:
-                self.logger.debug(f"NL Groq rate limit sleeping for {wait_seconds:.2f}s.")
+                self.logger.debug(f"rate limit sleeping for {wait_seconds:.2f}s.")
                 await asyncio.sleep(wait_seconds)
                 now = time.monotonic()
         self._last_request_at = now
@@ -253,12 +253,15 @@ class NLCore(Generic[ContextT, ActionT]):
             {"role": "system", "content": system_prompt},
         ]
         if has_assistant_context:
-            messages.append({"role": "assistant", "content": assistant_context_text})
-            self.logger.debug(f"NL Groq assistant context: {assistant_context!r}.")
+            messages.append({
+                "role": "assistant",
+                "content": f"<|reply_start|>\n{assistant_context_text}\n<|reply_end|>",
+            })
+            self.logger.debug(f"assistant context: {assistant_context!r}.")
         messages.append({"role": "user", "content": text})
-        self.logger.debug(f"NL Groq input: {text!r}.")
-        self.logger.debug(f"NL Groq system prompt: {system_prompt!r}.")
-        self.logger.debug(f"NL Groq tools: {tools!r}.")
+        self.logger.debug(f"input: {text!r}.")
+        self.logger.debug(f"system prompt: {system_prompt!r}.")
+        self.logger.debug(f"tools: {tools!r}.")
         try:
             response = client.chat.completions.create(
                 model=self.model_name,
@@ -272,13 +275,13 @@ class NLCore(Generic[ContextT, ActionT]):
             tool_error = self._tool_use_failed_message(exc)
             if tool_error is None:
                 raise
-            self.logger.debug(f"NL Groq tool use failed: {exc!r}.")
+            self.logger.debug(f"tool use failed: {exc!r}.")
             return tool_error, []
         message = response.choices[0].message
         content = message.content or ""
-        self.logger.debug(f"NL Groq raw response: {content!r}.")
+        self.logger.debug(f"raw response: {content!r}.")
         raw_tool_calls = message.tool_calls or []
-        self.logger.debug(f"NL Groq raw tool calls: {raw_tool_calls!r}.")
+        self.logger.debug(f"raw tool calls: {raw_tool_calls!r}.")
         return content, self._parse_native_tool_calls(raw_tool_calls)
 
     def _system_prompt(
@@ -288,8 +291,7 @@ class NLCore(Generic[ContextT, ActionT]):
         has_assistant_context: bool,
     ) -> str:
         assistant_context_instruction = (
-            "The assistant message immediately before the current user message is the exact previous Bogobot message the user replied to. "
-            "If the user asks what the previous message or replied-to message contained, answer from that assistant message. "
+            "The assistant message immediately before the current user message contains the exact previous message the user replied to, wrapped between <|reply_start|> and <|reply_end|>. "
             "Do not call or invent a command to retrieve it.\n"
             if has_assistant_context else
             ""
@@ -298,10 +300,10 @@ class NLCore(Generic[ContextT, ActionT]):
             "Cutting Knowledge Date: December 2023\n"
             f"Today's Date: {datetime.now().strftime('%d %B %Y')}\n"
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
-            f"{assistant_context_instruction}"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names. "
             "If no command fits, respond normally.\n"
+            f"{assistant_context_instruction}"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
@@ -385,7 +387,7 @@ class NLCore(Generic[ContextT, ActionT]):
             try:
                 arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
             except json.JSONDecodeError:
-                self.logger.debug(f"NL tool call {name} rejected invalid JSON arguments: {raw_arguments!r}.")
+                self.logger.debug(f"tool call {name} rejected invalid JSON arguments: {raw_arguments!r}.")
                 continue
             if arguments is None:
                 arguments = {}
