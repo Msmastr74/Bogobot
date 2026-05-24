@@ -34,6 +34,7 @@ ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.
 USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
 ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
+MAX_ASSISTANT_CONTEXT_CHARS = 3000
 
 @dataclass(frozen=True, slots=True)
 class MessageInteractionCommand:
@@ -273,6 +274,31 @@ def mentioned_message_text(
     return text or None
 
 
+def replied_assistant_text(
+    bot: 'BotCore',
+    message: discord.Message,
+    *,
+    normalize_discord: bool = True,
+) -> str | None:
+    if bot.user is None or message.reference is None:
+        return None
+
+    resolved = message.reference.resolved
+    if not isinstance(resolved, discord.Message):
+        return None
+    if resolved.author.id != bot.user.id:
+        return None
+
+    text = resolved.content
+    if normalize_discord:
+        text = annotate_discord_references(resolved, text)
+
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text[:MAX_ASSISTANT_CONTEXT_CHARS]
+
+
 def annotate_discord_references(message: discord.Message, text: str) -> str:
     user_names = {
         str(user.id): _discord_reference_name(user)
@@ -344,16 +370,26 @@ async def setup(bot: 'BotCore'):
         if not bool(bot.config.get("nl", True)):
             return
 
+        normalize_discord = bool(bot.config.get("nl_normalize_discord", True))
         text = mentioned_message_text(
             bot,
             message,
-            normalize_discord=bool(bot.config.get("nl_normalize_discord", True)),
+            normalize_discord=normalize_discord,
         )
         if text is None:
             return
+        assistant_context = replied_assistant_text(
+            bot,
+            message,
+            normalize_discord=normalize_discord,
+        )
         
         async with message.channel.typing():
-            matches = await nl.match_infos(text, message=message)
+            matches = await nl.match_infos(
+                text,
+                message=message,
+                assistant_context=assistant_context,
+            )
             if not matches:
                 return
 

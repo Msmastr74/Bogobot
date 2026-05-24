@@ -138,8 +138,14 @@ class NLCore(Generic[ContextT, ActionT]):
         *,
         message: discord.Message | None = None,
         interaction: discord.Interaction | None = None,
+        assistant_context: str | None = None,
     ) -> NLMatch[ContextT, ActionT] | None:
-        matches = await self.match_infos(text, message=message, interaction=interaction)
+        matches = await self.match_infos(
+            text,
+            message=message,
+            interaction=interaction,
+            assistant_context=assistant_context,
+        )
         return matches[0] if matches else None
 
     async def match_infos(
@@ -148,6 +154,7 @@ class NLCore(Generic[ContextT, ActionT]):
         *,
         message: discord.Message | None = None,
         interaction: discord.Interaction | None = None,
+        assistant_context: str | None = None,
     ) -> list[NLMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
@@ -155,7 +162,13 @@ class NLCore(Generic[ContextT, ActionT]):
         async with self._lock:
             client = self._ensure_client()
             await self._wait_for_rate_limit()
-            content, calls = await asyncio.to_thread(self._complete, client, text, self._actions)
+            content, calls = await asyncio.to_thread(
+                self._complete,
+                client,
+                text,
+                self._actions,
+                assistant_context,
+            )
 
         matches: list[NLMatch[ContextT, ActionT]] = []
         if not calls:
@@ -230,18 +243,23 @@ class NLCore(Generic[ContextT, ActionT]):
         client: 'Groq',
         text: str,
         actions: list[_NLAction[ContextT, ActionT]],
+        assistant_context: str | None,
     ) -> tuple[str, list[_ToolCall]]:
         system_prompt = self._system_prompt(actions)
         tools = [self._tool_schema(action) for action in actions]
+        messages: list[Any] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        if assistant_context is not None and assistant_context.strip():
+            messages.append({"role": "assistant", "content": assistant_context.strip()})
+            self.logger.debug(f"NL Groq assistant context: {assistant_context!r}.")
+        messages.append({"role": "user", "content": text})
         self.logger.debug(f"NL Groq input: {text!r}.")
         self.logger.debug(f"NL Groq system prompt: {system_prompt!r}.")
         self.logger.debug(f"NL Groq tools: {tools!r}.")
         response = client.chat.completions.create(
             model=self.model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text},
-            ],
+            messages=messages,
             tools=tools,
             tool_choice="auto",
             temperature=0.2,
@@ -259,6 +277,7 @@ class NLCore(Generic[ContextT, ActionT]):
             "Cutting Knowledge Date: December 2023\n"
             f"Today's Date: {datetime.now().strftime('%d %B %Y')}\n"
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
+            "If there is a previous assistant turn, it is the previous Bogobot message the user replied to, produced by a command or AI reply.\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
             "If no command fits, respond normally.\n"
         )
