@@ -15,9 +15,9 @@ pkg install x11-repo -y
 pkg install opencv-python -y
 
 # Install Python libraries
-# groq provides hosted NL action selection and replies.
+# openai provides hosted or OpenAI-compatible NL action selection and replies.
 # Pillow may require a moment to compile on mobile devices
-pip install discord.py groq numpy Pillow aiohttp streamlink pyuca
+pip install discord.py openai numpy Pillow aiohttp streamlink pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python - <<'PY'

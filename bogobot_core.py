@@ -160,6 +160,7 @@ class BotCore(discord.Client):
             enabled=bool(self.config.get("nl", True)),
             model_name=str(self.config.get("nl_model", nl.model_name)),
             api_key_env=str(self.config.get("nl_api_key_env", nl.api_key_env)),
+            base_url=self.config.get("nl_base_url"),
             logger=self.logger.getChild("NL"),
         )
         if nl.enabled and self.config.get(nl.api_key_env):

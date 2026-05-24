@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.13.5",
     "discord-py>=2.7.1",
-    "groq>=1.2.0",
+    "openai>=2.8.0",
     "numpy>=2.2.6",
     "opencv-python>=4.13.0.92",
     "pillow>=12.2.0",

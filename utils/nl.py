@@ -11,8 +11,8 @@ import time
 import types
 from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
 if TYPE_CHECKING:
-    from groq import Groq
-    from groq.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCall
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCallUnion
 
 import discord
 import plugins.nl as nl_plugin
@@ -70,14 +70,16 @@ class NLCore(Generic[ContextT, ActionT]):
         *,
         enabled: bool = True,
         model_name: str = "llama-3.1-8b-instant",
-        api_key_env: str = "GROQ_API_KEY",
+        api_key_env: str = "OPENAI_API_KEY",
+        base_url: str | None = None,
         logger: Logger | None = None,
     ):
         self.enabled = enabled
         self.model_name = model_name
         self.api_key_env = api_key_env
+        self.base_url = base_url
         self._actions: list[_NLAction[ContextT, ActionT]] = []
-        self._client: 'Groq | None' = None
+        self._client: 'OpenAI | None' = None
         self._last_request_at: float | None = None
         self._lock = asyncio.Lock()
         self.logger = logger or getLogger("Bogobot.NL")
@@ -88,6 +90,7 @@ class NLCore(Generic[ContextT, ActionT]):
         enabled: bool | None = None,
         model_name: str | None = None,
         api_key_env: str | None = None,
+        base_url: str | None = None,
         logger: Logger | None = None,
         model: str | None = None,
     ) -> None:
@@ -100,6 +103,10 @@ class NLCore(Generic[ContextT, ActionT]):
 
         if api_key_env is not None:
             self.api_key_env = api_key_env
+
+        if base_url != self.base_url:
+            self.base_url = base_url
+            self._client = None
 
         if logger is not None:
             self.logger = logger
@@ -228,19 +235,19 @@ class NLCore(Generic[ContextT, ActionT]):
     def _ensure_client(self):
         if self._client is None:
             try:
-                from groq import Groq
+                from openai import OpenAI
             except ImportError as exc:
-                raise RuntimeError("The groq package is required when NL is enabled.") from exc
+                raise RuntimeError("The openai package is required when NL is enabled.") from exc
 
             api_key = os.environ.get(self.api_key_env)
             if not api_key:
                 raise RuntimeError(f"NL is enabled but {self.api_key_env} is not set.")
-            self._client = Groq(api_key=api_key)
+            self._client = OpenAI(api_key=api_key, base_url=self.base_url)
         return self._client
 
     def _complete(
         self,
-        client: 'Groq',
+        client: 'OpenAI',
         text: str,
         actions: list[_NLAction[ContextT, ActionT]],
         assistant_context: str | None,
@@ -318,7 +325,7 @@ class NLCore(Generic[ContextT, ActionT]):
                     return f"I tried to use a command incorrectly: {details}\n`{failed_generation}`"
                 return f"I tried to use a command incorrectly: {details}"
         if "tool_use_failed" in str(exc):
-            return "I tried to use a command incorrectly, but Groq did not provide details."
+            return "I tried to use a command incorrectly, but OpenAI did not provide details."
         return None
 
     def _tool_schema(self, action: _NLAction[ContextT, ActionT]) -> 'ChatCompletionToolParam':
@@ -376,9 +383,11 @@ class NLCore(Generic[ContextT, ActionT]):
             return "boolean"
         return "string"
 
-    def _parse_native_tool_calls(self, raw_tool_calls: list['ChatCompletionMessageToolCall']) -> list[_ToolCall]:
+    def _parse_native_tool_calls(self, raw_tool_calls: list['ChatCompletionMessageToolCallUnion']) -> list[_ToolCall]:
         calls: list[_ToolCall] = []
         for raw_call in raw_tool_calls:
+            if raw_call.type != 'function':
+                continue
             function = raw_call.function
             name = function.name
             raw_arguments = function.arguments
