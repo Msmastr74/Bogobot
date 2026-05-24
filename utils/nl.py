@@ -245,26 +245,35 @@ class NLCore(Generic[ContextT, ActionT]):
         actions: list[_NLAction[ContextT, ActionT]],
         assistant_context: str | None,
     ) -> tuple[str, list[_ToolCall]]:
-        system_prompt = self._system_prompt(actions)
+        assistant_context_text = assistant_context.strip() if assistant_context is not None else ""
+        has_assistant_context = bool(assistant_context_text)
+        system_prompt = self._system_prompt(actions, has_assistant_context=has_assistant_context)
         tools = [self._tool_schema(action) for action in actions]
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
         ]
-        if assistant_context is not None and assistant_context.strip():
-            messages.append({"role": "assistant", "content": assistant_context.strip()})
+        if has_assistant_context:
+            messages.append({"role": "assistant", "content": assistant_context_text})
             self.logger.debug(f"NL Groq assistant context: {assistant_context!r}.")
         messages.append({"role": "user", "content": text})
         self.logger.debug(f"NL Groq input: {text!r}.")
         self.logger.debug(f"NL Groq system prompt: {system_prompt!r}.")
         self.logger.debug(f"NL Groq tools: {tools!r}.")
-        response = client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            temperature=0.2,
-            max_tokens=512,
-        )
+        try:
+            response = client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.2,
+                max_tokens=512,
+            )
+        except Exception as exc:
+            tool_error = self._tool_use_failed_message(exc)
+            if tool_error is None:
+                raise
+            self.logger.debug(f"NL Groq tool use failed: {exc!r}.")
+            return tool_error, []
         message = response.choices[0].message
         content = message.content or ""
         self.logger.debug(f"NL Groq raw response: {content!r}.")
@@ -272,15 +281,43 @@ class NLCore(Generic[ContextT, ActionT]):
         self.logger.debug(f"NL Groq raw tool calls: {raw_tool_calls!r}.")
         return content, self._parse_native_tool_calls(raw_tool_calls)
 
-    def _system_prompt(self, actions: list[_NLAction[ContextT, ActionT]]) -> str:
+    def _system_prompt(
+        self,
+        actions: list[_NLAction[ContextT, ActionT]],
+        *,
+        has_assistant_context: bool,
+    ) -> str:
+        assistant_context_instruction = (
+            "The assistant message immediately before the current user message is the exact previous Bogobot message the user replied to. "
+            "If the user asks what the previous message or replied-to message contained, answer from that assistant message. "
+            "Do not call or invent a command to retrieve it.\n"
+            if has_assistant_context else
+            ""
+        )
         return (
             "Cutting Knowledge Date: December 2023\n"
             f"Today's Date: {datetime.now().strftime('%d %B %Y')}\n"
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
-            "If there is a previous assistant turn, it is the previous Bogobot message the user replied to, produced by a command or AI reply.\n"
+            f"{assistant_context_instruction}"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
+            "Only call commands from the available tools; never invent command names. "
             "If no command fits, respond normally.\n"
         )
+
+    def _tool_use_failed_message(self, exc: Exception) -> str | None:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict) and error.get("code") == "tool_use_failed":
+                message = error.get("message")
+                failed_generation = error.get("failed_generation")
+                details = message if isinstance(message, str) else "The model tried to use an invalid command."
+                if isinstance(failed_generation, str) and failed_generation:
+                    return f"I tried to use a command incorrectly: {details}\n`{failed_generation}`"
+                return f"I tried to use a command incorrectly: {details}"
+        if "tool_use_failed" in str(exc):
+            return "I tried to use a command incorrectly, but Groq did not provide details."
+        return None
 
     def _tool_schema(self, action: _NLAction[ContextT, ActionT]) -> 'ChatCompletionToolParam':
         properties: 'dict[str, Any]' = {}
