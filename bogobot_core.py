@@ -158,11 +158,8 @@ class BotCore(discord.Client):
         self.callbacks = CallbackRegistry()
         nl.configure(
             enabled=bool(self.config.get("nl", True)),
-            ranker_model_name=str(self.config.get("nl_ranker_model", nl.ranker_model_name)),
-            function_model_name=str(self.config.get("nl_function_model", nl.function_model_name)),
-            quantization=str(self.config.get("nl_quantization", nl.quantization)),
-            threshold=float(self.config.get("nl_action_threshold", nl.threshold)),
-            top_k=int(self.config.get("nl_top_k", nl.top_k)),
+            model_name=str(self.config.get("nl_model", nl.model_name)),
+            api_key_env=str(self.config.get("nl_api_key_env", nl.api_key_env)),
             logger=self.logger.getChild("NL"),
         )
         

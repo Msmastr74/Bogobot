@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from bogobot_core import BotCore
 from dataclasses import dataclass
 
+INSTRUCTION_TEXT = (
+    "You are Bogobot, a helpful, friendly, and slightly chaotic Discord bot. "
+    "You live in Discord and answer naturally when chatted with. "
+)
+
 class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
 
@@ -360,7 +365,6 @@ async def setup(bot: 'BotCore'):
                 else:
                     await message.reply(
                         reply,
-                        mention_author=False,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 continue
@@ -383,3 +387,13 @@ async def setup(bot: 'BotCore'):
                 eph=False,
                 defer=False,
             )
+
+    @bot.init_callback
+    async def init():
+        global INSTRUCTION_TEXT
+        if not bot.user:
+            return
+        INSTRUCTION_TEXT = INSTRUCTION_TEXT.replace(
+            "Bogobot",
+            f'Bogobot (<@{bot.user.id} {json_string(bot.user.name)}>)'
+        )

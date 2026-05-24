@@ -140,7 +140,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "top",
-        "Show the top sortoff leaderboard with the best players by ELO. Match requests like leaderboard, top leaderboard, show leaderboard, show top leaderboard, top players, best players, or sortoff leaderboard.",
+        "Show the top leaderboard.",
     )
     async def top(interaction: discord.Interaction):
         await bot.discord.send(
@@ -159,7 +159,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "bottom",
-        "Show the bottom sortoff leaderboard with the lowest-ranked players by ELO. Match requests like bottom leaderboard, show bottom leaderboard, bottom players, worst players, or lowest leaderboard.",
+        "Show the bottom leaderboard.",
     )
     async def bottom(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
@@ -180,7 +180,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "middle",
-        "Show the middle of the sortoff leaderboard around the average-ranked players by ELO. Match requests like middle leaderboard, show middle leaderboard, middle players, mid leaderboard, or average leaderboard.",
+        "Show the middle leaderboard.",
     )
     async def middle(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
@@ -205,7 +205,7 @@ async def setup(bot: BotCore):
     leaderboard_monitor.command(
         manage,
         name="leaderboard_monitor",
-        description="Start or stop leaderboard monitoring in this channel",
+        description="Manage leaderboard monitor",
     )
 
     @tasks.loop(seconds=LEADERBOARD_MONITOR_INTERVAL_SECONDS)

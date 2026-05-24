@@ -431,7 +431,7 @@ async def setup(bot: "BotCore"):
         )
 
 
-    @manage.command(name="message", description="React to, pin, edit, reply to, or delete a message", perm_requirement=3)
+    @manage.command(name="message", description="Manage a message", perm_requirement=3)
     async def message(
         interaction: discord.Interaction,
         action: Literal['delete', 'edit', 'reply', 'react', 'unreact', 'pin', 'unpin'],

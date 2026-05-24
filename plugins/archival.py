@@ -714,7 +714,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "archive",
-        "View archived monitor values and stream history. Match requests like show archive, monitor archive, archived values, show archived monitor values, view history, or monitor history.",
+        "View monitor archive.",
     )
     async def archive(
         interaction: discord.Interaction,

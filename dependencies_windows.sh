@@ -9,9 +9,9 @@ winget install -e --id UB-Mannheim.TesseractOCR
 winget install -e --id Gyan.FFmpeg
 
 # Install Python libraries.
-# torch and transformers provide local NL routing and function calling.
+# groq provides hosted NL action selection and replies.
 py -3 -m pip install --upgrade pip
-py -3 -m pip install discord.py torch transformers numpy Pillow aiohttp streamlink opencv-python pyuca bitsandbytes accelerate
+py -3 -m pip install discord.py groq numpy Pillow aiohttp streamlink opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 py -3 - <<'PY'

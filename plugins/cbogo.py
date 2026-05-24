@@ -607,7 +607,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "cbogo",
-        "Advance or play the community bogosort game cbogo. Match requests like run cbogo, play cbogo, community bogo, community bogosort, advance cbogo, or do cbogo.",
+        "Run cbogo.",
     )
     async def cbogo(
         interaction: discord.Interaction,

@@ -333,9 +333,9 @@ async def setup(bot: BotCore):
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
     @action(
         "ping",
-        "Show bot latency and respond to simple ping requests.",
+        "Show bot latency.",
         params={
-            "user": ("Discord user or member.", discord.User | discord.Member | None)
+            "user": (None, discord.User | discord.Member | None)
         }
     )
     async def ping(

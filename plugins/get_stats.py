@@ -79,7 +79,7 @@ async def setup(bot: BotCore):
     @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
     @action(
         "get_stats",
-        "Retrieve current stream statistics such as shuffles, comparisons, uptime, and stream numbers. Match requests like stats, statistics, stream stats, current stats, show me the stats, how many shuffles, or what are the stream numbers.",
+        "Show current stream statistics.",
     )
     async def get_stats(interaction: discord.Interaction):
         
@@ -148,7 +148,7 @@ async def setup(bot: BotCore):
     @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False, perm_requirement=0)
     @action(
         "get_sort",
-        "Retrieve the current sort state or best run image. Match requests like sort, current sort, sort state, show the sort, what is the current sort, current best shuffle, or best run state.",
+        "Show the current sort state.",
     )
     async def get_sort(interaction: discord.Interaction):
         view, file = await sort_payload()

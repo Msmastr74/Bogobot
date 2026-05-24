@@ -671,7 +671,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "usage",
-        "Show command usage totals and telemetry for public commands. Match requests like usage, command usage, usage totals, who uses commands, show usage, or show command usage.",
+        "Show command usage totals.",
     )
     async def usage(interaction: discord.Interaction, commands: str | None = None):
         requested_commands = parse_commands(commands)

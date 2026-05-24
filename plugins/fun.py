@@ -65,7 +65,7 @@ async def setup(bot: BotCore):
     @bogo.command(name="name", description="Bogoes your name", perm_requirement=0, defer=False)
     @action(
         "bogo name",
-        "Shuffle or bogofy the requesting user's Discord display name. Match requests like bogo name, shuffle my name, scramble my name, bogo my name, or bogofy my name.",
+        "Shuffle the user's display name.",
     )
     async def bogo_name(interaction: discord.Interaction):
         member = interaction.user
@@ -93,25 +93,4 @@ async def setup(bot: BotCore):
             view=BogonameView(original_name, new_name),
             response=True,
             safety_filter=True
-        )
-    
-    EMOJI_RE = re.compile(r"<a?:[\w-]+:\d+>")
-    @action(
-        "emoji reply",
-        "Reply to any messages containing a discord emoji similar to: '<:emoji_name:123456789012345678>' by repeating that emoji.",
-        command_name="emoji_reply",
-        params={
-            "emoji": "The emoji the user sent in the message."
-        }
-    )
-    async def emoji_reply(interaction: discord.Interaction, emoji: str):
-        emoji = emoji.strip()
-        is_emoji = EMOJI_RE.fullmatch(emoji) or len(emoji) <= 5
-        if not is_emoji:
-            return
-        await bot.discord.send(
-            contents=emoji,
-            response=True,
-            ephemeral=True,
-            safety_filter=True,
         )

@@ -71,7 +71,7 @@ async def setup(bot: BotCore):
     stream_monitor.command(
         manage,
         name="monitor",
-        description="Start or stop stream monitoring in this channel",
+        description="Manage stream monitor",
     )
 
     @bot.init_callback

@@ -28,20 +28,19 @@ async def setup(bot: BotCore):
     @bogo.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
     @action(
         "bogo roll",
-        "Roll a random number from 1 to 100. Match requests like roll, roll a number, random number, dice roll, bogo roll, or roll from 1 to 100.",
+        "Roll a random number from 1 to 100.",
     )
     async def roll(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.randint(1, 100)}", response=True)
     
-    @bot.setup.command(name="randint", description="Rolls a random number from user specified range", 
+    @bot.setup.command(name="randint", description="Roll a random integer", 
                        defer=False, perm_requirement=0)
     @action(
-        "random integer",
-        "Rolls a random integer number from a user specified range.",
-        command_name="randint",
+        "randint",
+        "Roll a random integer.",
         params={
-            "max": ("Maximum number of the range. Minimum may be omitted.", int),
-            "min": ("Minimum number of the range. May be omitted.", int, False)
+            "max": (None, int),
+            "min": (None, int, False)
         }
     )
     async def randint(interaction: discord.Interaction, max: int, min: int = 1):
@@ -118,7 +117,7 @@ async def setup(bot: BotCore):
         contents = output_delimiter.join(sorted_items) or FALSE_SPACE
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
     
-    @bot.setup.command(name="randlist", description="Generates a random list of integers in a range", 
+    @bot.setup.command(name="randlist", description="Generate random integers", 
                        defer=False, perm_requirement=0)
     async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1, delimiter: str = " "):
         if length < 1:
@@ -136,15 +135,14 @@ async def setup(bot: BotCore):
         rand_list = [random.randint(min, max) for _ in range(length)]
         await bot.discord.send(contents=f"`{delimiter.join(map(str, rand_list))}`", response=True)
 
-    @bot.setup.command(name="randfloat", description="Rolls a random float from user specified range", 
+    @bot.setup.command(name="randfloat", description="Roll a random float", 
                        defer=False, perm_requirement=0)
     @action(
-        "random number",
-        "Rolls a random floating point number from a user specified range.",
-        command_name="randfloat",
+        "randfloat",
+        "Roll a random float.",
         params={
-            "max": ("Maximum number of the range. Minimum may be omitted.", float),
-            "min": ("Minimum number of the range. May be omitted.", float, False)
+            "max": (None, float),
+            "min": (None, float, False)
         }
     )
     async def randfloat(interaction: discord.Interaction, max: float, min: float = 0.0):
@@ -158,9 +156,8 @@ async def setup(bot: BotCore):
     
     @bot.setup.command(name="randbool", description="Rolls a random boolean", defer=False, perm_requirement=0)
     @action(
-        "random boolean",
-        "Rolls a random boolean value.",
-        command_name="randbool",
+        "randbool",
+        "Roll true or false.",
     )
     async def randbool(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.choice([True, False])}", response=True)

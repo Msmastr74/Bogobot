@@ -395,7 +395,7 @@ async def setup(bot: BotCore):
 
     @manage.command(
         name="milestones",
-        description="Subscribe to, unsubscribe from, or spoof/delete milestones.",
+        description="Manage milestone events.",
     )
     async def milestones(
         interaction: discord.Interaction,
@@ -541,7 +541,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="milestone_info",
-        description="Show recent in-memory history for a milestone",
+        description="Show milestone history",
         defer=False
     )
     async def milestone_info(
