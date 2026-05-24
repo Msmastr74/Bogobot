@@ -3,10 +3,13 @@ import io
 import discord
 import datetime
 
-from typing import Iterable
+from typing import Iterable, TypedDict
 from bogobot_core import BotCore
 from PIL import Image
 from utils.nl import action
+
+from utils.monitoring import PersistentChannelMonitor
+from utils import groups
 
 class StatsView(discord.ui.LayoutView):
     def __init__(
@@ -75,14 +78,13 @@ class SortView(discord.ui.LayoutView):
                 f"-# Updated at <t:{int(round(timestamp.timestamp()))}:T>"
             ))
 
+class StatsPayload(TypedDict):
+    view: StatsView
+
 async def setup(bot: BotCore):
-    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
-    @action(
-        "get_stats",
-        "Show current stream statistics.",
-    )
-    async def get_stats(interaction: discord.Interaction):
-        
+    manage = groups.manage(bot)
+    
+    def stats_payload() -> StatsPayload:
         stats_list = bot.stats
 
         # Use .get() to prevent future KeyErrors if the cache is empty
@@ -92,20 +94,30 @@ async def setup(bot: BotCore):
         shuffles_sec = stats_list.get("shuffles_sec", "Loading...")
         average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
         uptime = stats_list.get("uptime", "Loading...")
-        elapsed_time = await bot.get_stream_uptime()
+        elapsed_time = bot.get_stream_uptime()
+        
+        view = StatsView(
+            fields=[
+                ("Shuffles", shuffles),
+                ("Comparisons", comparisons),
+                ("Best Run", best_run),
+                ("Shuffles Per Second", shuffles_sec),
+                ("Average Best Shuffle", average_best_shuffle),
+                ("Uptime [STREAM]", uptime),
+                ("Elapsed Time [STATIC]", elapsed_time),
+            ],
+            updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
+        )
+        return { 'view': view }
+    
+    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
+    @action(
+        "get_stats",
+        "Show current stream statistics.",
+    )
+    async def get_stats(interaction: discord.Interaction):
         await bot.discord.send(
-            view=StatsView(
-                fields=[
-                    ("Shuffles", shuffles),
-                    ("Comparisons", comparisons),
-                    ("Best Run", best_run),
-                    ("Shuffles Per Second", shuffles_sec),
-                    ("Average Best Shuffle", average_best_shuffle),
-                    ("Uptime [STREAM]", uptime),
-                    ("Elapsed Time [STATIC]", elapsed_time),
-                ],
-                updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
-            ),
+            **stats_payload(),
             response=True
         )
 
@@ -114,11 +126,13 @@ async def setup(bot: BotCore):
         list[tuple[bool, int]], int, float, Image.Image | None
     ] | None = None
     @bot.new_value_callback
-    def on_new_value(sort_state: list[tuple[bool, int]], correct_count: int, timestamp: float):
+    async def on_new_value(sort_state: list[tuple[bool, int]], correct_count: int, timestamp: float):
         nonlocal last_value
         last_value = (
             sort_state, correct_count, timestamp, last_frame
         )
+        await stats_monitor.tick()
+
     @bot.new_frame_callback
     def on_new_frame(frame: Image.Image):
         nonlocal last_frame
@@ -166,3 +180,20 @@ async def setup(bot: BotCore):
             response=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    stats_monitor = PersistentChannelMonitor(
+        bot,
+        storage_key="stats_monitor_messages",
+        display_name="Stats monitor",
+        initial_payload=stats_payload,
+        update_payload=stats_payload,
+    )
+    stats_monitor.command(
+        manage,
+        name="stats_monitor",
+        description="Start or stop stats monitor in this channel",
+    )
+    
+    @bot.init_callback
+    async def init():
+        await stats_monitor.initialize()
