@@ -321,6 +321,13 @@ async def setup(bot: BotCore):
         return True
 
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
+    @action(
+        "avatar",
+        "Show a user's avatar.",
+        params={
+            "user": (None, discord.User | discord.Member | None),
+        },
+    )
     async def avatar(interaction: discord.Interaction, user: discord.Member | discord.User | None = None) -> None:
         if user is None:
             user = interaction.user

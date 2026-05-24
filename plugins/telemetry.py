@@ -672,6 +672,9 @@ async def setup(bot: BotCore):
     @action(
         "usage",
         "Show command usage totals.",
+        params={
+            "commands": (None, str | None),
+        },
     )
     async def usage(interaction: discord.Interaction, commands: str | None = None):
         requested_commands = parse_commands(commands)

@@ -636,6 +636,10 @@ async def setup(bot: BotCore):
     @action(
         "bogotree",
         "Advance the Bogotree puzzle.",
+        params={
+            "action": (None, Literal["run", "info", "leaderboard"], False),
+            "target": (None, discord.User | discord.Member | None),
+        },
     )
     async def bogotree(
         interaction: discord.Interaction,

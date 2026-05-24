@@ -105,9 +105,6 @@ async def setup(bot: BotCore):
             bot.logger.warning(f"Error fetching leaderboard: {e}")
         return []
     
-    def get_emoji(name: str):
-        return bot.discord.get_emoji(name).emoji
-
     def leaderboard_payload(
         rows: list[Player],
         *,

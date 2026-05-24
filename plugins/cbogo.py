@@ -608,6 +608,10 @@ async def setup(bot: BotCore):
     @action(
         "cbogo",
         "Run cbogo.",
+        params={
+            "action": (None, Literal["run", "info", "leaderboard"], False),
+            "target": (None, discord.User | discord.Member | None),
+        },
     )
     async def cbogo(
         interaction: discord.Interaction,

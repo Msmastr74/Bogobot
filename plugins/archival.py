@@ -715,6 +715,9 @@ async def setup(bot: BotCore):
     @action(
         "archive",
         "View monitor archive.",
+        params={
+            "value": (None, int | None),
+        },
     )
     async def archive(
         interaction: discord.Interaction,

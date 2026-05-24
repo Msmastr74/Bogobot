@@ -53,6 +53,14 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=f"{random.randint(min, max)}", response=True)
     
     @bogo.command(name="choice", description="Chooses a random item from a list of items", defer=False, perm_requirement=0)
+    @action(
+        "bogo choice",
+        "Choose a random item.",
+        params={
+            "choices": (None, str),
+            "delimiter": ("The delimiter of the choices (default space).", str, False),
+        },
+    )
     async def choice(interaction: discord.Interaction, choices: str, delimiter: str = " "):
         choices_list = split(choices, delimiter)
         if len(choices_list) == 0:
@@ -64,12 +72,27 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=c, response=True, safety_filter=True)
 
     @bogo.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
+    @action(
+        "bogo",
+        "Shuffle text characters.",
+        params={
+            "text": None,
+        },
+    )
     async def bogo_bogo(interaction: discord.Interaction, text: str):
         char_list = list(text)
         random.shuffle(char_list)
         await bot.discord.send(contents=f"{''.join(char_list)}", response=True, safety_filter=True)
     
     @bogo.command(name="shuffle", description="shuffles", defer=False, perm_requirement=0)
+    @action(
+        "bogo shuffle",
+        "Shuffle list items.",
+        params={
+            "items": (None, str),
+            "delimiter": ("The delimiter of the items (default space).", str, False),
+        },
+    )
     async def shuffle(
         interaction: discord.Interaction, items: str, delimiter: str = " "
     ):
@@ -80,6 +103,15 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
 
     @bot.setup.command(name="sort", description="Sorts a list of items", defer=False, perm_requirement=0)
+    @action(
+        "sort",
+        "Sort list items.",
+        params={
+            "mode": (None, Literal["numerical", "lexicographic"]),
+            "items": (None, str),
+            "delimiter": ("The delimiter of the items (default space).", str, False),
+        },
+    )
     async def sort(
         interaction: discord.Interaction,
         mode: Literal["numerical", "lexicographic"],
@@ -119,6 +151,16 @@ async def setup(bot: BotCore):
     
     @bot.setup.command(name="randlist", description="Generate random integers", 
                        defer=False, perm_requirement=0)
+    @action(
+        "randlist",
+        "Generate random integers.",
+        params={
+            "length": (None, int),
+            "max": (None, int),
+            "min": (None, int, False),
+            "delimiter": ("The delimiter of the items (default space).", str, False),
+        },
+    )
     async def randlist(interaction: discord.Interaction, length: int, max: int, min: int = 1, delimiter: str = " "):
         if length < 1:
             await bot.discord.send(contents=f"Length {length} is invalid.", response=True, ephemeral=True)
@@ -163,6 +205,14 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=f"{random.choice([True, False])}", response=True)
 
     @bogo.command(name="sort-list", description="Bogosorts a list of numbers", defer=False, perm_requirement=0)
+    @action(
+        "bogo sort-list",
+        "Bogosort numbers.",
+        params={
+            "items": (None, str),
+            "delimiter": ("The delimiter of the items (default space).", str, False),
+        },
+    )
     async def bogosort_list(interaction: discord.Interaction, items: str, delimiter: str = " "):
         items_list = split(items, delimiter)
         arr: list[float | int] = []
@@ -207,6 +257,14 @@ async def setup(bot: BotCore):
         return
 
     @bogo.command(name="sort-lexicographic", description="Bogosorts a list of strings", defer=False, perm_requirement=0)
+    @action(
+        "bogo sort-lexicographic",
+        "Bogosort strings.",
+        params={
+            "items": (None, str),
+            "delimiter": ("The delimiter of the items (default space).", str, False),
+        },
+    )
     async def bogosort_lexicographic(interaction: discord.Interaction, items: str, delimiter: str = " "):
         arr = [
             unicodedata.normalize("NFC", item)
@@ -244,6 +302,15 @@ async def setup(bot: BotCore):
         return
     
     @bogo.command(name="sort-listr", description="bogosorts a list of number?", defer=False, perm_requirement=0)
+    @action(
+        "bogo sort-listr",
+        "Bogosort numbers with success chance.",
+        params={
+            "items": (None, str),
+            "percent": (None, float),
+            "delimiter": ("The delimiter of the items (default space).", str, False),
+        },
+    )
     async def bogosort_listr(interaction: discord.Interaction, items: str, percent: float, delimiter: str = " "):
         if percent < 0 or percent > 100:
             await bot.discord.send(
@@ -330,6 +397,13 @@ async def setup(bot: BotCore):
         return
 
     @bogo.command(name="sort", description="Bogosorts", defer=False, perm_requirement=0)
+    @action(
+        "bogo sort",
+        "Bogosort a tiny list.",
+        params={
+            "item_count": (None, int),
+        },
+    )
     async def bogosort(interaction: discord.Interaction, item_count: Literal[1, 2, 3, 4, 5, 6, 7, 8]):
         items: list[tuple[int, str]] = [
             (i, chr(0x2580 + i)) for i in range(1, item_count + 1)

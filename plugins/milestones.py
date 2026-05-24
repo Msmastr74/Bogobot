@@ -9,6 +9,7 @@ from PIL import Image
 
 from bogobot_core import BotCore
 from utils import groups
+from utils.nl import action
 from discord import app_commands
 
 
@@ -543,6 +544,14 @@ async def setup(bot: BotCore):
         name="milestone_info",
         description="Show milestone history",
         defer=False
+    )
+    @action(
+        "milestone_info",
+        "Show milestone history.",
+        params={
+            "milestone_name": (None, str),
+            "ephemeral": (None, bool, False),
+        },
     )
     async def milestone_info(
         interaction: discord.Interaction, milestone_name: str, ephemeral: bool = True
