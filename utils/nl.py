@@ -259,7 +259,7 @@ class NLCore(Generic[ContextT, ActionT]):
             "Cutting Knowledge Date: December 2023\n"
             f"Today's Date: {datetime.now().strftime('%d %B %Y')}\n"
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
-            "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. "
+            "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. "
             "If no command fits, respond normally.\n"
         )
 
