@@ -11,7 +11,7 @@ import time
 import types
 from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
 if TYPE_CHECKING:
-    from openai import OpenAI
+    from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCallUnion
 
 import discord
@@ -81,7 +81,7 @@ class NLCore(Generic[ContextT, ActionT]):
         self.base_url = base_url
         self.request_interval_seconds = max(0.0, float(request_interval_seconds))
         self._actions: list[_NLAction[ContextT, ActionT]] = []
-        self._client: 'OpenAI | None' = None
+        self._client: 'AsyncOpenAI | None' = None
         self._last_request_at: float | None = None
         self._lock = asyncio.Lock()
         self.logger = logger or getLogger("Bogobot.NL")
@@ -175,8 +175,7 @@ class NLCore(Generic[ContextT, ActionT]):
         async with self._lock:
             client = self._ensure_client()
             await self._wait_for_rate_limit()
-            content, calls = await asyncio.to_thread(
-                self._complete,
+            content, calls = await self._complete(
                 client,
                 text,
                 self._actions,
@@ -241,19 +240,19 @@ class NLCore(Generic[ContextT, ActionT]):
     def _ensure_client(self):
         if self._client is None:
             try:
-                from openai import OpenAI
+                from openai import AsyncOpenAI
             except ImportError as exc:
                 raise RuntimeError("The openai package is required when NL is enabled.") from exc
 
             api_key = os.environ.get(self.api_key_env)
             if not api_key:
                 raise RuntimeError(f"NL is enabled but {self.api_key_env} is not set.")
-            self._client = OpenAI(api_key=api_key, base_url=self.base_url)
+            self._client = AsyncOpenAI(api_key=api_key, base_url=self.base_url)
         return self._client
 
-    def _complete(
+    async def _complete(
         self,
-        client: 'OpenAI',
+        client: 'AsyncOpenAI',
         text: str,
         actions: list[_NLAction[ContextT, ActionT]],
         assistant_context: str | None,
@@ -276,7 +275,7 @@ class NLCore(Generic[ContextT, ActionT]):
         self.logger.debug(f"system prompt: {system_prompt!r}.")
         self.logger.debug(f"tools: {tools!r}.")
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
                 tools=tools,
