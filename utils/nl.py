@@ -12,7 +12,7 @@ import types
 from typing import Any, Callable, Generic, Literal, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
 if TYPE_CHECKING:
     from groq import Groq
-    from groq.types.chat import ChatCompletionToolParam
+    from groq.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCall
 
 import discord
 import plugins.nl as nl_plugin
@@ -238,12 +238,12 @@ class NLCore(Generic[ContextT, ActionT]):
             tools=tools,
             tool_choice="auto",
             temperature=0.2,
-            max_tokens=120,
+            max_tokens=512,
         )
         message = response.choices[0].message
         content = message.content or ""
         self.logger.debug(f"NL Groq raw response: {content!r}.")
-        raw_tool_calls = getattr(message, "tool_calls", None) or []
+        raw_tool_calls = message.tool_calls or []
         self.logger.debug(f"NL Groq raw tool calls: {raw_tool_calls!r}.")
         return content, self._parse_native_tool_calls(raw_tool_calls)
 
@@ -282,15 +282,20 @@ class NLCore(Generic[ContextT, ActionT]):
         choices = self._literal_choices(param.type)
         if choices is not None:
             schema: dict[str, Any] = {"type": "string", "enum": choices}
+        elif self._is_discord_user_type(param.type):
+            schema = {
+                "type": "string",
+                "description": "Discord user id.",
+            }
         else:
             schema = {"type": self._json_schema_type(param.type)}
-        if param.description is not None:
+        if param.description is not None and "description" not in schema:
             schema["description"] = self._compact_description(param.description)
         return schema
 
     def _json_schema_type(self, annotation: object) -> str:
         target = self._non_none_type(annotation)
-        if target is int or self._is_discord_user_type(target):
+        if target is int:
             return "integer"
         if target is float:
             return "number"
@@ -298,12 +303,12 @@ class NLCore(Generic[ContextT, ActionT]):
             return "boolean"
         return "string"
 
-    def _parse_native_tool_calls(self, raw_tool_calls: Any) -> list[_ToolCall]:
+    def _parse_native_tool_calls(self, raw_tool_calls: list['ChatCompletionMessageToolCall']) -> list[_ToolCall]:
         calls: list[_ToolCall] = []
         for raw_call in raw_tool_calls:
-            function = getattr(raw_call, "function", None)
-            name = getattr(function, "name", None)
-            raw_arguments = getattr(function, "arguments", "{}")
+            function = raw_call.function
+            name = function.name
+            raw_arguments = function.arguments
             if not isinstance(name, str):
                 continue
             try:
@@ -428,7 +433,7 @@ class NLCore(Generic[ContextT, ActionT]):
         if not isinstance(value, str):
             return None
         value = self._strip_discord_reference_annotations(value.strip())
-        match = re.fullmatch(r"<@!?([0-9]{15,20})>", value)
+        match = re.fullmatch(r"<@!?([0-9]{15,20})(?: .*)?>", value)
         if match is not None:
             return int(match[1])
         if re.fullmatch(r"[0-9]{15,20}", value):
