@@ -157,7 +157,7 @@ class BotCore(discord.Client):
         
         self.milestones: 'MilestoneTracker | None' = None
     
-    async def get_stream_uptime(self):
+    def get_stream_uptime(self):
         raw_seconds = round(time.time())
         seconds_since = int(raw_seconds) - 1776273017
         minutes = seconds_since // 60
