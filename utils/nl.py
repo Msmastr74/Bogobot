@@ -24,7 +24,7 @@ ActionT = TypeVar("ActionT")
 
 NLParamsTable: TypeAlias = dict[str, "NLParam"]
 _MAX_CALLS = 4
-_REQUEST_INTERVAL_SECONDS = 60.0
+DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 _ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +72,14 @@ class NLCore(Generic[ContextT, ActionT]):
         model_name: str = "llama-3.1-8b-instant",
         api_key_env: str = "OPENAI_API_KEY",
         base_url: str | None = None,
+        request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
         logger: Logger | None = None,
     ):
         self.enabled = enabled
         self.model_name = model_name
         self.api_key_env = api_key_env
         self.base_url = base_url
+        self.request_interval_seconds = max(0.0, float(request_interval_seconds))
         self._actions: list[_NLAction[ContextT, ActionT]] = []
         self._client: 'OpenAI | None' = None
         self._last_request_at: float | None = None
@@ -91,6 +93,7 @@ class NLCore(Generic[ContextT, ActionT]):
         model_name: str | None = None,
         api_key_env: str | None = None,
         base_url: str | None = None,
+        request_interval_seconds: float | None = None,
         logger: Logger | None = None,
         model: str | None = None,
     ) -> None:
@@ -107,6 +110,9 @@ class NLCore(Generic[ContextT, ActionT]):
         if base_url != self.base_url:
             self.base_url = base_url
             self._client = None
+
+        if request_interval_seconds is not None:
+            self.request_interval_seconds = max(0.0, float(request_interval_seconds))
 
         if logger is not None:
             self.logger = logger
@@ -225,7 +231,7 @@ class NLCore(Generic[ContextT, ActionT]):
     async def _wait_for_rate_limit(self) -> None:
         now = time.monotonic()
         if self._last_request_at is not None:
-            wait_seconds = _REQUEST_INTERVAL_SECONDS - (now - self._last_request_at)
+            wait_seconds = self.request_interval_seconds - (now - self._last_request_at)
             if wait_seconds > 0:
                 self.logger.debug(f"rate limit sleeping for {wait_seconds:.2f}s.")
                 await asyncio.sleep(wait_seconds)

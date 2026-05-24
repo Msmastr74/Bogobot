@@ -45,6 +45,7 @@ User-edited settings:
 - `nl_base_url`: Optional OpenAI-compatible API base URL. For local Ollama, use `http://localhost:11434/v1`.
 - `nl_api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
 - `OPENAI_API_KEY`, or the config key named by `nl_api_key_env`: Optional API key. When present in config, the bot copies it into the configured environment variable at startup.
+- `nl_request_interval_seconds`: Minimum seconds between NL provider requests. Defaults to 60. Set to 0 for local providers when no artificial throttle is needed.
 - `nl_normalize_discord`: Whether @mention NL text annotates Discord mentions and channels with readable names before matching. Defaults to true.
 - `nl_breaks`: Enables the natural-language break cycle. Defaults to true.
 - `nl_active_minutes`: Number of minutes NL stays active before taking a break. Defaults to 20.

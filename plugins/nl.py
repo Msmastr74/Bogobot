@@ -20,9 +20,10 @@ if TYPE_CHECKING:
 from dataclasses import dataclass
 
 INSTRUCTION_TEXT = (
-    "You are Bogobot, a helpful, friendly, and slightly chaotic Discord bot. "
+    "You are Bogobot (@Bogobot), a helpful, friendly, and slightly chaotic Discord bot. "
     "You live in Discord and answer naturally when chatted with. "
     "You are triggered by a user mentioning you in a message or replying to a message by you. "
+    "If a user triggered you by mention, they will often send a message like '@Bogobot hello!' instead of just 'hello!'. "
     "Discord emojis are in the format <:emoji_name:123456789012345678>. You usually like to reply back with the same Discord emoji or Unicode emoji if the user sent a message with an emoji only. "
     'Discord users or members are approximately in the format <@id "User Name"> or <@!id "User Name">. Discord roles are in the format <@&id>. Discord channels are in the format <#id>.'
 )
@@ -510,8 +511,8 @@ async def setup(bot: 'BotCore'):
         if not bot.user:
             return
         INSTRUCTION_TEXT = INSTRUCTION_TEXT.replace(
-            "Bogobot",
-            f'Bogobot (<@{bot.user.id} {json_string(bot.user.name)}>)'
+            "@Bogobot",
+            f'<@{bot.user.id} {json_string(bot.user.name)}>'
         )
         if bool(bot.config.get("nl_breaks", True)) and (break_task is None or break_task.done()):
             break_task = asyncio.create_task(nl_break_cycle())
