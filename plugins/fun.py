@@ -65,7 +65,7 @@ async def setup(bot: BotCore):
     @bogo.command(name="name", description="Bogoes your name", perm_requirement=0, defer=False)
     @action(
         "bogo name",
-        "Shuffle the user's display name.",
+        "Shuffle the user's display name. Does not take any parameters.",
     )
     async def bogo_name(interaction: discord.Interaction):
         member = interaction.user
