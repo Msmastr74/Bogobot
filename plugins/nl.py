@@ -350,10 +350,11 @@ async def setup(bot: 'BotCore'):
         )
         if text is None:
             return
-
-        matches = await nl.match_infos(text, message=message)
-        if not matches:
-            return
+        
+        async with message.channel.typing():
+            matches = await nl.match_infos(text, message=message)
+            if not matches:
+                return
 
         for index, match in enumerate(matches):
             followup_only = index > 0
