@@ -109,6 +109,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts, stops, or resends a persistent top leaderboard message.
+ * /manage stats_monitor: Starts, stops, or resends a persistent stream-stats message.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /milestone_info: Shows recent milestone history and frame images.
  * /manage announce: Sends a simple bot-authored announcement.
