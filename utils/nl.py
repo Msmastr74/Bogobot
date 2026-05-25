@@ -311,7 +311,7 @@ class NLCore(Generic[ContextT, ActionT]):
         )
         return (
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
-            "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
+            "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
             "The first user message is metadata, not a real user message. It will contain only <|time|>UTC_TIME\n"
