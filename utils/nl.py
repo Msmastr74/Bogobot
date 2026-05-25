@@ -263,6 +263,7 @@ class NLCore(Generic[ContextT, ActionT]):
         tools = [self._tool_schema(action) for action in actions]
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"<|time|>{datetime.now(timezone.utc).isoformat()}"}
         ]
         if has_assistant_context:
             messages.append({
@@ -313,8 +314,8 @@ class NLCore(Generic[ContextT, ActionT]):
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
+            "The first user message is metadata, not a real user message. It will contain only <|time|>UTC_TIME\n"
             f"{assistant_context_instruction}"
-            f"Current date and time in UTC: {datetime.now(timezone.utc).isoformat()}\n"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
