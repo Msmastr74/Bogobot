@@ -309,11 +309,10 @@ class NLCore(Generic[ContextT, ActionT]):
             ""
         )
         return (
-            "Cutting Knowledge Date: December 2023\n"
-            f"UTC Date: {datetime.now(timezone.utc).isoformat()}\n"
+            f"Current date and time in UTC: {datetime.now(timezone.utc).isoformat()}\n"
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
-            "Only call commands from the available tools; never invent command names. "
+            "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
             f"{assistant_context_instruction}"
         )
