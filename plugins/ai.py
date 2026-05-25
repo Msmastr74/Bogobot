@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import re
 
 import discord
 from discord import File
@@ -32,11 +31,7 @@ class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
 
 BotAction: TypeAlias = Callable[..., Coro[None]]
-ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
-USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
-ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
-CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
-MAX_ASSISTANT_CONTEXT_CHARS = 3000
+MAX_ASSISTANT_CONTEXT_CHARS = 4000
 _ai_break_until: datetime.datetime | None = None
 
 @dataclass(frozen=True, slots=True)
@@ -260,29 +255,15 @@ class MessageInteraction(discord.Interaction[discord.Client]):
     def is_expired(self) -> bool:
         return False
 
-def mentioned_message_text(
-    bot: 'BotCore',
-    message: discord.Message,
-    *,
-    normalize_discord: bool = True,
-) -> str | None:
+def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | None:
     if bot.user is None or bot.user not in message.mentions:
         return None
 
-    text = message.content
-    if normalize_discord:
-        text = annotate_discord_references(message, text)
-
-    text = " ".join(text.split())
+    text = " ".join(message.content.split())
     return text or None
 
 
-def replied_assistant_message(
-    bot: 'BotCore',
-    message: discord.Message,
-    *,
-    normalize_discord: bool = True,
-) -> tuple[discord.Message, str] | None:
+def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple[discord.Message, str] | None:
     if bot.user is None or message.reference is None:
         return None
 
@@ -292,75 +273,14 @@ def replied_assistant_message(
     if resolved.author.id != bot.user.id:
         return None
 
-    text = resolved.content
-    if normalize_discord:
-        text = annotate_discord_references(resolved, text)
-
-    text = " ".join(text.split())
+    text = " ".join(resolved.content.split())
     if not text:
         return None
     return resolved, text[:MAX_ASSISTANT_CONTEXT_CHARS]
 
-
-def annotate_discord_references(message: discord.Message, text: str) -> str:
-    user_names = {
-        str(user.id): _discord_reference_name(user)
-        for user in message.mentions
-    }
-    role_names = {
-        str(role.id): role.name
-        for role in message.role_mentions
-    }
-    channel_names = {
-        str(channel.id): channel.name
-        for channel in message.channel_mentions
-    }
-
-    def annotate_user(match: re.Match[str]) -> str:
-        prefix, snowflake = match.groups()
-        name = user_names.get(snowflake)
-        if name is None:
-            return match[0]
-        return f"<{prefix}{snowflake} {json_string(name)}>"
-
-    def annotate_role(match: re.Match[str]) -> str:
-        snowflake = match[1]
-        name = role_names.get(snowflake)
-        if name is None:
-            return match[0]
-        return f"<@&{snowflake} {json_string(name)}>"
-
-    def annotate_channel(match: re.Match[str]) -> str:
-        snowflake = match[1]
-        name = channel_names.get(snowflake)
-        if name is None:
-            return match[0]
-        return f"<#{snowflake} {json_string(name)}>"
-
-    text = USER_MENTION_RE.sub(annotate_user, text)
-    text = ROLE_MENTION_RE.sub(annotate_role, text)
-    return CHANNEL_MENTION_RE.sub(annotate_channel, text)
-
-
-def strip_discord_reference_annotations(text: str) -> str:
-    return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
-
-
 def json_string(text: str) -> str:
     import json
     return json.dumps(text, ensure_ascii=False)
-
-
-def _discord_reference_name(entity: Any) -> str:
-    if isinstance(entity, discord.Member):
-        return entity.display_name
-    if isinstance(entity, discord.User):
-        return entity.global_name or entity.name
-    if isinstance(entity, discord.Role):
-        return entity.name
-    if isinstance(entity, discord.abc.GuildChannel):
-        return entity.name
-    return str(entity)
 
 
 def ai_on_break() -> bool:
@@ -428,21 +348,12 @@ async def setup(bot: 'BotCore'):
         if not ai_enabled(bot):
             return
 
-        normalize_discord = bool(ai_config(bot).get("normalize_discord", True))
-        text = mentioned_message_text(
-            bot,
-            message,
-            normalize_discord=normalize_discord,
-        )
+        text = mentioned_message_text(bot, message)
         if text is None:
             return
         if ai_on_break():
             return
-        assistant_context_message = replied_assistant_message(
-            bot,
-            message,
-            normalize_discord=normalize_discord,
-        )
+        assistant_context_message = replied_assistant_message(bot, message)
         assistant_context = assistant_context_message[1] if assistant_context_message is not None else None
         assistant_context_source = assistant_context_message[0] if assistant_context_message is not None else None
         
@@ -460,7 +371,9 @@ async def setup(bot: 'BotCore'):
         for index, match in enumerate(matches):
             followup_only = index > 0
             if match.reply is not None:
-                reply = strip_discord_reference_annotations(match.reply)
+                reply = ai_core.visual_reply(match.reply)
+                if reply is None:
+                    continue
                 if followup_only:
                     sent_message = await message.channel.send(
                         reply,
@@ -531,8 +444,11 @@ async def setup(bot: 'BotCore'):
         ai_core.record_message("user", prompt, interaction)
         for match in matches:
             if match.reply is not None:
+                reply = ai_core.visual_reply(match.reply)
+                if reply is None:
+                    continue
                 sent_message = await bot.discord.send(
-                    contents=strip_discord_reference_annotations(match.reply),
+                    contents=reply,
                     response=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )

@@ -170,6 +170,7 @@ class BotCore(discord.Client):
                 "request_interval_seconds",
                 ai.request_interval_seconds,
             )),
+            normalize_discord=bool(ai_config.get("normalize_discord", ai.normalize_discord)),
             history_enabled=bool(ai_history_config.get("enabled", ai.history_enabled)),
             history_path=str(ai_history_config.get("path", ai.history_path)),
             history_char_budget=int(ai_history_config.get("char_budget", ai.history_char_budget)),

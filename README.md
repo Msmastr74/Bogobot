@@ -51,7 +51,7 @@ Go into `config.json` and provide the main credentials:
    * `api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
    * `api_key`: Optional API key copied into `api_key_env` at startup.
    * `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to `60`; use `0` for local providers.
-   * `normalize_discord`: Whether @mention AI text resolves Discord mentions and emojis before matching. Defaults to `true`.
+   * `normalize_discord`: Whether AI message formatting annotates Discord mentions and channels with readable names. Defaults to `true`.
    * `history.enabled`: Enables per-channel short-term AI history. Defaults to `true`.
    * `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
    * `history.char_budget`: Per-channel character budget for AI history. Defaults to `10000`; old history is deleted by oldest stored message.

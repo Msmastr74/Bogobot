@@ -47,7 +47,7 @@ User-edited settings:
   - `api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
   - `api_key`: Optional API key. When present, the bot copies it into `api_key_env` at startup.
   - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to 60. Set to 0 for local providers when no artificial throttle is needed.
-  - `normalize_discord`: Whether @mention AI text annotates Discord mentions and channels with readable names before matching. Defaults to true.
+  - `normalize_discord`: Whether AI message formatting annotates Discord mentions and channels with readable names. Defaults to true.
   - `history.enabled`: Enables per-channel short-term AI history. Defaults to true.
   - `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
   - `history.char_budget`: Per-channel character budget for AI history. Defaults to 10000. Old history is deleted by oldest stored message.
@@ -244,7 +244,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
 
-Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. The shared `utils.ai.AICore` sends OpenAI-compatible tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.ai` module exposes `ai = AICore[BotActionParameters, BotAction]()` and `action = ai.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `AIParam`, for example `params={"user": AIParam("Discord user id to target.", type=discord.User | discord.Member | None, required=False)}` or `params={"mode": AIParam(type=Literal["numerical", "lexicographic"])}`. `plugins/ai.py` attaches `bot.on_message` as a Discord event, annotates Discord references according to `ai.normalize_discord`, passes replied bot messages as assistant context, matches the text, checks permissions, and runs the selected action.
+Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. The shared `utils.ai.AICore` sends OpenAI-compatible tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.ai` module exposes `ai = AICore[BotActionParameters, BotAction]()` and `action = ai.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `AIParam`, for example `params={"user": AIParam("Discord user id to target.", type=discord.User | discord.Member | None, required=False)}` or `params={"mode": AIParam(type=Literal["numerical", "lexicographic"])}`. `plugins/ai.py` attaches `bot.on_message` as a Discord event, passes replied bot messages as assistant context, matches the text, checks permissions, and runs the selected action. `AICore` formats Discord message metadata and annotates Discord references according to `ai.normalize_discord`.
 
 Current plugin responsibilities:
 

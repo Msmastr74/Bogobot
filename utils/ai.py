@@ -29,7 +29,11 @@ _MAX_CALLS = 4
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 DEFAULT_HISTORY_PATH = "ai_history.sqlite3"
 DEFAULT_HISTORY_CHAR_BUDGET = 10_000
-_ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
+ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
+USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
+ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
+CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
+_THOUGHT_BLOCK_RE = re.compile(r"<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
 
 @dataclass(frozen=True, slots=True)
 class AIParam:
@@ -83,6 +87,7 @@ class AICore(Generic[ContextT, ActionT]):
         api_key_env: str = "OPENAI_API_KEY",
         base_url: str | None = None,
         request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
+        normalize_discord: bool = True,
         history_enabled: bool = True,
         history_path: str = DEFAULT_HISTORY_PATH,
         history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
@@ -93,6 +98,7 @@ class AICore(Generic[ContextT, ActionT]):
         self.api_key_env = api_key_env
         self.base_url = base_url
         self.request_interval_seconds = max(0.0, float(request_interval_seconds))
+        self.normalize_discord = normalize_discord
         self.history_enabled = history_enabled
         self.history_path = history_path
         self.history_char_budget = max(0, int(history_char_budget))
@@ -110,6 +116,7 @@ class AICore(Generic[ContextT, ActionT]):
         api_key_env: str | None = None,
         base_url: str | None = None,
         request_interval_seconds: float | None = None,
+        normalize_discord: bool | None = None,
         history_enabled: bool | None = None,
         history_path: str | None = None,
         history_char_budget: int | None = None,
@@ -132,6 +139,9 @@ class AICore(Generic[ContextT, ActionT]):
 
         if request_interval_seconds is not None:
             self.request_interval_seconds = max(0.0, float(request_interval_seconds))
+
+        if normalize_discord is not None:
+            self.normalize_discord = normalize_discord
 
         if history_enabled is not None:
             self.history_enabled = history_enabled
@@ -173,6 +183,7 @@ class AICore(Generic[ContextT, ActionT]):
         source: discord.Message | discord.Interaction | None,
     ) -> str:
         if isinstance(source, discord.Message):
+            content = self.annotate_discord_references(source, content)
             return self._format_message_content(
                 content=content,
                 user=source.author,
@@ -181,6 +192,7 @@ class AICore(Generic[ContextT, ActionT]):
                 created_at=source.created_at,
             )
         if isinstance(source, discord.Interaction):
+            content = self.annotate_discord_references(source, content)
             return self._format_message_content(
                 content=content,
                 user=source.user,
@@ -189,6 +201,70 @@ class AICore(Generic[ContextT, ActionT]):
                 created_at=source.created_at,
             )
         return content.strip()
+
+    def annotate_discord_references(
+        self,
+        source: discord.Message | discord.Interaction | None,
+        text: str,
+    ) -> str:
+        if not self.normalize_discord or source is None:
+            return text
+
+        if isinstance(source, discord.Message):
+            user_names = {
+                str(user.id): self._discord_reference_name(user)
+                for user in source.mentions
+            }
+            role_names = {
+                str(role.id): role.name
+                for role in source.role_mentions
+            }
+            channel_names = {
+                str(channel.id): channel.name
+                for channel in source.channel_mentions
+            }
+        else:
+            guild = source.guild
+            user_names = {}
+            role_names = {}
+            channel_names = {}
+            for _, snowflake in USER_MENTION_RE.findall(text):
+                user = guild.get_member(int(snowflake)) if guild is not None else None
+                if user is not None:
+                    user_names[snowflake] = self._discord_reference_name(user)
+            for snowflake in ROLE_MENTION_RE.findall(text):
+                role = guild.get_role(int(snowflake)) if guild is not None else None
+                if role is not None:
+                    role_names[snowflake] = role.name
+            for snowflake in CHANNEL_MENTION_RE.findall(text):
+                channel = guild.get_channel(int(snowflake)) if guild is not None else None
+                if channel is not None:
+                    channel_names[snowflake] = channel.name
+
+        def annotate_user(match: re.Match[str]) -> str:
+            prefix, snowflake = match.groups()
+            name = user_names.get(snowflake)
+            if name is None:
+                return match[0]
+            return f"<{prefix}{snowflake} {json.dumps(name, ensure_ascii=False)}>"
+
+        def annotate_role(match: re.Match[str]) -> str:
+            snowflake = match[1]
+            name = role_names.get(snowflake)
+            if name is None:
+                return match[0]
+            return f"<@&{snowflake} {json.dumps(name, ensure_ascii=False)}>"
+
+        def annotate_channel(match: re.Match[str]) -> str:
+            snowflake = match[1]
+            name = channel_names.get(snowflake)
+            if name is None:
+                return match[0]
+            return f"<#{snowflake} {json.dumps(name, ensure_ascii=False)}>"
+
+        text = USER_MENTION_RE.sub(annotate_user, text)
+        text = ROLE_MENTION_RE.sub(annotate_role, text)
+        return CHANNEL_MENTION_RE.sub(annotate_channel, text)
 
     def format_block(
         self,
@@ -661,9 +737,22 @@ class AICore(Generic[ContextT, ActionT]):
     def _coerce_reply(self, value: Any) -> str | None:
         if not isinstance(value, str):
             return None
-        value = self._strip_discord_reference_annotations(value)
+        if self._should_strip_first_thought_block():
+            value = _THOUGHT_BLOCK_RE.sub("", value, count=1)
         value = value.strip()
         return value if self._discord_string_valid(value) else None
+
+    def visual_reply(self, value: str) -> str | None:
+        value = self.strip_discord_reference_annotations(value)
+        value = value.strip()
+        return value if self._discord_string_valid(value) else None
+
+    def _should_strip_first_thought_block(self) -> bool:
+        model = self.model_name.casefold()
+        if "gemini" not in model and "gemma" not in model:
+            return False
+        base_url = (self.base_url or "").casefold()
+        return "google" in base_url or "generativelanguage.googleapis.com" in base_url
 
     def _discord_string_valid(self, value: str) -> bool:
         return bool(value) and not value[0].isspace() and not value[-1].isspace()
@@ -744,7 +833,7 @@ class AICore(Generic[ContextT, ActionT]):
                 return value.casefold() == "true"
             return _MISSING
         if target in (str, object):
-            string = self._strip_discord_reference_annotations(str(value))
+            string = self.strip_discord_reference_annotations(str(value))
             string = string.strip()
             return string if self._discord_string_valid(string) else _MISSING
         return value
@@ -790,7 +879,7 @@ class AICore(Generic[ContextT, ActionT]):
             return value
         if not isinstance(value, str):
             return None
-        value = self._strip_discord_reference_annotations(value.strip())
+        value = self.strip_discord_reference_annotations(value.strip())
         match = re.fullmatch(r"<@!?([0-9]{15,20})(?: .*)?>", value)
         if match is not None:
             return int(match[1])
@@ -798,8 +887,15 @@ class AICore(Generic[ContextT, ActionT]):
             return int(value)
         return None
 
-    def _strip_discord_reference_annotations(self, text: str) -> str:
-        return _ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
+    def strip_discord_reference_annotations(self, text: str) -> str:
+        return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
+
+    def _discord_reference_name(self, entity: discord.User | discord.Member | discord.Role | discord.abc.GuildChannel) -> str:
+        if isinstance(entity, discord.Member):
+            return entity.display_name
+        if isinstance(entity, discord.User):
+            return entity.global_name or entity.name
+        return entity.name
 
     def _compact_description(self, text: str) -> str:
         text = " ".join(text.split())
