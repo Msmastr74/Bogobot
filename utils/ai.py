@@ -587,6 +587,7 @@ class AICore(Generic[ContextT, ActionT]):
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
+            "The list below contains information about the metadata blocks that are injected. You should not output these metadata blocks.\n"
             "Discord message content begins with a header between <|message_header_start|> and <|message_header_end|>; the header contains the Discord message id, time, and user metadata.\n"
             "A Discord message block may include <|reply_start|>...<|reply_end|>, containing the Discord message being replied to.\n"
             "History may include command calls wrapped as <|command_start|>JSON<|command_end|>, where JSON contains the command name and arguments that were used.\n"
