@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from logging import Logger, WARNING, getLogger
 import os
@@ -310,7 +310,7 @@ class NLCore(Generic[ContextT, ActionT]):
         )
         return (
             "Cutting Knowledge Date: December 2023\n"
-            f"Today's Date: {datetime.now().strftime('%d %B %Y')}\n"
+            f"UTC Date: {datetime.now(timezone.utc).isoformat()}\n"
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. You do not have to use commands. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names. "
