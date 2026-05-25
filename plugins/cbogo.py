@@ -8,7 +8,7 @@ import time
 import discord
 
 from bogobot_core import BotCore
-from utils.nl import NLParam, action
+from utils.ai import AIParam, action
 
 
 CBOGO_N = 10
@@ -609,8 +609,8 @@ async def setup(bot: BotCore):
         "cbogo",
         "Run cbogo.",
         params={
-            "action": NLParam(type=Literal["run", "info", "leaderboard"], required=False, default="run"),
-            "target": NLParam("Force a user to be shown on the leaderboard.", type=discord.User | discord.Member | None, required=False),
+            "action": AIParam(type=Literal["run", "info", "leaderboard"], required=False, default="run"),
+            "target": AIParam("Force a user to be shown on the leaderboard.", type=discord.User | discord.Member | None, required=False),
         },
     )
     async def cbogo(

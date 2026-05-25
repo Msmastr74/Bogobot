@@ -17,7 +17,7 @@ from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
 from utils.callbacks import CallbackRegistry, AsyncCallback, MaybeAwaitableT
-from utils.nl import nl
+from utils.ai import ai
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -156,25 +156,28 @@ class BotCore(discord.Client):
         self.event(self.on_member_join)
         self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
-        nl.configure(
-            enabled=bool(self.config.get("nl", True)),
-            model_name=str(self.config.get("nl_model", nl.model_name)),
-            api_key_env=str(self.config.get("nl_api_key_env", nl.api_key_env)),
-            base_url=self.config.get("nl_base_url"),
-            request_interval_seconds=float(self.config.get(
-                "nl_request_interval_seconds",
-                nl.request_interval_seconds,
+        ai_config = self.config.get("ai", {})
+        if not isinstance(ai_config, dict):
+            raise TypeError("Config key 'ai' must be an object.")
+        ai_history_config_raw = ai_config.get("history", {})
+        ai_history_config = ai_history_config_raw if isinstance(ai_history_config_raw, dict) else {}
+        ai.configure(
+            enabled=bool(ai_config.get("enabled", True)),
+            model_name=str(ai_config.get("model", ai.model_name)),
+            api_key_env=str(ai_config.get("api_key_env", ai.api_key_env)),
+            base_url=ai_config.get("base_url"),
+            request_interval_seconds=float(ai_config.get(
+                "request_interval_seconds",
+                ai.request_interval_seconds,
             )),
-            history_enabled=bool(self.config.get("nl_history", nl.history_enabled)),
-            history_path=str(self.config.get("nl_history_path", nl.history_path)),
-            history_char_budget=int(self.config.get(
-                "nl_history_char_budget",
-                nl.history_char_budget,
-            )),
-            logger=self.logger.getChild("NL"),
+            history_enabled=bool(ai_history_config.get("enabled", ai.history_enabled)),
+            history_path=str(ai_history_config.get("path", ai.history_path)),
+            history_char_budget=int(ai_history_config.get("char_budget", ai.history_char_budget)),
+            logger=self.logger.getChild("AI"),
         )
-        if nl.enabled and self.config.get(nl.api_key_env):
-            os.environ[nl.api_key_env] = self.config[nl.api_key_env]
+        api_key = ai_config.get("api_key")
+        if ai.enabled and api_key:
+            os.environ[ai.api_key_env] = str(api_key)
         
         self.milestones: 'MilestoneTracker | None' = None
     

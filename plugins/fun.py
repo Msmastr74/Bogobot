@@ -6,8 +6,8 @@ import time
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.nl import action
-from plugins import nl as nl_plugin
+from utils.ai import action
+from plugins import ai as ai_plugin
 
 class BogonameView(discord.ui.LayoutView):
     def __init__(self, original_name: str, new_name: str) -> None:
@@ -29,7 +29,7 @@ async def setup(bot: BotCore):
     async def update_status():
         if not bot.user:
             return
-        if nl_plugin.nl_on_break():
+        if ai_plugin.ai_on_break():
             return
         text = bot.user.name
         tlist = list(text)

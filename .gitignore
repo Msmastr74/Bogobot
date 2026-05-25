@@ -7,8 +7,8 @@ Modelfile
 .DS_Store
 channels.json
 telemetry.jsonl
-nl_history.sqlite3
-nl_history.sqlite3-*
+ai_history.sqlite3
+ai_history.sqlite3-*
 accounts.json
 tessdata/
 monitor.bga

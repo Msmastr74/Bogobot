@@ -6,7 +6,7 @@ import discord
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups, tasks
-from utils.nl import action
+from utils.ai import action
 
 from bogobot_core import BotCore
 

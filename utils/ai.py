@@ -17,22 +17,22 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCallUnion
 
 import discord
-import plugins.nl as nl_plugin
+import plugins.ai as ai_plugin
 
 getLogger("httpx").setLevel(WARNING)
 
 ContextT = TypeVar("ContextT")
 ActionT = TypeVar("ActionT")
 
-NLParamsTable: TypeAlias = dict[str, "NLParam"]
+AIParamsTable: TypeAlias = dict[str, "AIParam"]
 _MAX_CALLS = 4
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
-DEFAULT_HISTORY_PATH = "nl_history.sqlite3"
+DEFAULT_HISTORY_PATH = "ai_history.sqlite3"
 DEFAULT_HISTORY_CHAR_BUDGET = 10_000
 _ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
 
 @dataclass(frozen=True, slots=True)
-class NLParam:
+class AIParam:
     description: str | None = None
     type: object = str
     required: bool = True
@@ -40,7 +40,7 @@ class NLParam:
 
 
 @dataclass(frozen=True, slots=True)
-class NLMatch(Generic[ContextT, ActionT]):
+class AIMatch(Generic[ContextT, ActionT]):
     name: str
     command_name: str
     description: str
@@ -52,12 +52,12 @@ class NLMatch(Generic[ContextT, ActionT]):
 
 
 @dataclass(frozen=True, slots=True)
-class _NLAction(Generic[ContextT, ActionT]):
+class _AIAction(Generic[ContextT, ActionT]):
     name: str
     command_name: str
     tool_name: str
     description: str
-    params: dict[str, NLParam]
+    params: dict[str, AIParam]
     context: ContextT
     action: ActionT
 
@@ -74,7 +74,7 @@ class _HistoryMessage:
     content: str
 
 
-class NLCore(Generic[ContextT, ActionT]):
+class AICore(Generic[ContextT, ActionT]):
     def __init__(
         self,
         *,
@@ -96,11 +96,11 @@ class NLCore(Generic[ContextT, ActionT]):
         self.history_enabled = history_enabled
         self.history_path = history_path
         self.history_char_budget = max(0, int(history_char_budget))
-        self._actions: list[_NLAction[ContextT, ActionT]] = []
+        self._actions: list[_AIAction[ContextT, ActionT]] = []
         self._client: 'AsyncOpenAI | None' = None
         self._last_request_at: float | None = None
         self._lock = asyncio.Lock()
-        self.logger = logger or getLogger("Bogobot.NL")
+        self.logger = logger or getLogger("Bogobot.AI")
 
     def configure(
         self,
@@ -150,12 +150,12 @@ class NLCore(Generic[ContextT, ActionT]):
         name: str,
         description: str,
         command_name: str | None = None,
-        params: NLParamsTable | None = None,
+        params: AIParamsTable | None = None,
         **kwargs: Any,
     ) -> Callable[[ActionT], ActionT]:
         def decorator(action: ActionT) -> ActionT:
             normalized_params = self._normalize_params(params or {})
-            self._actions.append(_NLAction(
+            self._actions.append(_AIAction(
                 name=name,
                 command_name=command_name or name,
                 tool_name=self._unique_tool_name(name),
@@ -271,7 +271,7 @@ class NLCore(Generic[ContextT, ActionT]):
         interaction: discord.Interaction | None = None,
         assistant_context: str | None = None,
         assistant_context_source: discord.Message | discord.Interaction | None = None,
-    ) -> NLMatch[ContextT, ActionT] | None:
+    ) -> AIMatch[ContextT, ActionT] | None:
         matches = await self.match_infos(
             text,
             message=message,
@@ -289,7 +289,7 @@ class NLCore(Generic[ContextT, ActionT]):
         interaction: discord.Interaction | None = None,
         assistant_context: str | None = None,
         assistant_context_source: discord.Message | discord.Interaction | None = None,
-    ) -> list[NLMatch[ContextT, ActionT]]:
+    ) -> list[AIMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
 
@@ -324,15 +324,15 @@ class NLCore(Generic[ContextT, ActionT]):
                 history,
             )
 
-        matches: list[NLMatch[ContextT, ActionT]] = []
+        matches: list[AIMatch[ContextT, ActionT]] = []
         if not calls:
             reply = self._coerce_reply(content)
             if reply is None:
                 return []
-            return [NLMatch(
+            return [AIMatch(
                 name="conversation",
                 command_name="conversation",
-                description="Conversational NL response",
+                description="Conversational AI response",
                 context=cast(ContextT, {}),
                 action=None,
                 score=1.0,
@@ -357,7 +357,7 @@ class NLCore(Generic[ContextT, ActionT]):
                 continue
 
             self.logger.debug(f"match succeeded for {text} with action {action.name}.")
-            matches.append(NLMatch(
+            matches.append(AIMatch(
                 name=action.name,
                 command_name=action.command_name,
                 description=action.description,
@@ -390,14 +390,14 @@ class NLCore(Generic[ContextT, ActionT]):
             with connection:
                 self._ensure_history_schema(connection)
                 cursor = connection.execute(
-                    "INSERT INTO nl_history_blocks(channel_id, created_at, char_count) VALUES (?, ?, ?)",
+                    "INSERT INTO ai_history_blocks(channel_id, created_at, char_count) VALUES (?, ?, ?)",
                     (channel_id, datetime.now(timezone.utc).isoformat(), char_count),
                 )
                 if cursor.lastrowid is None:
                     return
                 block_id = cursor.lastrowid
                 connection.executemany(
-                    "INSERT INTO nl_history_messages(block_id, position, role, content) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO ai_history_messages(block_id, position, role, content) VALUES (?, ?, ?, ?)",
                     (
                         (block_id, 0, "user", user_content),
                         (block_id, 1, "assistant", assistant_content),
@@ -414,8 +414,8 @@ class NLCore(Generic[ContextT, ActionT]):
             rows = connection.execute(
                 """
                 SELECT messages.role, messages.content
-                FROM nl_history_messages AS messages
-                JOIN nl_history_blocks AS blocks ON blocks.id = messages.block_id
+                FROM ai_history_messages AS messages
+                JOIN ai_history_blocks AS blocks ON blocks.id = messages.block_id
                 WHERE blocks.channel_id = ?
                 ORDER BY blocks.id, messages.position
                 """,
@@ -431,7 +431,7 @@ class NLCore(Generic[ContextT, ActionT]):
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute("""
-            CREATE TABLE IF NOT EXISTS nl_history_blocks (
+            CREATE TABLE IF NOT EXISTS ai_history_blocks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
@@ -439,26 +439,26 @@ class NLCore(Generic[ContextT, ActionT]):
             )
         """)
         connection.execute("""
-            CREATE TABLE IF NOT EXISTS nl_history_messages (
+            CREATE TABLE IF NOT EXISTS ai_history_messages (
                 block_id INTEGER NOT NULL,
                 position INTEGER NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
                 PRIMARY KEY(block_id, position),
-                FOREIGN KEY(block_id) REFERENCES nl_history_blocks(id) ON DELETE CASCADE
+                FOREIGN KEY(block_id) REFERENCES ai_history_blocks(id) ON DELETE CASCADE
             )
         """)
         connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_nl_history_blocks_channel_id_id
-            ON nl_history_blocks(channel_id, id)
+            CREATE INDEX IF NOT EXISTS idx_ai_history_blocks_channel_id_id
+            ON ai_history_blocks(channel_id, id)
         """)
 
     def _evict_history(self, connection: sqlite3.Connection, channel_id: int) -> None:
         total = int(connection.execute(
             """
             SELECT COALESCE(SUM(LENGTH(messages.content)), 0)
-            FROM nl_history_messages AS messages
-            JOIN nl_history_blocks AS blocks ON blocks.id = messages.block_id
+            FROM ai_history_messages AS messages
+            JOIN ai_history_blocks AS blocks ON blocks.id = messages.block_id
             WHERE blocks.channel_id = ?
             """,
             (channel_id,),
@@ -467,8 +467,8 @@ class NLCore(Generic[ContextT, ActionT]):
             row = connection.execute(
                 """
                 SELECT messages.block_id, messages.position, LENGTH(messages.content)
-                FROM nl_history_messages AS messages
-                JOIN nl_history_blocks AS blocks ON blocks.id = messages.block_id
+                FROM ai_history_messages AS messages
+                JOIN ai_history_blocks AS blocks ON blocks.id = messages.block_id
                 WHERE blocks.channel_id = ?
                 ORDER BY blocks.id, messages.position
                 LIMIT 1
@@ -479,15 +479,15 @@ class NLCore(Generic[ContextT, ActionT]):
                 return
             block_id, position, char_count = int(row[0]), int(row[1]), int(row[2])
             connection.execute(
-                "DELETE FROM nl_history_messages WHERE block_id = ? AND position = ?",
+                "DELETE FROM ai_history_messages WHERE block_id = ? AND position = ?",
                 (block_id, position),
             )
             connection.execute(
                 """
-                DELETE FROM nl_history_blocks
+                DELETE FROM ai_history_blocks
                 WHERE id = ?
                 AND NOT EXISTS (
-                    SELECT 1 FROM nl_history_messages WHERE block_id = ?
+                    SELECT 1 FROM ai_history_messages WHERE block_id = ?
                 )
                 """,
                 (block_id, block_id),
@@ -522,11 +522,11 @@ class NLCore(Generic[ContextT, ActionT]):
             try:
                 from openai import AsyncOpenAI
             except ImportError as exc:
-                raise RuntimeError("The openai package is required when NL is enabled.") from exc
+                raise RuntimeError("The openai package is required when AI is enabled.") from exc
 
             api_key = os.environ.get(self.api_key_env)
             if not api_key:
-                raise RuntimeError(f"NL is enabled but {self.api_key_env} is not set.")
+                raise RuntimeError(f"AI is enabled but {self.api_key_env} is not set.")
             self._client = AsyncOpenAI(api_key=api_key, base_url=self.base_url)
         return self._client
 
@@ -534,7 +534,7 @@ class NLCore(Generic[ContextT, ActionT]):
         self,
         client: 'AsyncOpenAI',
         text: str,
-        actions: list[_NLAction[ContextT, ActionT]],
+        actions: list[_AIAction[ContextT, ActionT]],
         assistant_context: str | None,
         history: list[_HistoryMessage],
     ) -> tuple[str, list[_ToolCall]]:
@@ -580,10 +580,10 @@ class NLCore(Generic[ContextT, ActionT]):
 
     def _system_prompt(
         self,
-        actions: list[_NLAction[ContextT, ActionT]],
+        actions: list[_AIAction[ContextT, ActionT]],
     ) -> str:
         return (
-            f"{nl_plugin.INSTRUCTION_TEXT}\n"
+            f"{ai_plugin.INSTRUCTION_TEXT}\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
@@ -607,7 +607,7 @@ class NLCore(Generic[ContextT, ActionT]):
             return "I tried to use a command incorrectly, but OpenAI did not provide details."
         return None
 
-    def _tool_schema(self, action: _NLAction[ContextT, ActionT]) -> 'ChatCompletionToolParam':
+    def _tool_schema(self, action: _AIAction[ContextT, ActionT]) -> 'ChatCompletionToolParam':
         properties: 'dict[str, Any]' = {}
         required: list[str] = []
         for name, param in action.params.items():
@@ -629,7 +629,7 @@ class NLCore(Generic[ContextT, ActionT]):
             },
         }
 
-    def _param_schema(self, param: NLParam) -> dict[str, Any]:
+    def _param_schema(self, param: AIParam) -> dict[str, Any]:
         choices = self._literal_choices(param.type)
         if choices is not None:
             schema: dict[str, Any] = {"type": "string", "enum": choices}
@@ -695,7 +695,7 @@ class NLCore(Generic[ContextT, ActionT]):
 
     def _coerce_arguments(
         self,
-        action: _NLAction[ContextT, ActionT],
+        action: _AIAction[ContextT, ActionT],
         raw_args: dict[str, Any],
         *,
         message: discord.Message | None,
@@ -862,14 +862,14 @@ class NLCore(Generic[ContextT, ActionT]):
 
     def _normalize_params(
         self,
-        params: NLParamsTable,
-    ) -> dict[str, NLParam]:
-        normalized: dict[str, NLParam] = {}
+        params: AIParamsTable,
+    ) -> dict[str, AIParam]:
+        normalized: dict[str, AIParam] = {}
         for name, param in params.items():
-            if not isinstance(param, NLParam):
-                raise TypeError(f"NL parameter {name} must be an NLParam, got {type(param).__name__}")
+            if not isinstance(param, AIParam):
+                raise TypeError(f"AI parameter {name} must be an AIParam, got {type(param).__name__}")
             if not self._supported_param_type(param.type):
-                raise TypeError(f"Unsupported NL parameter type for {name}: {param.type!r}")
+                raise TypeError(f"Unsupported AI parameter type for {name}: {param.type!r}")
             normalized[name] = param
         return normalized
 
@@ -924,9 +924,9 @@ class _Missing:
 
 _MISSING = _Missing()
 
-nl = NLCore[
-    nl_plugin.BotActionParameters,
-    nl_plugin.BotAction
+ai = AICore[
+    ai_plugin.BotActionParameters,
+    ai_plugin.BotAction
 ]()
 
 
@@ -934,7 +934,7 @@ def action(
     name: str,
     description: str,
     command_name: str | None = None,
-    params: NLParamsTable | None = None,
-    **kwargs: nl_plugin.BotActionParameters,
-) -> Callable[[nl_plugin.BotAction], nl_plugin.BotAction]:
-    return nl.action(name, description, command_name=command_name, params=params, **kwargs)
+    params: AIParamsTable | None = None,
+    **kwargs: ai_plugin.BotActionParameters,
+) -> Callable[[ai_plugin.BotAction], ai_plugin.BotAction]:
+    return ai.action(name, description, command_name=command_name, params=params, **kwargs)

@@ -37,7 +37,7 @@ USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
 ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 MAX_ASSISTANT_CONTEXT_CHARS = 3000
-_nl_break_until: datetime.datetime | None = None
+_ai_break_until: datetime.datetime | None = None
 
 @dataclass(frozen=True, slots=True)
 class MessageInteractionCommand:
@@ -363,8 +363,24 @@ def _discord_reference_name(entity: Any) -> str:
     return str(entity)
 
 
-def nl_on_break() -> bool:
-    return _nl_break_until is not None and discord.utils.utcnow() < _nl_break_until
+def ai_on_break() -> bool:
+    return _ai_break_until is not None and discord.utils.utcnow() < _ai_break_until
+
+
+def ai_config(bot: 'BotCore') -> dict[str, Any]:
+    config = bot.config.get("ai", {})
+    if not isinstance(config, dict):
+        raise TypeError("Config key 'ai' must be an object.")
+    return config
+
+
+def ai_break_config(bot: 'BotCore') -> dict[str, Any]:
+    config = ai_config(bot).get("breaks", {})
+    return config if isinstance(config, dict) else {}
+
+
+def ai_enabled(bot: 'BotCore') -> bool:
+    return bool(ai_config(bot).get("enabled", True))
 
 
 async def interaction_response_message(
@@ -383,35 +399,36 @@ async def interaction_response_message(
 
 
 async def setup(bot: 'BotCore'):
-    from utils.nl import nl
+    from utils.ai import ai as ai_core
 
     bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
 
-    async def nl_break_cycle() -> None:
-        global _nl_break_until
-        active_minutes = max(0.0, float(bot.config.get("nl_active_minutes", 20)))
-        break_minutes = max(0.0, float(bot.config.get("nl_break_minutes", 10)))
+    async def ai_break_cycle() -> None:
+        global _ai_break_until
+        breaks = ai_break_config(bot)
+        active_minutes = max(0.0, float(breaks.get("active_minutes", 20)))
+        break_minutes = max(0.0, float(breaks.get("break_minutes", 10)))
         if active_minutes <= 0 or break_minutes <= 0:
             return
 
         while not bot.is_closed():
-            _nl_break_until = None
+            _ai_break_until = None
             await asyncio.sleep(active_minutes * 60)
-            _nl_break_until = discord.utils.utcnow() + datetime.timedelta(minutes=break_minutes)
+            _ai_break_until = discord.utils.utcnow() + datetime.timedelta(minutes=break_minutes)
             await bot.discord.change_presence(status=discord.Status.idle)
             await asyncio.sleep(break_minutes * 60)
-            _nl_break_until = None
+            _ai_break_until = None
             await bot.discord.change_presence(status=discord.Status.online)
 
     @bot.message_callback
     async def on_message(message: discord.Message):
         if message.author.bot or bot.user is None:
             return
-        if not bool(bot.config.get("nl", True)):
+        if not ai_enabled(bot):
             return
 
-        normalize_discord = bool(bot.config.get("nl_normalize_discord", True))
+        normalize_discord = bool(ai_config(bot).get("normalize_discord", True))
         text = mentioned_message_text(
             bot,
             message,
@@ -419,7 +436,7 @@ async def setup(bot: 'BotCore'):
         )
         if text is None:
             return
-        if nl_on_break():
+        if ai_on_break():
             return
         assistant_context_message = replied_assistant_message(
             bot,
@@ -430,7 +447,7 @@ async def setup(bot: 'BotCore'):
         assistant_context_source = assistant_context_message[0] if assistant_context_message is not None else None
         
         async with message.channel.typing():
-            matches = await nl.match_infos(
+            matches = await ai_core.match_infos(
                 text,
                 message=message,
                 assistant_context=assistant_context,
@@ -454,7 +471,7 @@ async def setup(bot: 'BotCore'):
                         allowed_mentions=discord.AllowedMentions.none(),
                         mention_author=False
                     )
-                nl.record_turn(message, text, reply, assistant_source=sent_message)
+                ai_core.record_turn(message, text, reply, assistant_source=sent_message)
                 continue
             if match.action is None:
                 continue
@@ -475,10 +492,10 @@ async def setup(bot: 'BotCore'):
                 eph=False,
                 defer=False,
             )
-            nl.record_turn(
+            ai_core.record_turn(
                 message,
                 text,
-                nl.format_command_call(match.command_name, match.kwargs),
+                ai_core.format_command_call(match.command_name, match.kwargs),
                 assistant_source=await interaction_response_message(interaction, message),
             )
 
@@ -490,18 +507,18 @@ async def setup(bot: 'BotCore'):
         eph=False,
     )
     async def ai(interaction: discord.Interaction, prompt: str):
-        if not bool(bot.config.get("nl", True)):
+        if not ai_enabled(bot):
             await bot.discord.send(
-                contents="NL is disabled.",
+                contents="AI is disabled.",
                 response=True,
                 ephemeral=True,
             )
             return
-        if nl_on_break():
+        if ai_on_break():
             return
 
         await bot.discord.defer(ephemeral=False)
-        matches = await nl.match_infos(prompt, interaction=interaction)
+        matches = await ai_core.match_infos(prompt, interaction=interaction)
         if not matches:
             await bot.discord.send(
                 contents="I'm not sure I understand.",
@@ -517,7 +534,7 @@ async def setup(bot: 'BotCore'):
                     response=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-                nl.record_turn(
+                ai_core.record_turn(
                     interaction,
                     prompt,
                     strip_discord_reference_annotations(match.reply),
@@ -536,10 +553,10 @@ async def setup(bot: 'BotCore'):
                 eph=False,
                 defer=False,
             )
-            nl.record_turn(
+            ai_core.record_turn(
                 interaction,
                 prompt,
-                nl.format_command_call(match.command_name, match.kwargs),
+                ai_core.format_command_call(match.command_name, match.kwargs),
                 assistant_source=await interaction_response_message(interaction),
             )
 
@@ -553,12 +570,12 @@ async def setup(bot: 'BotCore'):
             "@Bogobot",
             f'<@{bot.user.id} {json_string(bot.user.name)}>'
         )
-        if bool(bot.config.get("nl_breaks", True)) and (break_task is None or break_task.done()):
-            break_task = asyncio.create_task(nl_break_cycle())
+        if bool(ai_break_config(bot).get("enabled", True)) and (break_task is None or break_task.done()):
+            break_task = asyncio.create_task(ai_break_cycle())
 
     @bot.close_callback
     async def close():
-        global _nl_break_until
-        _nl_break_until = None
+        global _ai_break_until
+        _ai_break_until = None
         if break_task is not None and not break_task.done():
             break_task.cancel()

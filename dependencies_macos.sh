@@ -17,7 +17,7 @@ brew install python tesseract ffmpeg streamlink
 
 # Install Python libraries
 # discord.py: Bot API
-# openai: hosted or OpenAI-compatible NL action selection and replies
+# openai: hosted or OpenAI-compatible AI action selection and replies
 # numpy & Pillow: Image manipulation for OCR
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # opencv-python: image preprocessing

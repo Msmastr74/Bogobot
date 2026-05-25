@@ -40,27 +40,30 @@ User-edited settings:
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
-- `nl`: Enables natural-language @mention actions. Defaults to true.
-- `nl_model`: OpenAI-compatible chat model used to choose tools and conversational replies. Defaults to `llama-3.1-8b-instant`.
-- `nl_base_url`: Optional OpenAI-compatible API base URL. For local Ollama, use `http://localhost:11434/v1`.
-- `nl_api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
-- `OPENAI_API_KEY`, or the config key named by `nl_api_key_env`: Optional API key. When present in config, the bot copies it into the configured environment variable at startup.
-- `nl_request_interval_seconds`: Minimum seconds between NL provider requests. Defaults to 60. Set to 0 for local providers when no artificial throttle is needed.
-- `nl_normalize_discord`: Whether @mention NL text annotates Discord mentions and channels with readable names before matching. Defaults to true.
-- `nl_history`: Enables per-channel short-term NL history. Defaults to true.
-- `nl_history_path`: SQLite path for NL history. Defaults to `nl_history.sqlite3`.
-- `nl_history_char_budget`: Per-channel character budget for NL history. Defaults to 10000. Old history is deleted by whole user/assistant turn blocks.
-- `nl_breaks`: Enables the natural-language break cycle. Defaults to true.
-- `nl_active_minutes`: Number of minutes NL stays active before taking a break. Defaults to 20.
-- `nl_break_minutes`: Number of minutes NL ignores mentions and `/ai` while on break. Defaults to 10.
+- `ai`: AI configuration object.
+  - `enabled`: Enables AI @mention actions. Defaults to true.
+  - `model`: OpenAI-compatible chat model used to choose tools and conversational replies. Defaults to `llama-3.1-8b-instant`.
+  - `base_url`: Optional OpenAI-compatible API base URL. For local Ollama, use `http://localhost:11434/v1`.
+  - `api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
+  - `api_key`: Optional API key. When present, the bot copies it into `api_key_env` at startup.
+  - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to 60. Set to 0 for local providers when no artificial throttle is needed.
+  - `normalize_discord`: Whether @mention AI text annotates Discord mentions and channels with readable names before matching. Defaults to true.
+  - `history.enabled`: Enables per-channel short-term AI history. Defaults to true.
+  - `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
+  - `history.char_budget`: Per-channel character budget for AI history. Defaults to 10000. Old history is deleted by oldest stored message.
+  - `breaks.enabled`: Enables the AI break cycle. Defaults to true.
+  - `breaks.active_minutes`: Number of minutes AI stays active before taking a break. Defaults to 20.
+  - `breaks.break_minutes`: Number of minutes AI ignores mentions and `/ai` while on break. Defaults to 10.
 
 Groq can be used through its OpenAI-compatible API:
 
 ```json
-"nl_model": "llama-3.1-8b-instant",
-"nl_base_url": "https://api.groq.com/openai/v1",
-"nl_api_key_env": "GROQ_API_KEY",
-"GROQ_API_KEY": "..."
+"ai": {
+    "model": "llama-3.1-8b-instant",
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_key_env": "GROQ_API_KEY",
+    "api_key": "..."
+}
 ```
 
 Local Ollama can also be used through its OpenAI-compatible API. For Ministral 3 8B with a 16k context window, create a local `Modelfile`:
@@ -80,11 +83,13 @@ ollama create bogobot-ministral -f Modelfile
 Use this config:
 
 ```json
-"nl_model": "bogobot-ministral",
-"nl_base_url": "http://localhost:11434/v1",
-"nl_api_key_env": "OLLAMA_API_KEY",
-"OLLAMA_API_KEY": "ollama",
-"nl_request_interval_seconds": 0
+"ai": {
+    "model": "bogobot-ministral",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_env": "OLLAMA_API_KEY",
+    "api_key": "ollama",
+    "request_interval_seconds": 0
+}
 ```
 
 `Modelfile` is gitignored for local experiments.
@@ -239,7 +244,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
 
-Plugins can also register natural-language actions for @mentions and `/ai` with `@utils.nl.action(...)`. The shared `utils.nl.NLCore` sends OpenAI-compatible tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.nl` module exposes `nl = NLCore[BotActionParameters, BotAction]()` and `action = nl.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `NLParam`, for example `params={"user": NLParam("Discord user id to target.", type=discord.User | discord.Member | None, required=False)}` or `params={"mode": NLParam(type=Literal["numerical", "lexicographic"])}`. `plugins/nl.py` attaches `bot.on_message` as a Discord event, annotates Discord references according to `nl_normalize_discord`, passes replied bot messages as assistant context, matches the text, checks permissions, and runs the selected action.
+Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. The shared `utils.ai.AICore` sends OpenAI-compatible tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.ai` module exposes `ai = AICore[BotActionParameters, BotAction]()` and `action = ai.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `AIParam`, for example `params={"user": AIParam("Discord user id to target.", type=discord.User | discord.Member | None, required=False)}` or `params={"mode": AIParam(type=Literal["numerical", "lexicographic"])}`. `plugins/ai.py` attaches `bot.on_message` as a Discord event, annotates Discord references according to `ai.normalize_discord`, passes replied bot messages as assistant context, matches the text, checks permissions, and runs the selected action.
 
 Current plugin responsibilities:
 
@@ -255,7 +260,7 @@ Current plugin responsibilities:
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
-- `nl.py`: @mention natural-language action dispatch.
+- `ai.py`: @mention AI action dispatch.
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.

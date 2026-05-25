@@ -9,7 +9,7 @@ winget install -e --id UB-Mannheim.TesseractOCR
 winget install -e --id Gyan.FFmpeg
 
 # Install Python libraries.
-# openai provides hosted or OpenAI-compatible NL action selection and replies.
+# openai provides hosted or OpenAI-compatible AI action selection and replies.
 py -3 -m pip install --upgrade pip
 py -3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca
 

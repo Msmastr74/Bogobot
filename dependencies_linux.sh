@@ -12,7 +12,7 @@ sudo apt install python3 python3-pip tesseract-ocr libtesseract-dev ffmpeg -y
 
 # Install Python libraries
 # discord.py: Bot API
-# openai: hosted or OpenAI-compatible NL action selection and replies
+# openai: hosted or OpenAI-compatible AI action selection and replies
 # numpy, Pillow & opencv-python: Image manipulation for OCR
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # streamlink: Livestream data extraction

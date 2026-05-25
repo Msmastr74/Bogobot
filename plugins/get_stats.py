@@ -6,7 +6,7 @@ import datetime
 from typing import Iterable, TypedDict
 from bogobot_core import BotCore
 from PIL import Image
-from utils.nl import action
+from utils.ai import action
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups
