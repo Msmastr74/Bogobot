@@ -277,12 +277,12 @@ def mentioned_message_text(
     return text or None
 
 
-def replied_assistant_text(
+def replied_assistant_message(
     bot: 'BotCore',
     message: discord.Message,
     *,
     normalize_discord: bool = True,
-) -> str | None:
+) -> tuple[discord.Message, str] | None:
     if bot.user is None or message.reference is None:
         return None
 
@@ -299,7 +299,7 @@ def replied_assistant_text(
     text = " ".join(text.split())
     if not text:
         return None
-    return text[:MAX_ASSISTANT_CONTEXT_CHARS]
+    return resolved, text[:MAX_ASSISTANT_CONTEXT_CHARS]
 
 
 def annotate_discord_references(message: discord.Message, text: str) -> str:
@@ -309,12 +309,11 @@ def annotate_discord_references(message: discord.Message, text: str) -> str:
     }
     role_names = {
         str(role.id): role.name
-        for role in getattr(message, "role_mentions", ())
+        for role in message.role_mentions
     }
     channel_names = {
         str(channel.id): channel.name
-        for channel in getattr(message, "channel_mentions", ())
-        if getattr(channel, "name", None) is not None
+        for channel in message.channel_mentions
     }
 
     def annotate_user(match: re.Match[str]) -> str:
@@ -353,16 +352,34 @@ def json_string(text: str) -> str:
 
 
 def _discord_reference_name(entity: Any) -> str:
-    return str(
-        getattr(entity, "display_name", None) or
-        getattr(entity, "global_name", None) or
-        getattr(entity, "name", None) or
-        entity
-    )
+    if isinstance(entity, discord.Member):
+        return entity.display_name
+    if isinstance(entity, discord.User):
+        return entity.global_name or entity.name
+    if isinstance(entity, discord.Role):
+        return entity.name
+    if isinstance(entity, discord.abc.GuildChannel):
+        return entity.name
+    return str(entity)
 
 
 def nl_on_break() -> bool:
     return _nl_break_until is not None and discord.utils.utcnow() < _nl_break_until
+
+
+async def interaction_response_message(
+    interaction: discord.Interaction,
+    source_message: discord.Message | None = None,
+) -> discord.Message | None:
+    try:
+        response = await interaction.original_response()
+    except discord.HTTPException:
+        return None
+    if not isinstance(response, discord.Message):
+        return None
+    if source_message is not None and response.id == source_message.id:
+        return None
+    return response
 
 
 async def setup(bot: 'BotCore'):
@@ -404,17 +421,20 @@ async def setup(bot: 'BotCore'):
             return
         if nl_on_break():
             return
-        assistant_context = replied_assistant_text(
+        assistant_context_message = replied_assistant_message(
             bot,
             message,
             normalize_discord=normalize_discord,
         )
+        assistant_context = assistant_context_message[1] if assistant_context_message is not None else None
+        assistant_context_source = assistant_context_message[0] if assistant_context_message is not None else None
         
         async with message.channel.typing():
             matches = await nl.match_infos(
                 text,
                 message=message,
                 assistant_context=assistant_context,
+                assistant_context_source=assistant_context_source,
             )
             if not matches:
                 return
@@ -424,16 +444,17 @@ async def setup(bot: 'BotCore'):
             if match.reply is not None:
                 reply = strip_discord_reference_annotations(match.reply)
                 if followup_only:
-                    await message.channel.send(
+                    sent_message = await message.channel.send(
                         reply,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
-                    await message.reply(
+                    sent_message = await message.reply(
                         reply,
                         allowed_mentions=discord.AllowedMentions.none(),
                         mention_author=False
                     )
+                nl.record_turn(message, text, reply, assistant_source=sent_message)
                 continue
             if match.action is None:
                 continue
@@ -453,6 +474,12 @@ async def setup(bot: 'BotCore'):
                 perm_requirement=match.context.get("perm_requirement", 0),
                 eph=False,
                 defer=False,
+            )
+            nl.record_turn(
+                message,
+                text,
+                nl.format_command_call(match.command_name, match.kwargs),
+                assistant_source=await interaction_response_message(interaction, message),
             )
 
     @bot.setup.command(
@@ -485,10 +512,16 @@ async def setup(bot: 'BotCore'):
 
         for match in matches:
             if match.reply is not None:
-                await bot.discord.send(
+                sent_message = await bot.discord.send(
                     contents=strip_discord_reference_annotations(match.reply),
                     response=True,
                     allowed_mentions=discord.AllowedMentions.none(),
+                )
+                nl.record_turn(
+                    interaction,
+                    prompt,
+                    strip_discord_reference_annotations(match.reply),
+                    assistant_source=sent_message.message if sent_message is not None else None,
                 )
                 continue
             if match.action is None:
@@ -502,6 +535,12 @@ async def setup(bot: 'BotCore'):
                 perm_requirement=match.context.get("perm_requirement", 0),
                 eph=False,
                 defer=False,
+            )
+            nl.record_turn(
+                interaction,
+                prompt,
+                nl.format_command_call(match.command_name, match.kwargs),
+                assistant_source=await interaction_response_message(interaction),
             )
 
     @bot.init_callback

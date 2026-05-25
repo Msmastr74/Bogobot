@@ -47,6 +47,9 @@ User-edited settings:
 - `OPENAI_API_KEY`, or the config key named by `nl_api_key_env`: Optional API key. When present in config, the bot copies it into the configured environment variable at startup.
 - `nl_request_interval_seconds`: Minimum seconds between NL provider requests. Defaults to 60. Set to 0 for local providers when no artificial throttle is needed.
 - `nl_normalize_discord`: Whether @mention NL text annotates Discord mentions and channels with readable names before matching. Defaults to true.
+- `nl_history`: Enables per-channel short-term NL history. Defaults to true.
+- `nl_history_path`: SQLite path for NL history. Defaults to `nl_history.sqlite3`.
+- `nl_history_char_budget`: Per-channel character budget for NL history. Defaults to 10000. Old history is deleted by whole user/assistant turn blocks.
 - `nl_breaks`: Enables the natural-language break cycle. Defaults to true.
 - `nl_active_minutes`: Number of minutes NL stays active before taking a break. Defaults to 20.
 - `nl_break_minutes`: Number of minutes NL ignores mentions and `/ai` while on break. Defaults to 10.

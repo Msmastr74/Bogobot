@@ -51,6 +51,9 @@ Go into `config.json` and provide the main credentials:
  * `OPENAI_API_KEY`, or the config key named by `nl_api_key_env`: Optional API key copied into the configured environment variable at startup.
  * `nl_request_interval_seconds`: Optional minimum seconds between NL provider requests. Defaults to `60`; use `0` for local providers when no artificial throttle is needed.
  * `nl_normalize_discord`: Optional boolean for whether @mention NL text resolves Discord mentions and emojis before matching. Defaults to `true`.
+ * `nl_history`: Optional boolean for enabling per-channel short-term NL history. Defaults to `true`.
+ * `nl_history_path`: Optional SQLite path for NL history. Defaults to `nl_history.sqlite3`.
+ * `nl_history_char_budget`: Optional per-channel character budget for NL history. Defaults to `10000`; old history is deleted by whole turn blocks.
  * `nl_breaks`: Optional boolean for enabling AI break periods. Defaults to `true`.
  * `nl_active_minutes`: Optional number of minutes NL stays active before a break. Defaults to `20`.
  * `nl_break_minutes`: Optional number of minutes NL ignores mentions and `/ai` while on break. Defaults to `10`.

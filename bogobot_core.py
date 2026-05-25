@@ -165,6 +165,12 @@ class BotCore(discord.Client):
                 "nl_request_interval_seconds",
                 nl.request_interval_seconds,
             )),
+            history_enabled=bool(self.config.get("nl_history", nl.history_enabled)),
+            history_path=str(self.config.get("nl_history_path", nl.history_path)),
+            history_char_budget=int(self.config.get(
+                "nl_history_char_budget",
+                nl.history_char_budget,
+            )),
             logger=self.logger.getChild("NL"),
         )
         if nl.enabled and self.config.get(nl.api_key_env):

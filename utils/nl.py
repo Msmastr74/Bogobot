@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from logging import Logger, WARNING, getLogger
 import os
 import re
+import sqlite3
 import time
 import types
 from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
@@ -25,6 +27,8 @@ ActionT = TypeVar("ActionT")
 NLParamsTable: TypeAlias = dict[str, "NLParam"]
 _MAX_CALLS = 4
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
+DEFAULT_HISTORY_PATH = "nl_history.sqlite3"
+DEFAULT_HISTORY_CHAR_BUDGET = 10_000
 _ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +68,12 @@ class _ToolCall:
     arguments: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class _HistoryMessage:
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class NLCore(Generic[ContextT, ActionT]):
     def __init__(
         self,
@@ -73,6 +83,9 @@ class NLCore(Generic[ContextT, ActionT]):
         api_key_env: str = "OPENAI_API_KEY",
         base_url: str | None = None,
         request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
+        history_enabled: bool = True,
+        history_path: str = DEFAULT_HISTORY_PATH,
+        history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
         logger: Logger | None = None,
     ):
         self.enabled = enabled
@@ -80,6 +93,9 @@ class NLCore(Generic[ContextT, ActionT]):
         self.api_key_env = api_key_env
         self.base_url = base_url
         self.request_interval_seconds = max(0.0, float(request_interval_seconds))
+        self.history_enabled = history_enabled
+        self.history_path = history_path
+        self.history_char_budget = max(0, int(history_char_budget))
         self._actions: list[_NLAction[ContextT, ActionT]] = []
         self._client: 'AsyncOpenAI | None' = None
         self._last_request_at: float | None = None
@@ -94,6 +110,9 @@ class NLCore(Generic[ContextT, ActionT]):
         api_key_env: str | None = None,
         base_url: str | None = None,
         request_interval_seconds: float | None = None,
+        history_enabled: bool | None = None,
+        history_path: str | None = None,
+        history_char_budget: int | None = None,
         logger: Logger | None = None,
         model: str | None = None,
     ) -> None:
@@ -113,6 +132,15 @@ class NLCore(Generic[ContextT, ActionT]):
 
         if request_interval_seconds is not None:
             self.request_interval_seconds = max(0.0, float(request_interval_seconds))
+
+        if history_enabled is not None:
+            self.history_enabled = history_enabled
+
+        if history_path is not None:
+            self.history_path = history_path
+
+        if history_char_budget is not None:
+            self.history_char_budget = max(0, int(history_char_budget))
 
         if logger is not None:
             self.logger = logger
@@ -139,6 +167,96 @@ class NLCore(Generic[ContextT, ActionT]):
             return action
         return decorator
 
+    def format_message(
+        self,
+        content: str,
+        source: discord.Message | discord.Interaction | None,
+    ) -> str:
+        if isinstance(source, discord.Message):
+            return self._format_message_content(
+                content=content,
+                user=source.author,
+                message_id=source.id,
+                interaction=False,
+                created_at=source.created_at,
+            )
+        if isinstance(source, discord.Interaction):
+            return self._format_message_content(
+                content=content,
+                user=source.user,
+                message_id=None,
+                interaction=True,
+                created_at=source.created_at,
+            )
+        return content.strip()
+
+    def format_block(
+        self,
+        role: Literal["user", "assistant"],
+        content: str,
+        *,
+        is_reply_context: bool = False,
+    ) -> str:
+        if is_reply_context:
+            return f"<|reply_start|>\n{content.strip()}\n<|reply_end|>"
+        return content.strip()
+
+    def format_command_call(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
+        payload = {
+            "name": command_name,
+            "arguments": self._json_safe(arguments or {}),
+        }
+        return (
+            "<|command_start|>"
+            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
+            "<|command_end|>"
+        )
+
+    def _format_message_content(
+        self,
+        *,
+        content: str,
+        user: discord.User | discord.Member,
+        message_id: int | None,
+        interaction: bool,
+        created_at: datetime,
+    ) -> str:
+        id_line = f"id: {message_id}\n" if message_id is not None else ""
+        interaction_line = "interaction: true\n" if interaction else ""
+        timestamp = created_at.astimezone(timezone.utc).isoformat()
+        content = content.strip()
+        return (
+            "<|message_header_start|>\n"
+            f"{id_line}"
+            f"{interaction_line}"
+            f"time: {timestamp}\n"
+            f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
+            "<|message_header_end|>\n"
+            f"{content}"
+        )
+
+    def record_turn(
+        self,
+        source: discord.Message | discord.Interaction,
+        user_content: str,
+        assistant_content: str,
+        *,
+        assistant_source: discord.Message | discord.Interaction | None = None,
+    ) -> None:
+        if not self.history_enabled or self.history_char_budget <= 0:
+            return
+
+        channel_id = self._source_channel_id(source)
+        if channel_id is None:
+            return
+
+        user_block = self.format_block("user", self.format_message(user_content, source))
+        assistant_block = self.format_block(
+            "assistant",
+            self.format_message(assistant_content, assistant_source),
+        )
+        self._record_history_block(channel_id, user_block, assistant_block)
+
     async def match(self, text: str) -> ActionT | None:
         match = await self.match_info(text)
         if match is None:
@@ -152,12 +270,14 @@ class NLCore(Generic[ContextT, ActionT]):
         message: discord.Message | None = None,
         interaction: discord.Interaction | None = None,
         assistant_context: str | None = None,
+        assistant_context_source: discord.Message | discord.Interaction | None = None,
     ) -> NLMatch[ContextT, ActionT] | None:
         matches = await self.match_infos(
             text,
             message=message,
             interaction=interaction,
             assistant_context=assistant_context,
+            assistant_context_source=assistant_context_source,
         )
         return matches[0] if matches else None
 
@@ -168,18 +288,40 @@ class NLCore(Generic[ContextT, ActionT]):
         message: discord.Message | None = None,
         interaction: discord.Interaction | None = None,
         assistant_context: str | None = None,
+        assistant_context_source: discord.Message | discord.Interaction | None = None,
     ) -> list[NLMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
+
+        formatted_text = self.format_block(
+            "user",
+            self._format_source_text(
+                text,
+                message=message,
+                interaction=interaction,
+            ),
+        )
+        formatted_assistant_context = (
+            self.format_block(
+                "assistant",
+                self.format_message(assistant_context, assistant_context_source),
+                is_reply_context=True,
+            )
+            if assistant_context is not None else
+            None
+        )
+        channel_id = self._source_channel_id(message) if message is not None else self._source_channel_id(interaction)
+        history = self._history_messages(channel_id)
 
         async with self._lock:
             client = self._ensure_client()
             await self._wait_for_rate_limit()
             content, calls = await self._complete(
                 client,
-                text,
+                formatted_text,
                 self._actions,
-                assistant_context,
+                formatted_assistant_context,
+                history,
             )
 
         matches: list[NLMatch[ContextT, ActionT]] = []
@@ -227,6 +369,144 @@ class NLCore(Generic[ContextT, ActionT]):
 
         return matches
 
+    def _source_channel_id(self, source: discord.Message | discord.Interaction | None) -> int | None:
+        if isinstance(source, discord.Message):
+            return source.channel.id
+        if isinstance(source, discord.Interaction):
+            return source.channel_id
+        return None
+
+    def _record_history_block(
+        self,
+        channel_id: int,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        char_count = len(user_content) + len(assistant_content)
+        if char_count <= 0:
+            return
+
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_history_schema(connection)
+                cursor = connection.execute(
+                    "INSERT INTO nl_history_blocks(channel_id, created_at, char_count) VALUES (?, ?, ?)",
+                    (channel_id, datetime.now(timezone.utc).isoformat(), char_count),
+                )
+                if cursor.lastrowid is None:
+                    return
+                block_id = cursor.lastrowid
+                connection.executemany(
+                    "INSERT INTO nl_history_messages(block_id, position, role, content) VALUES (?, ?, ?, ?)",
+                    (
+                        (block_id, 0, "user", user_content),
+                        (block_id, 1, "assistant", assistant_content),
+                    ),
+                )
+                self._evict_history(connection, channel_id)
+
+    def _history_messages(self, channel_id: int | None) -> list[_HistoryMessage]:
+        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
+            return []
+
+        with closing(self._history_connection()) as connection:
+            self._ensure_history_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT messages.role, messages.content
+                FROM nl_history_messages AS messages
+                JOIN nl_history_blocks AS blocks ON blocks.id = messages.block_id
+                WHERE blocks.channel_id = ?
+                ORDER BY blocks.id, messages.position
+                """,
+                (channel_id,),
+            ).fetchall()
+        return [
+            _HistoryMessage(role, content)
+            for role, content in rows
+        ]
+
+    def _history_connection(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.history_path)
+
+    def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS nl_history_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                char_count INTEGER NOT NULL
+            )
+        """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS nl_history_messages (
+                block_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                PRIMARY KEY(block_id, position),
+                FOREIGN KEY(block_id) REFERENCES nl_history_blocks(id) ON DELETE CASCADE
+            )
+        """)
+        connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_nl_history_blocks_channel_id_id
+            ON nl_history_blocks(channel_id, id)
+        """)
+
+    def _evict_history(self, connection: sqlite3.Connection, channel_id: int) -> None:
+        total = int(connection.execute(
+            """
+            SELECT COALESCE(SUM(LENGTH(messages.content)), 0)
+            FROM nl_history_messages AS messages
+            JOIN nl_history_blocks AS blocks ON blocks.id = messages.block_id
+            WHERE blocks.channel_id = ?
+            """,
+            (channel_id,),
+        ).fetchone()[0])
+        while total > self.history_char_budget:
+            row = connection.execute(
+                """
+                SELECT messages.block_id, messages.position, LENGTH(messages.content)
+                FROM nl_history_messages AS messages
+                JOIN nl_history_blocks AS blocks ON blocks.id = messages.block_id
+                WHERE blocks.channel_id = ?
+                ORDER BY blocks.id, messages.position
+                LIMIT 1
+                """,
+                (channel_id,),
+            ).fetchone()
+            if row is None:
+                return
+            block_id, position, char_count = int(row[0]), int(row[1]), int(row[2])
+            connection.execute(
+                "DELETE FROM nl_history_messages WHERE block_id = ? AND position = ?",
+                (block_id, position),
+            )
+            connection.execute(
+                """
+                DELETE FROM nl_history_blocks
+                WHERE id = ?
+                AND NOT EXISTS (
+                    SELECT 1 FROM nl_history_messages WHERE block_id = ?
+                )
+                """,
+                (block_id, block_id),
+            )
+            total -= char_count
+
+    def _format_source_text(
+        self,
+        text: str,
+        *,
+        message: discord.Message | None,
+        interaction: discord.Interaction | None,
+    ) -> str:
+        if message is not None:
+            return self.format_message(text, message)
+        if interaction is not None:
+            return self.format_message(text, interaction)
+        return text
+
     async def _wait_for_rate_limit(self) -> None:
         now = time.monotonic()
         if self._last_request_at is not None:
@@ -256,20 +536,21 @@ class NLCore(Generic[ContextT, ActionT]):
         text: str,
         actions: list[_NLAction[ContextT, ActionT]],
         assistant_context: str | None,
+        history: list[_HistoryMessage],
     ) -> tuple[str, list[_ToolCall]]:
         assistant_context_text = assistant_context.strip() if assistant_context is not None else ""
         has_assistant_context = bool(assistant_context_text)
-        system_prompt = self._system_prompt(actions, has_assistant_context=has_assistant_context)
+        system_prompt = self._system_prompt(actions)
         tools = [self._tool_schema(action) for action in actions]
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"<|time|>{datetime.now(timezone.utc).isoformat()}"}
         ]
+        messages.extend(
+            {"role": item.role, "content": item.content}
+            for item in history
+        )
         if has_assistant_context:
-            messages.append({
-                "role": "assistant",
-                "content": f"<|reply_start|>\n{assistant_context_text}\n<|reply_end|>",
-            })
+            messages.append({"role": "assistant", "content": assistant_context_text})
             self.logger.debug(f"assistant context: {assistant_context!r}.")
         messages.append({"role": "user", "content": text})
         self.logger.debug(f"input: {text!r}.")
@@ -300,22 +581,15 @@ class NLCore(Generic[ContextT, ActionT]):
     def _system_prompt(
         self,
         actions: list[_NLAction[ContextT, ActionT]],
-        *,
-        has_assistant_context: bool,
     ) -> str:
-        assistant_context_instruction = (
-            "The assistant message immediately before the current user message contains the exact previous message the user replied to, wrapped between <|reply_start|> and <|reply_end|>. "
-            "Do not call or invent a command to retrieve it.\n"
-            if has_assistant_context else
-            ""
-        )
         return (
             f"{nl_plugin.INSTRUCTION_TEXT}\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
-            "The first user message is metadata, not a real user message. It will contain only <|time|>UTC_TIME\n"
-            f"{assistant_context_instruction}"
+            "Discord message content begins with a header between <|message_header_start|> and <|message_header_end|>; the header contains the Discord message id, time, and user metadata.\n"
+            "A Discord message block may include <|reply_start|>...<|reply_end|>, containing the Discord message being replied to.\n"
+            "History may include command calls wrapped as <|command_start|>JSON<|command_end|>, where JSON contains the command name and arguments that were used.\n"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
@@ -555,6 +829,24 @@ class NLCore(Generic[ContextT, ActionT]):
     def _compact_description(self, text: str) -> str:
         text = " ".join(text.split())
         return text[:180]
+
+    def _json_safe(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, (discord.User, discord.Member)):
+            return {
+                "id": value.id,
+                "name": value.name,
+                "display_name": value.display_name,
+            }
+        if isinstance(value, dict):
+            return {
+                str(key): self._json_safe(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [self._json_safe(item) for item in value]
+        return str(value)
 
     def _unique_tool_name(self, name: str) -> str:
         base = re.sub(r"\W+", "_", name.casefold()).strip("_") or "action"
