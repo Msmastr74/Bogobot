@@ -639,7 +639,7 @@ class AICore(Generic[ContextT, ActionT]):
             "If no command fits, respond normally.\n"
             "Input-only metadata syntax follows. Use it only to understand Discord context. Never copy, quote, mention, or output these tags unless the user explicitly asks about the raw prompt format.\n"
             "<|message_header_start|>...<|message_header_end|> appears at the start of Discord message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
-            "<|reply_start|>...<|reply_end|> contains the Discord message being replied to. If the user asks about the previous message or replied-to message, answer from this block without saying the tag names.\n"
+            "<|reply_start|>...<|reply_end|> contains the Discord message being replied to (by you or a previous command). If the user asks about the previous message or replied-to message, answer from this block without saying the tag names.\n"
             "<|command_start|>JSON<|command_end|> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
         )
 
