@@ -235,27 +235,27 @@ class AICore(Generic[ContextT, ActionT]):
             f"{content}"
         )
 
-    def record_turn(
+    def record_message(
         self,
-        source: discord.Message | discord.Interaction,
-        user_content: str,
-        assistant_content: str,
+        role: Literal["user", "assistant"],
+        content: str,
+        source: discord.Message | discord.Interaction | None = None,
         *,
-        assistant_source: discord.Message | discord.Interaction | None = None,
+        channel_id: int | None = None,
     ) -> None:
         if not self.history_enabled or self.history_char_budget <= 0:
             return
 
-        channel_id = self._source_channel_id(source)
+        channel_id = channel_id if channel_id is not None else self._source_channel_id(source)
         if channel_id is None:
             return
+        if not content.strip():
+            return
 
-        user_block = self.format_block("user", self.format_message(user_content, source))
-        assistant_block = self.format_block(
-            "assistant",
-            self.format_message(assistant_content, assistant_source),
+        self._record_history_message(
+            channel_id,
+            _HistoryMessage(role, self.format_block(role, self.format_message(content, source))),
         )
-        self._record_history_block(channel_id, user_block, assistant_block)
 
     async def match(self, text: str) -> ActionT | None:
         match = await self.match_info(text)
@@ -376,32 +376,23 @@ class AICore(Generic[ContextT, ActionT]):
             return source.channel_id
         return None
 
-    def _record_history_block(
+    def _record_history_message(
         self,
         channel_id: int,
-        user_content: str,
-        assistant_content: str,
+        message: _HistoryMessage,
     ) -> None:
-        char_count = len(user_content) + len(assistant_content)
-        if char_count <= 0:
+        if not message.content:
             return
 
         with closing(self._history_connection()) as connection:
             with connection:
                 self._ensure_history_schema(connection)
-                cursor = connection.execute(
-                    "INSERT INTO ai_history_blocks(channel_id, created_at, char_count) VALUES (?, ?, ?)",
-                    (channel_id, datetime.now(timezone.utc).isoformat(), char_count),
-                )
-                if cursor.lastrowid is None:
-                    return
-                block_id = cursor.lastrowid
-                connection.executemany(
-                    "INSERT INTO ai_history_messages(block_id, position, role, content) VALUES (?, ?, ?, ?)",
-                    (
-                        (block_id, 0, "user", user_content),
-                        (block_id, 1, "assistant", assistant_content),
-                    ),
+                connection.execute(
+                    """
+                    INSERT INTO ai_history_messages(channel_id, created_at, role, content)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (channel_id, datetime.now(timezone.utc).isoformat(), message.role, message.content),
                 )
                 self._evict_history(connection, channel_id)
 
@@ -413,11 +404,10 @@ class AICore(Generic[ContextT, ActionT]):
             self._ensure_history_schema(connection)
             rows = connection.execute(
                 """
-                SELECT messages.role, messages.content
-                FROM ai_history_messages AS messages
-                JOIN ai_history_blocks AS blocks ON blocks.id = messages.block_id
-                WHERE blocks.channel_id = ?
-                ORDER BY blocks.id, messages.position
+                SELECT role, content
+                FROM ai_history_messages
+                WHERE channel_id = ?
+                ORDER BY id
                 """,
                 (channel_id,),
             ).fetchall()
@@ -430,68 +420,52 @@ class AICore(Generic[ContextT, ActionT]):
         return sqlite3.connect(self.history_path)
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(ai_history_messages)").fetchall()
+        }
+        if columns and not {"id", "channel_id", "created_at"}.issubset(columns):
+            connection.execute("DROP TABLE IF EXISTS ai_history_messages")
+            connection.execute("DROP TABLE IF EXISTS ai_history_blocks")
+
         connection.execute("""
-            CREATE TABLE IF NOT EXISTS ai_history_blocks (
+            CREATE TABLE IF NOT EXISTS ai_history_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
-                char_count INTEGER NOT NULL
-            )
-        """)
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS ai_history_messages (
-                block_id INTEGER NOT NULL,
-                position INTEGER NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                PRIMARY KEY(block_id, position),
-                FOREIGN KEY(block_id) REFERENCES ai_history_blocks(id) ON DELETE CASCADE
+                content TEXT NOT NULL
             )
         """)
         connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ai_history_blocks_channel_id_id
-            ON ai_history_blocks(channel_id, id)
+            CREATE INDEX IF NOT EXISTS idx_ai_history_messages_channel_id_id
+            ON ai_history_messages(channel_id, id)
         """)
 
     def _evict_history(self, connection: sqlite3.Connection, channel_id: int) -> None:
         total = int(connection.execute(
             """
-            SELECT COALESCE(SUM(LENGTH(messages.content)), 0)
-            FROM ai_history_messages AS messages
-            JOIN ai_history_blocks AS blocks ON blocks.id = messages.block_id
-            WHERE blocks.channel_id = ?
+            SELECT COALESCE(SUM(LENGTH(content)), 0)
+            FROM ai_history_messages
+            WHERE channel_id = ?
             """,
             (channel_id,),
         ).fetchone()[0])
         while total > self.history_char_budget:
             row = connection.execute(
                 """
-                SELECT messages.block_id, messages.position, LENGTH(messages.content)
-                FROM ai_history_messages AS messages
-                JOIN ai_history_blocks AS blocks ON blocks.id = messages.block_id
-                WHERE blocks.channel_id = ?
-                ORDER BY blocks.id, messages.position
+                SELECT id, LENGTH(content)
+                FROM ai_history_messages
+                WHERE channel_id = ?
+                ORDER BY id
                 LIMIT 1
                 """,
                 (channel_id,),
             ).fetchone()
             if row is None:
                 return
-            block_id, position, char_count = int(row[0]), int(row[1]), int(row[2])
-            connection.execute(
-                "DELETE FROM ai_history_messages WHERE block_id = ? AND position = ?",
-                (block_id, position),
-            )
-            connection.execute(
-                """
-                DELETE FROM ai_history_blocks
-                WHERE id = ?
-                AND NOT EXISTS (
-                    SELECT 1 FROM ai_history_messages WHERE block_id = ?
-                )
-                """,
-                (block_id, block_id),
-            )
+            message_id, char_count = int(row[0]), int(row[1])
+            connection.execute("DELETE FROM ai_history_messages WHERE id = ?", (message_id,))
             total -= char_count
 
     def _format_source_text(

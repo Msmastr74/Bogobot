@@ -456,6 +456,7 @@ async def setup(bot: 'BotCore'):
             if not matches:
                 return
 
+        ai_core.record_message("user", text, message)
         for index, match in enumerate(matches):
             followup_only = index > 0
             if match.reply is not None:
@@ -471,7 +472,7 @@ async def setup(bot: 'BotCore'):
                         allowed_mentions=discord.AllowedMentions.none(),
                         mention_author=False
                     )
-                ai_core.record_turn(message, text, reply, assistant_source=sent_message)
+                ai_core.record_message("assistant", match.reply, sent_message, channel_id=message.channel.id)
                 continue
             if match.action is None:
                 continue
@@ -492,11 +493,11 @@ async def setup(bot: 'BotCore'):
                 eph=False,
                 defer=False,
             )
-            ai_core.record_turn(
-                message,
-                text,
+            ai_core.record_message(
+                "assistant",
                 ai_core.format_command_call(match.command_name, match.kwargs),
-                assistant_source=await interaction_response_message(interaction, message),
+                await interaction_response_message(interaction, message),
+                channel_id=message.channel.id,
             )
 
     @bot.setup.command(
@@ -527,6 +528,7 @@ async def setup(bot: 'BotCore'):
             )
             return
 
+        ai_core.record_message("user", prompt, interaction)
         for match in matches:
             if match.reply is not None:
                 sent_message = await bot.discord.send(
@@ -534,11 +536,11 @@ async def setup(bot: 'BotCore'):
                     response=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-                ai_core.record_turn(
-                    interaction,
-                    prompt,
-                    strip_discord_reference_annotations(match.reply),
-                    assistant_source=sent_message.message if sent_message is not None else None,
+                ai_core.record_message(
+                    "assistant",
+                    match.reply,
+                    sent_message.message if sent_message is not None else None,
+                    channel_id=interaction.channel_id,
                 )
                 continue
             if match.action is None:
@@ -553,11 +555,11 @@ async def setup(bot: 'BotCore'):
                 eph=False,
                 defer=False,
             )
-            ai_core.record_turn(
-                interaction,
-                prompt,
+            ai_core.record_message(
+                "assistant",
                 ai_core.format_command_call(match.command_name, match.kwargs),
-                assistant_source=await interaction_response_message(interaction),
+                await interaction_response_message(interaction),
+                channel_id=interaction.channel_id,
             )
 
     @bot.init_callback
