@@ -64,6 +64,32 @@ For Groq, use its OpenAI-compatible endpoint:
 "GROQ_API_KEY": "..."
 ```
 
+For local Ollama with Ministral 3 8B, create a local `Modelfile` with a larger context window:
+
+```dockerfile
+FROM ministral-3:8b
+
+PARAMETER num_ctx 16384
+```
+
+Then create the model:
+
+```bash
+ollama create bogobot-ministral -f Modelfile
+```
+
+Configure NL to use Ollama's OpenAI-compatible endpoint:
+
+```json
+"nl_model": "bogobot-ministral",
+"nl_base_url": "http://localhost:11434/v1",
+"nl_api_key_env": "OLLAMA_API_KEY",
+"OLLAMA_API_KEY": "ollama",
+"nl_request_interval_seconds": 0
+```
+
+`Modelfile` is ignored so local model experiments do not get committed.
+
 `DOCS.md` lists every supported user setting and every bot-managed storage field.
 
 If `local_config.json` exists, `main.py` uses that instead of `config.json`.

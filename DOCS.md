@@ -60,6 +60,32 @@ Groq can be used through its OpenAI-compatible API:
 "GROQ_API_KEY": "..."
 ```
 
+Local Ollama can also be used through its OpenAI-compatible API. For Ministral 3 8B with a 16k context window, create a local `Modelfile`:
+
+```dockerfile
+FROM ministral-3:8b
+
+PARAMETER num_ctx 16384
+```
+
+Then create the model:
+
+```bash
+ollama create bogobot-ministral -f Modelfile
+```
+
+Use this config:
+
+```json
+"nl_model": "bogobot-ministral",
+"nl_base_url": "http://localhost:11434/v1",
+"nl_api_key_env": "OLLAMA_API_KEY",
+"OLLAMA_API_KEY": "ollama",
+"nl_request_interval_seconds": 0
+```
+
+`Modelfile` is gitignored for local experiments.
+
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
 - `channels`: Notification topic subscriptions by Discord channel ID. Older `channels.json` data is imported into this field when `channels` is missing.
