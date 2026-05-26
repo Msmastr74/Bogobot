@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from contextlib import asynccontextmanager
 
 import discord
 from discord import File
@@ -303,19 +304,48 @@ def ai_enabled(bot: 'BotCore') -> bool:
     return bool(ai_config(bot).get("enabled", True))
 
 
-async def interaction_response_message(
-    interaction: discord.Interaction,
-    source_message: discord.Message | None = None,
-) -> discord.Message | None:
+@asynccontextmanager
+async def capture_interaction_output(interaction: discord.Interaction):
+    output_messages: list[discord.Message] = []
+    response = interaction.response
+    followup = interaction.followup
+    original_send_message = response.send_message
+    original_followup_send = followup.send
+
+    def add_message(message: discord.Message | None) -> None:
+        if message is None:
+            return
+        if any(existing.id == message.id for existing in output_messages):
+            return
+        output_messages.append(message)
+
+    async def send_message(*args: Any, **kwargs: Any) -> Any:
+        result = await original_send_message(*args, **kwargs)
+        if isinstance(result, discord.Message):
+            add_message(result)
+            return result
+        try:
+            response_message = await interaction.original_response()
+        except discord.HTTPException:
+            return result
+        if isinstance(response_message, discord.Message):
+            add_message(response_message)
+        return result
+
+    async def followup_send(*args: Any, **kwargs: Any) -> Any:
+        caller_requested_wait = bool(kwargs.get("wait", False))
+        kwargs["wait"] = True
+        result = await original_followup_send(*args, **kwargs)
+        add_message(result if isinstance(result, discord.Message) else None)
+        return result if caller_requested_wait else None
+
+    cast(Any, response).send_message = send_message
+    cast(Any, followup).send = followup_send
     try:
-        response = await interaction.original_response()
-    except discord.HTTPException:
-        return None
-    if not isinstance(response, discord.Message):
-        return None
-    if source_message is not None and response.id == source_message.id:
-        return None
-    return response
+        yield output_messages
+    finally:
+        cast(Any, response).send_message = original_send_message
+        cast(Any, followup).send = original_followup_send
 
 
 async def setup(bot: 'BotCore'):
@@ -358,16 +388,15 @@ async def setup(bot: 'BotCore'):
         assistant_context_source = assistant_context_message[0] if assistant_context_message is not None else None
         
         async with message.channel.typing():
-            matches = await ai_core.match_infos(
+            matches = await ai_core.ai_turn(
                 text,
-                message=message,
+                source=message,
                 assistant_context=assistant_context,
                 assistant_context_source=assistant_context_source,
             )
             if not matches:
                 return
 
-        ai_core.record_message("user", text, message)
         for index, match in enumerate(matches):
             followup_only = index > 0
             if match.reply is not None:
@@ -397,19 +426,20 @@ async def setup(bot: 'BotCore'):
                 followup_only=followup_only,
             )
 
-            await bot.setup._run_command(
-                interaction,
-                match.action,
-                (),
-                match.kwargs or {},
-                perm_requirement=match.context.get("perm_requirement", 0),
-                eph=False,
-                defer=False,
-            )
+            async with capture_interaction_output(interaction) as output_messages:
+                await bot.setup._run_command(
+                    interaction,
+                    match.action,
+                    (),
+                    match.kwargs or {},
+                    perm_requirement=match.context.get("perm_requirement", 0),
+                    eph=False,
+                    defer=False,
+                )
             ai_core.record_message(
                 "assistant",
                 ai_core.format_command_call(match.command_name, match.kwargs),
-                await interaction_response_message(interaction, message),
+                output_messages[-1] if output_messages else None,
                 channel_id=message.channel.id,
             )
 
@@ -432,7 +462,7 @@ async def setup(bot: 'BotCore'):
             return
 
         await bot.discord.defer(ephemeral=False)
-        matches = await ai_core.match_infos(prompt, interaction=interaction)
+        matches = await ai_core.ai_turn(prompt, source=interaction)
         if not matches:
             await bot.discord.send(
                 contents="I'm not sure I understand.",
@@ -441,7 +471,6 @@ async def setup(bot: 'BotCore'):
             )
             return
 
-        ai_core.record_message("user", prompt, interaction)
         for match in matches:
             if match.reply is not None:
                 reply = ai_core.visual_reply(match.reply)
@@ -462,19 +491,20 @@ async def setup(bot: 'BotCore'):
             if match.action is None:
                 continue
 
-            await bot.setup._run_command(
-                interaction,
-                match.action,
-                (),
-                match.kwargs or {},
-                perm_requirement=match.context.get("perm_requirement", 0),
-                eph=False,
-                defer=False,
-            )
+            async with capture_interaction_output(interaction) as output_messages:
+                await bot.setup._run_command(
+                    interaction,
+                    match.action,
+                    (),
+                    match.kwargs or {},
+                    perm_requirement=match.context.get("perm_requirement", 0),
+                    eph=False,
+                    defer=False,
+                )
             ai_core.record_message(
                 "assistant",
                 ai_core.format_command_call(match.command_name, match.kwargs),
-                await interaction_response_message(interaction),
+                output_messages[-1] if output_messages else None,
                 channel_id=interaction.channel_id,
             )
 

@@ -270,11 +270,7 @@ class AICore(Generic[ContextT, ActionT]):
         self,
         role: Literal["user", "assistant"],
         content: str,
-        *,
-        is_reply_context: bool = False,
     ) -> str:
-        if is_reply_context:
-            return f"<|reply_start|>\n{content.strip()}\n<|reply_end|>"
         return content.strip()
 
     def format_command_call(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
@@ -334,60 +330,44 @@ class AICore(Generic[ContextT, ActionT]):
         )
 
     async def match(self, text: str) -> ActionT | None:
-        match = await self.match_info(text)
-        if match is None:
+        matches = await self.ai_turn(text)
+        if not matches:
             return None
-        return match.action
+        return matches[0].action
 
-    async def match_info(
+    async def ai_turn(
         self,
         text: str,
         *,
-        message: discord.Message | None = None,
-        interaction: discord.Interaction | None = None,
-        assistant_context: str | None = None,
-        assistant_context_source: discord.Message | discord.Interaction | None = None,
-    ) -> AIMatch[ContextT, ActionT] | None:
-        matches = await self.match_infos(
-            text,
-            message=message,
-            interaction=interaction,
-            assistant_context=assistant_context,
-            assistant_context_source=assistant_context_source,
-        )
-        return matches[0] if matches else None
-
-    async def match_infos(
-        self,
-        text: str,
-        *,
-        message: discord.Message | None = None,
-        interaction: discord.Interaction | None = None,
+        source: discord.Message | discord.Interaction | None = None,
         assistant_context: str | None = None,
         assistant_context_source: discord.Message | discord.Interaction | None = None,
     ) -> list[AIMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
 
+        channel_id = self._source_channel_id(source)
+        history = self._history_messages(channel_id)
+        if assistant_context is not None:
+            self.record_message(
+                "assistant",
+                assistant_context,
+                assistant_context_source,
+                channel_id=channel_id,
+            )
+        self.record_message("user", text, source, channel_id=channel_id)
         formatted_text = self.format_block(
             "user",
-            self._format_source_text(
-                text,
-                message=message,
-                interaction=interaction,
-            ),
+            self.format_message(text, source),
         )
         formatted_assistant_context = (
             self.format_block(
                 "assistant",
                 self.format_message(assistant_context, assistant_context_source),
-                is_reply_context=True,
             )
             if assistant_context is not None else
             None
         )
-        channel_id = self._source_channel_id(message) if message is not None else self._source_channel_id(interaction)
-        history = self._history_messages(channel_id)
 
         async with self._lock:
             client = self._ensure_client()
@@ -416,6 +396,8 @@ class AICore(Generic[ContextT, ActionT]):
             )]
 
         action_by_tool = {action.tool_name: action for action in self._actions}
+        message_source = source if isinstance(source, discord.Message) else None
+        interaction_source = source if isinstance(source, discord.Interaction) else None
         for call in calls[:_MAX_CALLS]:
             action = action_by_tool.get(call.name)
             if action is None:
@@ -425,8 +407,8 @@ class AICore(Generic[ContextT, ActionT]):
             kwargs = self._coerce_arguments(
                 action,
                 call.arguments,
-                message=message,
-                interaction=interaction,
+                message=message_source,
+                interaction=interaction_source,
             )
             if kwargs is None:
                 self.logger.debug(f"tool call {call.name} rejected because arguments did not validate: {call.arguments!r}.")
@@ -544,19 +526,6 @@ class AICore(Generic[ContextT, ActionT]):
             connection.execute("DELETE FROM ai_history_messages WHERE id = ?", (message_id,))
             total -= char_count
 
-    def _format_source_text(
-        self,
-        text: str,
-        *,
-        message: discord.Message | None,
-        interaction: discord.Interaction | None,
-    ) -> str:
-        if message is not None:
-            return self.format_message(text, message)
-        if interaction is not None:
-            return self.format_message(text, interaction)
-        return text
-
     async def _wait_for_rate_limit(self) -> None:
         now = time.monotonic()
         if self._last_request_at is not None:
@@ -585,11 +554,11 @@ class AICore(Generic[ContextT, ActionT]):
         client: 'AsyncOpenAI',
         text: str,
         actions: list[_AIAction[ContextT, ActionT]],
-        assistant_context: str | None,
+        reply_message: str | None,
         history: list[_HistoryMessage],
     ) -> tuple[str, list[_ToolCall]]:
-        assistant_context_text = assistant_context.strip() if assistant_context is not None else ""
-        has_assistant_context = bool(assistant_context_text)
+        reply_message_text = reply_message.strip() if reply_message is not None else ""
+        has_reply_message = bool(reply_message_text)
         system_prompt = self._system_prompt(actions)
         tools = [self._tool_schema(action) for action in actions]
         messages: list[Any] = [
@@ -599,9 +568,9 @@ class AICore(Generic[ContextT, ActionT]):
             {"role": item.role, "content": item.content}
             for item in history
         )
-        if has_assistant_context:
-            messages.append({"role": "assistant", "content": assistant_context_text})
-            self.logger.debug(f"assistant context: {assistant_context!r}.")
+        if has_reply_message:
+            messages.append({"role": "assistant", "content": reply_message_text})
+            self.logger.debug(f"reply message: {reply_message!r}.")
         messages.append({"role": "user", "content": text})
         self.logger.debug(f"input: {text!r}.")
         self.logger.debug(f"system prompt: {system_prompt!r}.")
@@ -639,7 +608,7 @@ class AICore(Generic[ContextT, ActionT]):
             "If no command fits, respond normally.\n"
             "Input-only metadata syntax follows. Use it only to understand Discord context. Never copy, quote, mention, or output these tags unless the user explicitly asks about the raw prompt format.\n"
             "<|message_header_start|>...<|message_header_end|> appears at the start of Discord message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
-            "<|reply_start|>...<|reply_end|> contains the Discord message being replied to (by you or a previous command). If the user asks about the previous message or replied-to message, answer from this block without saying the tag names.\n"
+            "When the current user replied to a previous Bogobot message, that replied-to message appears as the assistant message immediately before the current user message. If the user asks about the previous message or replied-to message, answer from that assistant message.\n"
             "<|command_start|>JSON<|command_end|> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
         )
 
