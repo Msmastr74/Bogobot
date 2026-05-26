@@ -99,6 +99,24 @@ async def setup(bot: BotCore):
             return bot.config[legacy_name]
         return default
 
+    async def set_video_archive_enabled(enabled: bool) -> None:
+        nonlocal archive_config, video_config
+
+        archive_config_raw = bot.config.get("archive")
+        if not isinstance(archive_config_raw, dict):
+            archive_config_raw = {}
+            bot.config["archive"] = archive_config_raw
+        archive_config = archive_config_raw
+
+        video_config_raw = archive_config.get("video")
+        if not isinstance(video_config_raw, dict):
+            video_config_raw = {}
+            archive_config["video"] = video_config_raw
+        video_config = video_config_raw
+
+        video_config["enabled"] = enabled
+        await bot.save_config()
+
     video_archiver = VideoArchiver(
         directory=Path(video_setting("dir", DEFAULT_VIDEO_ARCHIVE_DIR)),
         width=int(video_setting("width", 640)),
@@ -513,6 +531,7 @@ async def setup(bot: BotCore):
     ):
         if action == "start":
             video_archiver.start()
+            await set_video_archive_enabled(True)
             status = video_archiver.status()
             await bot.discord.send(
                 f"Video archive recording started. Current file: `{status.current_path or 'pending first frame'}`",
@@ -523,6 +542,7 @@ async def setup(bot: BotCore):
 
         if action == "stop":
             video_archiver.stop()
+            await set_video_archive_enabled(False)
             await bot.discord.send(
                 "Video archive recording stopped.",
                 response=True,
@@ -533,6 +553,7 @@ async def setup(bot: BotCore):
         if action == "restart":
             video_archiver.stop()
             video_archiver.start()
+            await set_video_archive_enabled(True)
             status = video_archiver.status()
             await bot.discord.send(
                 f"Video archive recording restarted. Current file: `{status.current_path or 'pending first frame'}`",
