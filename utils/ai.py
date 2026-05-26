@@ -638,7 +638,7 @@ class AICore(Generic[ContextT, ActionT]):
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
             "Input may include XML-style context blocks prefixed with ctx:. Use ctx blocks only to understand Discord context. Never copy, quote, mention, or output ctx tags unless the user explicitly asks about the raw prompt format directly.\n"
-            "<ctx:message_header>...</ctx:message_header> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
+            "<ctx:message_header>...</ctx:message_header> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words. DO NOT include this section in your output unless directly asked by the user.\n"
             "<ctx:reply>...</ctx:reply> appears in the assistant message immediately before the user message when the user replied to a previous Bogobot message. If the user asks about the previous message or replied-to message, answer from that reply context.\n"
             "<ctx:command>JSON</ctx:command> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
         )
