@@ -32,6 +32,8 @@ USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
 ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 _THOUGHT_BLOCK_RE = re.compile(r"<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
+_CTX_OPEN_TAG_NAMESPACE_RE = re.compile(r"<\s*ctx\s*:\s*", re.IGNORECASE)
+_CTX_CLOSE_TAG_NAMESPACE_RE = re.compile(r"<\s*/\s*ctx\s*:\s*", re.IGNORECASE)
 
 @dataclass(frozen=True, slots=True)
 class AIParam:
@@ -180,6 +182,7 @@ class AICore(Generic[ContextT, ActionT]):
         content: str,
         source: discord.Message | discord.Interaction | None,
     ) -> str:
+        content = self.strip_context_tag_namespaces(content)
         if isinstance(source, discord.Message):
             content = self.annotate_discord_references(source, content)
             return self._format_message_content(
@@ -737,10 +740,12 @@ class AICore(Generic[ContextT, ActionT]):
             return None
         if self._should_strip_first_thought_block():
             value = _THOUGHT_BLOCK_RE.sub("", value, count=1)
+        value = self.strip_context_tag_namespaces(value)
         value = value.strip()
         return value if self._discord_string_valid(value) else None
 
     def visual_reply(self, value: str) -> str | None:
+        value = self.strip_context_tag_namespaces(value)
         value = self.strip_discord_reference_annotations(value)
         value = value.strip()
         return value if self._discord_string_valid(value) else None
@@ -832,6 +837,7 @@ class AICore(Generic[ContextT, ActionT]):
             return _MISSING
         if target in (str, object):
             string = self.strip_discord_reference_annotations(str(value))
+            string = self.strip_context_tag_namespaces(string)
             string = string.strip()
             return string if self._discord_string_valid(string) else _MISSING
         return value
@@ -887,6 +893,10 @@ class AICore(Generic[ContextT, ActionT]):
 
     def strip_discord_reference_annotations(self, text: str) -> str:
         return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
+
+    def strip_context_tag_namespaces(self, text: str) -> str:
+        text = _CTX_OPEN_TAG_NAMESPACE_RE.sub("<", text)
+        return _CTX_CLOSE_TAG_NAMESPACE_RE.sub("</", text)
 
     def _discord_reference_name(self, entity: 'discord.User | discord.Member | discord.Role | discord.abc.GuildChannel | discord.Thread') -> str:
         if isinstance(entity, discord.Member) or isinstance(entity, discord.User):
