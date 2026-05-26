@@ -291,6 +291,13 @@ class AICore(Generic[ContextT, ActionT]):
             "</ctx:command>"
         )
 
+    def format_reply(self, content: str, source: discord.Message | discord.Interaction | None = None) -> str:
+        return (
+            "<ctx:reply>\n"
+            f"{self.format_message(content, source)}\n"
+            "</ctx:reply>"
+        )
+
     def _format_message_content(
         self,
         *,
@@ -336,6 +343,27 @@ class AICore(Generic[ContextT, ActionT]):
             _HistoryMessage(role, message),
         )
 
+    def record_reply(
+        self,
+        content: str,
+        source: discord.Message | discord.Interaction | None = None,
+        *,
+        channel_id: int | None = None,
+    ) -> None:
+        channel_id = channel_id if channel_id is not None else self._source_channel_id(source)
+        if not content.strip():
+            return
+
+        message = self.format_reply(content, source)
+        self.logger.debug(f"\n[role=assistant channel_id={channel_id}]\n{message}")
+        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
+            return
+
+        self._record_history_message(
+            channel_id,
+            _HistoryMessage("assistant", message),
+        )
+
     async def match(self, text: str) -> ActionT | None:
         matches = await self.ai_turn(text)
         if not matches:
@@ -356,8 +384,7 @@ class AICore(Generic[ContextT, ActionT]):
         channel_id = self._source_channel_id(source)
         history = self._history_messages(channel_id)
         if assistant_context is not None:
-            self.record_message(
-                "assistant",
+            self.record_reply(
                 assistant_context,
                 assistant_context_source,
                 channel_id=channel_id,
@@ -368,10 +395,7 @@ class AICore(Generic[ContextT, ActionT]):
             self.format_message(text, source),
         )
         formatted_assistant_context = (
-            self.format_block(
-                "assistant",
-                self.format_message(assistant_context, assistant_context_source),
-            )
+            self.format_reply(assistant_context, assistant_context_source)
             if assistant_context is not None else
             None
         )
@@ -615,7 +639,7 @@ class AICore(Generic[ContextT, ActionT]):
             "If no command fits, respond normally.\n"
             "Input may include XML-style context blocks prefixed with ctx:. Use ctx blocks only to understand Discord context. Never copy, quote, mention, or output ctx tags unless the user explicitly asks about the raw prompt format directly.\n"
             "<ctx:message_header>...</ctx:message_header> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
-            "When the current user replied to a previous Bogobot message, that replied-to message appears as the assistant message immediately before the current user message. If the user asks about the previous message or replied-to message, answer from that assistant message.\n"
+            "<ctx:reply>...</ctx:reply> appears in the assistant message immediately before the user message when the user replied to a previous Bogobot message. If the user asks about the previous message or replied-to message, answer from that reply context.\n"
             "<ctx:command>JSON</ctx:command> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
         )
 
