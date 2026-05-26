@@ -10,6 +10,8 @@ telemetry.jsonl
 ai_history.sqlite3
 ai_history.sqlite3-*
 accounts.json
+archive/video/
+archive/monitor.bga
 tessdata/
 monitor.bga
 bogotree.json

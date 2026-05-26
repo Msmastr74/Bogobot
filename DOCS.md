@@ -35,9 +35,7 @@ User-edited settings:
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
-- `archive_path`: Path to the compact monitor archive. Defaults to `archive/monitor.bga`.
-- `archive_flush_interval`: Seconds to batch monitor archive records before flushing to disk. Defaults to 60.
-- `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
+- `archive`: Optional archive configuration object. See below for fields.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
 - `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, and implementation notes.
@@ -59,7 +57,35 @@ Account storage:
 - Each account record contains `perm_level` plus any plugin-owned root-level annotation fields.
 - On ready, the bot creates basic accounts for visible guild members and saves the configured `owner_uid` at permission level 4.
 
+Archive storage:
+- `archive/monitor.bga`, or the file named by `archive.path`, stores compact monitor value chunks.
+- `archive.video.dir` stores visual archive files. The active current-day file is `.ts`; old days are remuxed to `archive.video.final_format`. The active `.ts` uses a small `.start` sidecar for the first frame timestamp; finalized files store that timestamp as `bogobot_start_timestamp` container metadata.
+
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
+
+Archive configuration:
+
+```json
+"archive": {
+  "path": "archive/monitor.bga",
+  "flush_interval": 60,
+  "chunk_event_limit": 200,
+  "video": {
+    "enabled": false,
+    "dir": "archive/video",
+    "width": 640,
+    "height": 360,
+    "fps": 1,
+    "crf": 36,
+    "preset": "superfast",
+    "tune": "animation",
+    "keyint": 10,
+    "final_format": "mkv"
+  }
+}
+```
+
+The compact monitor archive uses `path`, `flush_interval`, and `chunk_event_limit`. The visual archive records to daily appendable MPEG-TS `.ts` working files in `video.dir` when `video.enabled` is true or `/manage video_archive start` is used. `video.crf` controls HEVC quality/size; higher values are smaller and lower quality. `36` is an aggressive archive default, not a required value. `video.tune` is passed to FFmpeg's `libx265 -tune` option, with `animation` as the default because the stream is mostly flat-color UI. Set it to `null` or an empty string to omit `-tune`. Current-day `.ts` files stay appendable across stops and restarts. When a recording rolls to a new day or an old `.ts` file is found on startup, the bot remuxes finished `.ts` files to `video.final_format` (`mkv`, `mp4`, or `ts`). The bot still accepts older top-level `archive_*` and `archive_video_*` keys as fallbacks.
 
 ## Discord Subclass
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.
@@ -232,7 +258,9 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
+- `/manage video_archive start|stop|restart|status`: Starts, stops, restarts, or inspects visual stream archive recording. Video archive files are daily appendable MPEG-TS files in `archive.video.dir`.
 - `/archive`: Shows archived monitor values with a public paginated view.
+- `/archive_frame time`: Extracts a visual archive frame. `time` accepts epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
 - `/get_sort`: Shows the latest observed sort state, including a frame image when available.

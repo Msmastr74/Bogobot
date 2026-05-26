@@ -2,20 +2,28 @@ import asyncio
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
+import re
+import tempfile
+from typing import Literal
 
 import discord
 
 from bogobot_core import BotCore
+from utils import groups
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from utils.ai import AIParam, action
+from utils.video_archival import VideoArchiver
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
 DEFAULT_FLUSH_INTERVAL_SECONDS = 60.0
 DEFAULT_CHUNK_EVENT_LIMIT = 200
+DEFAULT_VIDEO_ARCHIVE_DIR = "archive/video"
 ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
 ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
+DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFR])?>$")
+EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
 
 @dataclass(frozen=True)
@@ -36,21 +44,72 @@ class ArchiveState:
     snapshot_end: int
 
 
+def parse_archive_frame_time(value: str) -> float | None:
+    value = value.strip()
+    match = DISCORD_TIMESTAMP_RE.fullmatch(value)
+    if match is not None:
+        return float(match.group("timestamp"))
+
+    try:
+        timestamp = float(value)
+    except ValueError:
+        return None
+
+    if abs(timestamp) >= EPOCH_MILLISECONDS_THRESHOLD:
+        timestamp /= 1000
+    return timestamp
+
+
 async def setup(bot: BotCore):
-    archive_path = Path(bot.config.get("archive_path", DEFAULT_ARCHIVE_PATH))
+    manage = groups.manage(bot)
+    archive_config_raw = bot.config.get("archive", {})
+    archive_config = archive_config_raw if isinstance(archive_config_raw, dict) else {}
+
+    def archive_setting(name: str, default):
+        legacy_name = f"archive_{name}"
+        if name in archive_config:
+            return archive_config[name]
+        if legacy_name in bot.config:
+            return bot.config[legacy_name]
+        return default
+
+    archive_path = Path(archive_setting("path", DEFAULT_ARCHIVE_PATH))
     flush_interval = max(
         1.0,
-        float(bot.config.get(
-            "archive_flush_interval",
+        float(archive_setting(
+            "flush_interval",
             DEFAULT_FLUSH_INTERVAL_SECONDS,
         )),
     )
     chunk_event_limit = max(
         1,
-        int(bot.config.get(
-            "archive_chunk_event_limit",
+        int(archive_setting(
+            "chunk_event_limit",
             DEFAULT_CHUNK_EVENT_LIMIT,
         )),
+    )
+    video_config_raw = archive_config.get("video", {})
+    video_config = video_config_raw if isinstance(video_config_raw, dict) else {}
+
+    def video_setting(name: str, default):
+        legacy_name = f"archive_video_{name}"
+        if name in video_config:
+            return video_config[name]
+        if legacy_name in bot.config:
+            return bot.config[legacy_name]
+        return default
+
+    video_archiver = VideoArchiver(
+        directory=Path(video_setting("dir", DEFAULT_VIDEO_ARCHIVE_DIR)),
+        width=int(video_setting("width", 640)),
+        height=int(video_setting("height", 360)),
+        fps=float(video_setting("fps", bot.config.get("fps", 1))),
+        crf=int(video_setting("crf", 36)),
+        preset=str(video_setting("preset", "superfast")),
+        tune=video_setting("tune", "animation"),
+        keyint=int(video_setting("keyint", 10)),
+        final_format=str(video_setting("final_format", "mkv")),
+        logger=bot.logger.getChild("VideoArchive"),
     )
 
     pending_parts: list[str] = []
@@ -423,6 +482,8 @@ async def setup(bot: BotCore):
 
         if flush_task is None or flush_task.done():
             flush_task = asyncio.create_task(flush_loop())
+        if bool(video_setting("enabled", False)):
+            video_archiver.start()
 
     @bot.close_callback
     async def close():
@@ -434,6 +495,71 @@ async def setup(bot: BotCore):
                 pass
 
         await flush_pending()
+        video_archiver.close()
+
+    @bot.new_frame_callback
+    def archive_video_frame(img):
+        video_archiver.record_frame(img)
+
+    @manage.command(
+        name="video_archive",
+        description="Manage visual stream archive recording",
+        perm_requirement=2,
+        defer=False,
+    )
+    async def video_archive(
+        interaction: discord.Interaction,
+        action: Literal["start", "stop", "restart", "status"],
+    ):
+        if action == "start":
+            video_archiver.start()
+            status = video_archiver.status()
+            await bot.discord.send(
+                f"Video archive recording started. Current file: `{status.current_path or 'pending first frame'}`",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if action == "stop":
+            video_archiver.stop()
+            await bot.discord.send(
+                "Video archive recording stopped.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if action == "restart":
+            video_archiver.stop()
+            video_archiver.start()
+            status = video_archiver.status()
+            await bot.discord.send(
+                f"Video archive recording restarted. Current file: `{status.current_path or 'pending first frame'}`",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        status = video_archiver.status()
+        last_frame = (
+            f"<t:{round(status.last_frame_at)}:R>"
+            if status.last_frame_at is not None else
+            "never"
+        )
+        current_path = str(status.current_path) if status.current_path is not None else "pending first frame"
+        await bot.discord.send(
+            "\n".join((
+                f"Enabled: `{status.enabled}`",
+                f"FFmpeg running: `{status.running}`",
+                f"Current file: `{current_path}`",
+                f"Recorded frames: `{status.recorded_frames}`",
+                f"Dropped frames: `{status.dropped_frames}`",
+                f"Last frame: {last_frame}",
+            )),
+            response=True,
+            ephemeral=True,
+        )
 
     @bot.new_value_callback
     async def archive_value(
@@ -714,7 +840,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "archive",
-        "View monitor archive.",
+        "View monitor archive. Use @time or provide epoch seconds or ms.",
         params={
             "value": AIParam(type=int | None, required=False),
         },
@@ -746,3 +872,60 @@ async def setup(bot: BotCore):
             response=True,
             ephemeral=False,
         )
+
+    @bot.setup.command(
+        name="archive_frame",
+        description="View a visual archive frame by timestamp",
+        perm_requirement=0,
+        eph=False,
+    )
+    @action(
+        "archive_frame",
+        "Show a visual archive frame by timestamp.",
+        params={
+            "time": AIParam(type=str),
+        },
+    )
+    async def archive_frame(
+        interaction: discord.Interaction,
+        time: str,
+    ):
+        timestamp = parse_archive_frame_time(time)
+        if timestamp is None:
+            await bot.discord.send(
+                "Time must be epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        timestamp_seconds = round(timestamp)
+        with tempfile.TemporaryDirectory(prefix="bogobot_archive_frame_") as temp_dir:
+            output_path = Path(temp_dir) / f"archive_frame_{timestamp_seconds}.jpg"
+            extracted = await asyncio.to_thread(
+                video_archiver.extract_frame,
+                timestamp,
+                output_path,
+            )
+            if not extracted:
+                await bot.discord.send(
+                    f"No archived frame found for <t:{timestamp_seconds}:F>.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+
+            file = discord.File(
+                output_path,
+                filename=f"archive_frame_{timestamp_seconds}.jpg",
+            )
+            try:
+                await bot.discord.send(
+                    f"Archive frame for <t:{timestamp_seconds}:F>",
+                    files=[file],
+                    response=True,
+                    ephemeral=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            finally:
+                file.close()

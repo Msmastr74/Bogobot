@@ -40,9 +40,7 @@ Go into `config.json` and provide the main credentials:
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
- * `archive_path`: Optional compact monitor archive path. Defaults to `archive/monitor.bga`.
- * `archive_flush_interval`: Optional seconds between archive flushes. Defaults to `60`.
- * `archive_chunk_event_limit`: Optional maximum monitor values per archive chunk. Defaults to `200`.
+ * `archive`: Optional archive configuration object. It contains compact monitor archive settings and optional visual archive settings, including appendable daily `.ts` recording and old-day remuxing to `mkv`, `mp4`, or `ts`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
  * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, and prompt/context notes.
 
@@ -100,10 +98,12 @@ Bogobot implements several slash commands for stream management and data retriev
  * /get_sort: Retrieves the latest observed sort state and frame image when stream data is available.
  * @mention AI actions: Mention Bogobot and it will interpret the text based on registered AI actions. See `AI.md`.
  * /archive: Shows archived monitor values.
+ * /archive_frame: Shows a visual archive frame by epoch or Discord timestamp.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts, stops, or resends a persistent top leaderboard message.
  * /manage stats_monitor: Starts, stops, or resends a persistent stream-stats message.
+ * /manage video_archive: Starts, stops, restarts, or shows status for visual stream archive recording.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /milestone_info: Shows recent milestone history and frame images.
  * /manage announce: Sends a simple bot-authored announcement.
