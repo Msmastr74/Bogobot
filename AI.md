@@ -156,14 +156,14 @@ user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
 Reply context is sent as a separate assistant-role message:
 
 ```xml
-<ctx:reply>
+<ctx:replied_to>
 <ctx:message_header>
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
 </ctx:message_header>
 previous bot message
-</ctx:reply>
+</ctx:replied_to>
 ```
 
 Command calls are recorded in history like this:

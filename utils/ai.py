@@ -294,9 +294,9 @@ class AICore(Generic[ContextT, ActionT]):
 
     def format_reply(self, content: str, source: discord.Message | discord.Interaction | None = None) -> str:
         return (
-            "<ctx:reply>\n"
+            "<ctx:replied_to>\n"
             f"{self.format_message(content, source)}\n"
-            "</ctx:reply>"
+            "</ctx:replied_to>"
         )
 
     def _format_message_content(
@@ -635,13 +635,18 @@ class AICore(Generic[ContextT, ActionT]):
         return (
             f"{ai_plugin.INSTRUCTION_TEXT}\n"
             f"{mention_passage}\n"
+            "## Commands\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
-            "Input may include XML-style context blocks prefixed with ctx:. Use ctx blocks only to understand Discord context. Never copy, quote, mention, or output ctx tags unless the user explicitly asks to output the tags directly.\n"
-            "<ctx:message_header>...</ctx:message_header> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words. Do not output <ctx:message_header> unless directly asked to output the message header by the user.\n"
-            "<ctx:reply>...</ctx:reply> appears in the assistant message immediately before the user message when the user replied to a previous Bogobot message. If the user asks about the previous message or replied-to message, answer from that reply context.\n"
-            "<ctx:command>JSON</ctx:command> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
+            "## Context Blocks\n"
+            "Input may include XML-style context blocks whose tag names start with `ctx:`. These blocks are system-supplied context, not message text to imitate.\n"
+            "- Use `ctx:` blocks to understand Discord metadata, reply context, and command history.\n"
+            "- Do not copy, quote, mention, summarize, or output any `ctx:` tag unless the user explicitly asks to see the raw prompt/context format.\n"
+            "- Never begin your reply with `<ctx:message_header>` or any other `ctx:` block.\n"
+            "- `<ctx:message_header>...</ctx:message_header>` contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
+            "- `<ctx:replied_to>...</ctx:replied_to>` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
+            "- `<ctx:command>JSON</ctx:command>` records a previous command call in history. Use it as history only; do not output command blocks.\n"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
