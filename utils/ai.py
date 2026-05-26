@@ -617,8 +617,8 @@ class AICore(Generic[ContextT, ActionT]):
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
-            "Input-only metadata syntax follows. Use it only to understand Discord context. Never copy, quote, mention, or output these tags unless the user explicitly asks about the raw prompt format.\n"
-            "<|message_header_start|>...<|message_header_end|> appears at the start of Discord message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
+            "Input-only metadata syntax follows. Use it only to understand Discord context. Never copy, quote, mention, or output these tags unless the user explicitly asks about the raw prompt format directly.\n"
+            "<|message_header_start|>...<|message_header_end|> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words. Do not output this metadata as part of your message unless the user has asked in a direct way.\n"
             "When the current user replied to a previous Bogobot message, that replied-to message appears as the assistant message immediately before the current user message in the format <|reply_start|>...<|reply_end|>. If the user asks about the previous message or replied-to message, answer from that assistant message.\n"
             "<|command_start|>JSON<|command_end|> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
         )
