@@ -216,30 +216,37 @@ class AICore(Generic[ContextT, ActionT]):
                 for user in source.mentions
             }
             role_names = {
-                str(role.id): role.name
+                str(role.id): self._discord_reference_name(role)
                 for role in source.role_mentions
             }
             channel_names = {
-                str(channel.id): channel.name
+                str(channel.id): self._discord_reference_name(channel)
                 for channel in source.channel_mentions
             }
         else:
-            guild = source.guild
-            user_names = {}
-            role_names = {}
-            channel_names = {}
+            user_names: dict[str, str] = {}
+            role_names: dict[str, str] = {}
+            channel_names: dict[str, str] = {}
+        guild = source.guild
+        if guild:
             for _, snowflake in USER_MENTION_RE.findall(text):
-                user = guild.get_member(int(snowflake)) if guild is not None else None
+                if snowflake in user_names:
+                    continue
+                user = guild.get_member(int(snowflake))
                 if user is not None:
                     user_names[snowflake] = self._discord_reference_name(user)
             for snowflake in ROLE_MENTION_RE.findall(text):
-                role = guild.get_role(int(snowflake)) if guild is not None else None
+                if snowflake in role_names:
+                    continue
+                role = guild.get_role(int(snowflake))
                 if role is not None:
-                    role_names[snowflake] = role.name
+                    role_names[snowflake] = self._discord_reference_name(role)
             for snowflake in CHANNEL_MENTION_RE.findall(text):
-                channel = guild.get_channel(int(snowflake)) if guild is not None else None
+                if snowflake in channel_names:
+                    continue
+                channel = guild.get_channel(int(snowflake))
                 if channel is not None:
-                    channel_names[snowflake] = channel.name
+                    channel_names[snowflake] = self._discord_reference_name(channel)
 
         def annotate_user(match: re.Match[str]) -> str:
             prefix, snowflake = match.groups()
@@ -859,11 +866,9 @@ class AICore(Generic[ContextT, ActionT]):
     def strip_discord_reference_annotations(self, text: str) -> str:
         return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
 
-    def _discord_reference_name(self, entity: discord.User | discord.Member | discord.Role | discord.abc.GuildChannel) -> str:
-        if isinstance(entity, discord.Member):
+    def _discord_reference_name(self, entity: 'discord.User | discord.Member | discord.Role | discord.abc.GuildChannel | discord.Thread') -> str:
+        if isinstance(entity, discord.Member) or isinstance(entity, discord.User):
             return entity.display_name
-        if isinstance(entity, discord.User):
-            return entity.global_name or entity.name
         return entity.name
 
     def _compact_description(self, text: str) -> str:

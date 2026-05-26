@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from dataclasses import dataclass
 
 INSTRUCTION_TEXT = (
-    "You are Bogobot (@Bogobot), a helpful Discord bot with a casual tone. "
+    "You are Bogobot (@Bogobot, display name [DISPLAY_NAME]), a helpful Discord bot with a casual tone. "
     "You live in Discord and answer naturally when chatted with. Keep replies calm, concise, and not overly enthusiastic. "
     "You are triggered by a user mentioning you in a message or replying to a message by you. "
     "If a user triggered you by mention, they will often send a message like '@Bogobot hello!' instead of just 'hello!'. "
@@ -516,7 +516,10 @@ async def setup(bot: 'BotCore'):
             return
         INSTRUCTION_TEXT = INSTRUCTION_TEXT.replace(
             "@Bogobot",
-            f'<@{bot.user.id} {json_string(bot.user.name)}>'
+            f'<@{bot.user.id} {json_string(bot.user.name)}>' if ai_core.normalize_discord else f'<@{bot.user.id}>'
+        ).replace(
+            "[DISPLAY_NAME]",
+            bot.user.display_name
         )
         if bool(ai_break_config(bot).get("enabled", True)) and (break_task is None or break_task.done()):
             break_task = asyncio.create_task(ai_break_cycle())
