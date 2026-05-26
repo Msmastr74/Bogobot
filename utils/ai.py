@@ -286,9 +286,9 @@ class AICore(Generic[ContextT, ActionT]):
             "arguments": self._json_safe(arguments or {}),
         }
         return (
-            "<|command_start|>"
+            "<ctx:command>"
             f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-            "<|command_end|>"
+            "</ctx:command>"
         )
 
     def _format_message_content(
@@ -305,12 +305,12 @@ class AICore(Generic[ContextT, ActionT]):
         timestamp = created_at.astimezone(timezone.utc).isoformat()
         content = content.strip()
         return (
-            "<|message_header_start|>\n"
+            "<ctx:message_header>\n"
             f"{id_line}"
             f"{interaction_line}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
-            "<|message_header_end|>\n"
+            "</ctx:message_header>\n"
             f"{content}"
         )
 
@@ -322,18 +322,18 @@ class AICore(Generic[ContextT, ActionT]):
         *,
         channel_id: int | None = None,
     ) -> None:
-        if not self.history_enabled or self.history_char_budget <= 0:
+        channel_id = channel_id if channel_id is not None else self._source_channel_id(source)
+        if not content.strip():
             return
 
-        channel_id = channel_id if channel_id is not None else self._source_channel_id(source)
-        if channel_id is None:
-            return
-        if not content.strip():
+        message = self.format_block(role, self.format_message(content, source))
+        self.logger.debug(f"\n[role={role} channel_id={channel_id}]\n{message}")
+        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
             return
 
         self._record_history_message(
             channel_id,
-            _HistoryMessage(role, self.format_block(role, self.format_message(content, source))),
+            _HistoryMessage(role, message),
         )
 
     async def match(self, text: str) -> ActionT | None:
@@ -577,11 +577,7 @@ class AICore(Generic[ContextT, ActionT]):
         )
         if has_reply_message:
             messages.append({"role": "assistant", "content": reply_message_text})
-            self.logger.debug(f"reply message: {reply_message!r}.")
         messages.append({"role": "user", "content": text})
-        self.logger.debug(f"input: {text!r}.")
-        self.logger.debug(f"system prompt: {system_prompt!r}.")
-        self.logger.debug(f"tools: {tools!r}.")
         try:
             response = await client.chat.completions.create(
                 model=self.model_name,
@@ -599,9 +595,9 @@ class AICore(Generic[ContextT, ActionT]):
             return tool_error, []
         message = response.choices[0].message
         content = message.content or ""
-        self.logger.debug(f"raw response: {content!r}.")
+        self.logger.debug(f"raw response:\n{content}")
         raw_tool_calls = message.tool_calls or []
-        self.logger.debug(f"raw tool calls: {raw_tool_calls!r}.")
+        self.logger.debug(f"raw tool calls:\n{raw_tool_calls}")
         return content, self._parse_native_tool_calls(raw_tool_calls)
 
     def _system_prompt(
@@ -617,10 +613,10 @@ class AICore(Generic[ContextT, ActionT]):
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
-            "Input-only metadata syntax follows. Use it only to understand Discord context. Never copy, quote, mention, or output these tags unless the user explicitly asks about the raw prompt format directly.\n"
-            "<|message_header_start|>...<|message_header_end|> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words. Do not output this metadata as part of your message unless the user has asked in a direct way.\n"
-            "When the current user replied to a previous Bogobot message, that replied-to message appears as the assistant message immediately before the current user message in the format <|reply_start|>...<|reply_end|>. If the user asks about the previous message or replied-to message, answer from that assistant message.\n"
-            "<|command_start|>JSON<|command_end|> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
+            "Input may include XML-style context blocks prefixed with ctx:. Use ctx blocks only to understand Discord context. Never copy, quote, mention, or output ctx tags unless the user explicitly asks about the raw prompt format directly.\n"
+            "<ctx:message_header>...</ctx:message_header> appears automatically at the start of message content and contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
+            "When the current user replied to a previous Bogobot message, that replied-to message appears as the assistant message immediately before the current user message. If the user asks about the previous message or replied-to message, answer from that assistant message.\n"
+            "<ctx:command>JSON</ctx:command> may appear in history and records a previous command call. Use it as history only; do not output command blocks.\n"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
