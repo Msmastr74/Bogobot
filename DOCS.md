@@ -40,59 +40,7 @@ User-edited settings:
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
-- `ai`: AI configuration object.
-  - `enabled`: Enables AI @mention actions. Defaults to true.
-  - `model`: OpenAI-compatible chat model used to choose tools and conversational replies. Defaults to `llama-3.1-8b-instant`.
-  - `base_url`: Optional OpenAI-compatible API base URL. For local Ollama, use `http://localhost:11434/v1`.
-  - `api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
-  - `api_key`: Optional API key. When present, the bot copies it into `api_key_env` at startup.
-  - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to 60. Set to 0 for local providers when no artificial throttle is needed.
-  - `normalize_discord`: Whether AI message formatting annotates Discord mentions and channels with readable names. Defaults to true.
-  - `history.enabled`: Enables per-channel short-term AI history. Defaults to true.
-  - `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
-  - `history.char_budget`: Per-channel character budget for AI history. Defaults to 10000. Old history is deleted by oldest stored message.
-  - `breaks.enabled`: Enables the AI break cycle. Defaults to true.
-  - `breaks.active_minutes`: Number of minutes AI stays active before taking a break. Defaults to 20.
-  - `breaks.break_minutes`: Number of minutes AI ignores mentions and `/ai` while on break. Defaults to 10.
-
-Groq can be used through its OpenAI-compatible API:
-
-```json
-"ai": {
-    "model": "llama-3.1-8b-instant",
-    "base_url": "https://api.groq.com/openai/v1",
-    "api_key_env": "GROQ_API_KEY",
-    "api_key": "..."
-}
-```
-
-Local Ollama can also be used through its OpenAI-compatible API. For Ministral 3 8B with a 16k context window, create a local `Modelfile`:
-
-```dockerfile
-FROM ministral-3:8b
-
-PARAMETER num_ctx 16384
-```
-
-Then create the model:
-
-```bash
-ollama create bogobot-ministral -f Modelfile
-```
-
-Use this config:
-
-```json
-"ai": {
-    "model": "bogobot-ministral",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env": "OLLAMA_API_KEY",
-    "api_key": "ollama",
-    "request_interval_seconds": 0
-}
-```
-
-`Modelfile` is gitignored for local experiments.
+- `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, and implementation notes.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
@@ -244,7 +192,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
 
-Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. The shared `utils.ai.AICore` sends OpenAI-compatible tool schemas for matching commands, then treats `message.tool_calls` as command invocations and plain `message.content` as the bot's Discord reply. The `utils.ai` module exposes `ai = AICore[BotActionParameters, BotAction]()` and `action = ai.action`; register actions as `@action("name", "rich description")`. Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `AIParam`, for example `params={"user": AIParam("Discord user id to target.", type=discord.User | discord.Member | None, required=False)}` or `params={"mode": AIParam(type=Literal["numerical", "lexicographic"])}`. `plugins/ai.py` attaches `bot.on_message` as a Discord event, passes replied bot messages as assistant context, matches the text, checks permissions, and runs the selected action. `AICore` formats Discord message metadata and annotates Discord references according to `ai.normalize_discord`.
+Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. See `AI.md` for the AI action API and runtime behavior.
 
 Current plugin responsibilities:
 

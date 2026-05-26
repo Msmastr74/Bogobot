@@ -44,61 +44,9 @@ Go into `config.json` and provide the main credentials:
  * `archive_flush_interval`: Optional seconds between archive flushes. Defaults to `60`.
  * `archive_chunk_event_limit`: Optional maximum monitor values per archive chunk. Defaults to `200`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
- * `ai`: Optional AI configuration object.
-   * `enabled`: Enables AI @mention actions. Defaults to `true`.
-   * `model`: OpenAI-compatible chat model for choosing tools and replying. Defaults to `llama-3.1-8b-instant`.
-   * `base_url`: Optional OpenAI-compatible API base URL. For local Ollama, use `http://localhost:11434/v1`.
-   * `api_key_env`: Environment variable containing the OpenAI-compatible API key. Defaults to `OPENAI_API_KEY`.
-   * `api_key`: Optional API key copied into `api_key_env` at startup.
-   * `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to `60`; use `0` for local providers.
-   * `normalize_discord`: Whether AI message formatting annotates Discord mentions and channels with readable names. Defaults to `true`.
-   * `history.enabled`: Enables per-channel short-term AI history. Defaults to `true`.
-   * `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
-   * `history.char_budget`: Per-channel character budget for AI history. Defaults to `10000`; old history is deleted by oldest stored message.
-   * `breaks.enabled`: Enables AI break periods. Defaults to `true`.
-   * `breaks.active_minutes`: Number of minutes AI stays active before a break. Defaults to `20`.
-   * `breaks.break_minutes`: Number of minutes AI ignores mentions and `/ai` while on break. Defaults to `10`.
+ * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, and prompt/context notes.
 
-For Groq, use its OpenAI-compatible endpoint:
-
-```json
-"ai": {
-    "model": "llama-3.1-8b-instant",
-    "base_url": "https://api.groq.com/openai/v1",
-    "api_key_env": "GROQ_API_KEY",
-    "api_key": "..."
-}
-```
-
-For local Ollama with Ministral 3 8B, create a local `Modelfile` with a larger context window:
-
-```dockerfile
-FROM ministral-3:8b
-
-PARAMETER num_ctx 16384
-```
-
-Then create the model:
-
-```bash
-ollama create bogobot-ministral -f Modelfile
-```
-
-Configure AI to use Ollama's OpenAI-compatible endpoint:
-
-```json
-"ai": {
-    "model": "bogobot-ministral",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env": "OLLAMA_API_KEY",
-    "api_key": "ollama",
-    "request_interval_seconds": 0
-}
-```
-
-`Modelfile` is ignored so local model experiments do not get committed.
-
-`DOCS.md` lists every supported user setting and every bot-managed storage field.
+`DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup and provider examples.
 
 If `local_config.json` exists, `main.py` uses that instead of `config.json`.
 This is useful for local testing without changing the main config file.
@@ -149,7 +97,7 @@ May 20 18:25:33.266 INFO     Bogobot         Automatic account creation finished
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
  * /get_sort: Retrieves the latest observed sort state and frame image when stream data is available.
- * @mention AI actions: Mention Bogobot and it will interpret the text based on predefined actions.
+ * @mention AI actions: Mention Bogobot and it will interpret the text based on registered AI actions. See `AI.md`.
  * /archive: Shows archived monitor values.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.

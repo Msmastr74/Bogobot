@@ -81,7 +81,7 @@ class AICore(Generic[ContextT, ActionT]):
         self,
         *,
         enabled: bool = True,
-        model_name: str = "llama-3.1-8b-instant",
+        model_name: str = "gpt-4o-mini",
         api_key_env: str = "OPENAI_API_KEY",
         base_url: str | None = None,
         request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
