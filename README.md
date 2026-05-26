@@ -64,33 +64,34 @@ python main.py
 
 Your terminal output should look similar to this:
 ```log
-May 20 18:25:29.825 WARNING  discord.client  PyNaCl is not installed, voice will NOT be supported
-May 20 18:25:29.826 WARNING  discord.client  davey is not installed, voice will NOT be supported
-May 20 18:25:29.901 INFO     Bogobot.Plugins Loading plugins...
-May 20 18:25:29.907 INFO     Bogobot.Plugins Loaded Plugin: fun.py
-May 20 18:25:29.911 INFO     Bogobot.Plugins Loaded Plugin: monitor.py
-May 20 18:25:29.912 INFO     Bogobot.Plugins Loaded Plugin: leaderboard.py
-May 20 18:25:29.912 INFO     Bogobot.Plugins Loaded Plugin: accounts.py
-May 20 18:25:29.913 INFO     Bogobot.Plugins Loaded Plugin: milestones.py
-May 20 18:25:29.914 INFO     Bogobot.Plugins Loaded Plugin: utility.py
-May 20 18:25:29.960 INFO     Bogobot.Plugins Loaded Plugin: bogo.py
-May 20 18:25:29.966 INFO     Bogobot.Plugins Loaded Plugin: telemetry.py
-May 20 18:25:29.966 INFO     Bogobot.Plugins Loaded Plugin: get_stats.py
-May 20 18:25:29.967 INFO     Bogobot.Plugins Loaded Plugin: admin.py
-May 20 18:25:29.967 INFO     Bogobot.Plugins Loaded Plugin: cbogo.py
-May 20 18:25:29.970 INFO     Bogobot.Plugins Loaded Plugin: stats.py
-May 20 18:25:29.971 INFO     Bogobot.Plugins Loaded Plugin: archival.py
-May 20 18:25:29.972 INFO     Bogobot.Plugins Loaded Plugin: bogoscramble.py
-May 20 18:25:29.973 INFO     Bogobot.Plugins Loaded Plugin: bogotree.py
-May 20 18:25:29.973 INFO     Bogobot.Plugins Finished loading plugins.
-May 20 18:25:29.973 INFO     discord.client  logging in using static token
-May 20 18:25:30.283 INFO     Bogobot         Syncing Discord command tree (command tree changed)
-May 20 18:25:31.134 INFO     discord.gateway Shard ID None has connected to Gateway (Session ID: ff59975845b575b0d98273c815eebb6b).
-May 20 18:25:33.145 INFO     Bogobot         Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
-May 20 18:25:33.266 INFO     Bogobot         Beginning automatic account creation...
-May 20 18:25:33.266 INFO     Bogobot         Automatically created 0 accounts out of 4 members from REDACTED.
-May 20 18:25:33.266 INFO     Bogobot         Automatically created 0 accounts out of 17 members from Bogobot development (1495827707085197385).
-May 20 18:25:33.266 INFO     Bogobot         Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 21 members from 2 servers.
+May 26 00:51:53.941 WARNING  discord.client  PyNaCl is not installed, voice will NOT be supported
+May 26 00:51:53.941 WARNING  discord.client  davey is not installed, voice will NOT be supported
+May 26 00:51:54.031 INFO     Bogobot.Plugins Loading plugins...
+May 26 00:51:54.033 INFO     Bogobot.Plugins Loaded Plugin: fun.py
+May 26 00:51:54.034 INFO     Bogobot.Plugins Loaded Plugin: monitor.py
+May 26 00:51:54.036 INFO     Bogobot.Plugins Loaded Plugin: leaderboard.py
+May 26 00:51:54.038 INFO     Bogobot.Plugins Loaded Plugin: accounts.py
+May 26 00:51:54.041 INFO     Bogobot.Plugins Loaded Plugin: milestones.py
+May 26 00:51:54.049 INFO     Bogobot.Plugins Loaded Plugin: utility.py
+May 26 00:51:54.049 INFO     Bogobot.Plugins Loaded Plugin: ai.py
+May 26 00:51:54.094 INFO     Bogobot.Plugins Loaded Plugin: bogo.py
+May 26 00:51:54.103 INFO     Bogobot.Plugins Loaded Plugin: telemetry.py
+May 26 00:51:54.105 INFO     Bogobot.Plugins Loaded Plugin: get_stats.py
+May 26 00:51:54.106 INFO     Bogobot.Plugins Loaded Plugin: admin.py
+May 26 00:51:54.109 INFO     Bogobot.Plugins Loaded Plugin: cbogo.py
+May 26 00:51:54.116 INFO     Bogobot.Plugins Loaded Plugin: stats.py
+May 26 00:51:54.121 INFO     Bogobot.Plugins Loaded Plugin: archival.py
+May 26 00:51:54.127 INFO     Bogobot.Plugins Loaded Plugin: bogoscramble.py
+May 26 00:51:54.131 INFO     Bogobot.Plugins Loaded Plugin: bogotree.py
+May 26 00:51:54.131 INFO     Bogobot.Plugins Finished loading plugins.
+May 26 00:51:54.131 INFO     discord.client  logging in using static token
+May 26 00:51:54.469 INFO     Bogobot         Syncing Discord command tree (command tree changed)
+May 26 00:51:55.089 INFO     discord.gateway Shard ID None has connected to Gateway (Session ID: cda0c70dfebc1d29c40011f49a3a6149).
+May 26 00:51:57.136 INFO     Bogobot         Logged in as Bogobot-Testing#8298 (ID: 1499874423019409599)
+May 26 00:51:57.279 INFO     Bogobot         Beginning automatic account creation...
+May 26 00:51:57.279 INFO     Bogobot         Automatically created 0 accounts out of 4 members from REDACTED.
+May 26 00:51:57.279 INFO     Bogobot         Automatically created 0 accounts out of 17 members from Bogobot development (1495827707085197385).
+May 26 00:51:57.280 INFO     Bogobot         Automatic account creation finished. Automatically created a total of 0 accounts out of a total of 21 members from 2 servers.
 ```
 
 ## Features
