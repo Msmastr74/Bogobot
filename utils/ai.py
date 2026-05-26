@@ -608,8 +608,12 @@ class AICore(Generic[ContextT, ActionT]):
         self,
         actions: list[_AIAction[ContextT, ActionT]],
     ) -> str:
+        mention_passage = 'Discord users or members are in the format <@id "User Name"> or <@!id "User Name">. Discord roles are in the format <@&id "Role Name">. Discord channels are in the format <#id "Channel Name">.'
+        if not self.normalize_discord:
+            mention_passage = 'Discord users or members are in the format <@id> or <@!id>. Discord roles are in the format <@&id>. Discord channels are in the format <#id>.'
         return (
             f"{ai_plugin.INSTRUCTION_TEXT}\n"
+            f"{mention_passage}\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
