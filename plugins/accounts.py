@@ -92,7 +92,7 @@ async def setup(bot: BotCore):
         await bot.save_accounts()
         if count > 0:
             bot.logger.info(
-                f"Automatically created an account for <@{member.id}> ({member.name}){f" from guild {member.guild.name} ({member.guild.id})" if isinstance(member, discord.Member) else ""}."
+                f"Automatically created an account for <@{member.id}> ({member.name}){f' from guild {member.guild.name} ({member.guild.id})' if isinstance(member, discord.Member) else ''}."
             )
     
     @bot.guild_join_callback

@@ -40,6 +40,7 @@ User-edited settings:
 - `archive_chunk_event_limit`: Maximum monitor values per archive chunk. Defaults to 200.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `fps`: Frames received per second.
+- `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, and implementation notes.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
@@ -189,6 +190,9 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
 - `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives `new_values: list[tuple[bool, int]]`, `new_value: int`, and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
+- `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
+
+Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. See `AI.md` for the AI action API and runtime behavior.
 
 Current plugin responsibilities:
 
@@ -204,6 +208,7 @@ Current plugin responsibilities:
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
+- `ai.py`: @mention AI action dispatch.
 - `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.

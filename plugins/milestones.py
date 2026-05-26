@@ -9,6 +9,7 @@ from PIL import Image
 
 from bogobot_core import BotCore
 from utils import groups
+from utils.ai import AIParam, action
 from discord import app_commands
 
 
@@ -395,7 +396,7 @@ async def setup(bot: BotCore):
 
     @manage.command(
         name="milestones",
-        description="Subscribe to, unsubscribe from, or spoof/delete milestones.",
+        description="Manage milestone events.",
     )
     async def milestones(
         interaction: discord.Interaction,
@@ -541,8 +542,16 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="milestone_info",
-        description="Show recent in-memory history for a milestone",
+        description="Show milestone history",
         defer=False
+    )
+    @action(
+        "milestone_info",
+        "Show milestone history.",
+        params={
+            "milestone_name": AIParam(),
+            "ephemeral": AIParam(type=bool, required=False, default=True),
+        },
     )
     async def milestone_info(
         interaction: discord.Interaction, milestone_name: str, ephemeral: bool = True
@@ -555,7 +564,7 @@ async def setup(bot: BotCore):
                 response=True, ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=ephemeral)
+        await bot.discord.defer(ephemeral=ephemeral)
 
         history = milestone_tracker.history.get(milestone_name)
         history_count = len(history) if history else 0

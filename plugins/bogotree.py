@@ -9,6 +9,7 @@ import time
 import discord
 
 from bogobot_core import BotCore
+from utils.ai import AIParam, action
 
 
 BOGOTREE_N = 12
@@ -631,6 +632,14 @@ async def setup(bot: BotCore):
         description="Advance the collaborative bogotree",
         eph=False,
         perm_requirement=0,
+    )
+    @action(
+        "bogotree",
+        "Advance the Bogotree puzzle.",
+        params={
+            "action": AIParam(type=Literal["run", "info", "leaderboard"], required=False, default="run"),
+            "target": AIParam("Force a user to be shown on the leaderboard.", type=discord.User | discord.Member | None, required=False),
+        },
     )
     async def bogotree(
         interaction: discord.Interaction,

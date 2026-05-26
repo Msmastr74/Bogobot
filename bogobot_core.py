@@ -17,6 +17,7 @@ from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
 from utils.callbacks import CallbackRegistry, AsyncCallback, MaybeAwaitableT
+from utils.ai import ai
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -151,9 +152,33 @@ class BotCore(discord.Client):
         self._connected = False
         
         self.event(self.on_ready)
+        self.event(self.on_message)
         self.event(self.on_member_join)
         self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
+        ai_config = self.config.get("ai", {})
+        if not isinstance(ai_config, dict):
+            raise TypeError("Config key 'ai' must be an object.")
+        ai_history_config_raw = ai_config.get("history", {})
+        ai_history_config = ai_history_config_raw if isinstance(ai_history_config_raw, dict) else {}
+        ai.configure(
+            enabled=bool(ai_config.get("enabled", True)),
+            model_name=str(ai_config.get("model", ai.model_name)),
+            api_key_env=str(ai_config.get("api_key_env", ai.api_key_env)),
+            base_url=ai_config.get("base_url"),
+            request_interval_seconds=float(ai_config.get(
+                "request_interval_seconds",
+                ai.request_interval_seconds,
+            )),
+            normalize_discord=bool(ai_config.get("normalize_discord", ai.normalize_discord)),
+            history_enabled=bool(ai_history_config.get("enabled", ai.history_enabled)),
+            history_path=str(ai_history_config.get("path", ai.history_path)),
+            history_char_budget=int(ai_history_config.get("char_budget", ai.history_char_budget)),
+            logger=self.logger.getChild("AI"),
+        )
+        api_key = ai_config.get("api_key")
+        if ai.enabled and api_key:
+            os.environ[ai.api_key_env] = str(api_key)
         
         self.milestones: 'MilestoneTracker | None' = None
     
@@ -300,12 +325,23 @@ class BotCore(discord.Client):
 
     async def on_guild_join(self, guild: discord.Guild):
         await self.callbacks.execute_async('guild_join', guild)
-    
+
+    def message_callback(
+        self,
+        callback: AsyncCallback[[discord.Message], MaybeAwaitableT],
+    ):
+        self.callbacks.register('message', callback)
+        return callback
+
+    async def on_message(self, message: discord.Message):
+        await self.callbacks.execute_async('message', message)
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
             self.outer = outer
             self._app_emoji_cache: dict[str, discord.Emoji] | None = None
+            self._previous_status: discord.Status | None = None
+            self._previous_activity: discord.BaseActivity | None = None
 
         async def send(
             self,
@@ -356,6 +392,11 @@ class BotCore(discord.Client):
                 return await interaction.channel.send(**kwargs) # pyright: ignore
 
             return None
+        
+        async def defer(self, ephemeral=False, thinking=False):
+            interaction = current_interaction.get()
+            if interaction and not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=ephemeral, thinking=thinking)
 
         class MessageHandle:
             def __init__(
@@ -493,6 +534,18 @@ class BotCore(discord.Client):
             emojis = await self.outer.fetch_application_emojis()
             for emoji in emojis:
                 self._app_emoji_cache[emoji.name.lower()] = emoji
+        
+        async def change_presence(
+            self, *, 
+            activity: discord.BaseActivity | None = None,
+            status: discord.Status | None = None
+        ):
+            if status is None:
+                status = self._previous_status
+            if activity is None:
+                activity = self._previous_activity
+            self._previous_status, self._previous_activity = status, activity
+            await self.outer.change_presence(activity=activity, status=status)
 
     async def setup_hook(self):
         command_tree_hash = self._command_tree_hash()
@@ -780,8 +833,11 @@ class BotCore(discord.Client):
                 })
                 if not allowed:
                     status = "unauthorized"
+                    if interaction.response.is_done():
+                        await self.outer.discord.cleanup_defer_status(interaction)
+                        return await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
                     return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
-                if defer:
+                if defer and not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=(eph))
                 await func(interaction, *args, **kwargs)
             except Exception as e:

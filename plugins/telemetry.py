@@ -11,6 +11,7 @@ import discord
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
 from utils import groups
+from utils.ai import AIParam, action
 from discord import app_commands
 
 class CommandTelemetryBase(TypedDict):
@@ -668,6 +669,13 @@ async def setup(bot: BotCore):
         perm_requirement=0,
         defer=False,
     )
+    @action(
+        "usage",
+        "Show command usage totals.",
+        params={
+            "commands": AIParam(type=str | None, required=False),
+        },
+    )
     async def usage(interaction: discord.Interaction, commands: str | None = None):
         requested_commands = parse_commands(commands)
         invalid = invalid_commands(requested_commands, valid_public_commands)
@@ -681,7 +689,7 @@ async def setup(bot: BotCore):
             )
             return
 
-        await interaction.response.defer()
+        await bot.discord.defer()
 
         ranked = ranked_usage(requested_commands)
         view = UsageView(

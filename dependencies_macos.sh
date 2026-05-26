@@ -17,11 +17,12 @@ brew install python tesseract ffmpeg streamlink
 
 # Install Python libraries
 # discord.py: Bot API
+# openai: hosted or OpenAI-compatible AI action selection and replies
 # numpy & Pillow: Image manipulation for OCR
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # opencv-python: image preprocessing
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py numpy Pillow aiohttp opencv-python pyuca
+python3 -m pip install discord.py openai numpy Pillow aiohttp opencv-python pyuca
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'

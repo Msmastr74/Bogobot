@@ -6,6 +6,7 @@ import discord
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups, tasks
+from utils.ai import action
 
 from bogobot_core import BotCore
 
@@ -104,9 +105,6 @@ async def setup(bot: BotCore):
             bot.logger.warning(f"Error fetching leaderboard: {e}")
         return []
     
-    def get_emoji(name: str):
-        return bot.discord.get_emoji(name).emoji
-
     def leaderboard_payload(
         rows: list[Player],
         *,
@@ -137,6 +135,10 @@ async def setup(bot: BotCore):
         eph=False,
         perm_requirement=0,
     )
+    @action(
+        "top",
+        "Show the top leaderboard.",
+    )
     async def top(interaction: discord.Interaction):
         await bot.discord.send(
             response=True,
@@ -151,6 +153,10 @@ async def setup(bot: BotCore):
         description="Gets the bottom 10 players in sortoffs!",
         eph=False,
         perm_requirement=0,
+    )
+    @action(
+        "bottom",
+        "Show the bottom leaderboard.",
     )
     async def bottom(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
@@ -168,6 +174,10 @@ async def setup(bot: BotCore):
         description="Gets the middle 10 players in sortoffs!",
         eph=False,
         perm_requirement=0,
+    )
+    @action(
+        "middle",
+        "Show the middle leaderboard.",
     )
     async def middle(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
@@ -192,7 +202,7 @@ async def setup(bot: BotCore):
     leaderboard_monitor.command(
         manage,
         name="leaderboard_monitor",
-        description="Start or stop leaderboard monitoring in this channel",
+        description="Manage leaderboard monitor",
     )
 
     @tasks.loop(seconds=LEADERBOARD_MONITOR_INTERVAL_SECONDS)

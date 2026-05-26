@@ -1,10 +1,13 @@
 import discord
 from utils import tasks
 import random
+import re
 import time
 
 from bogobot_core import BotCore
 from utils import groups
+from utils.ai import action
+from plugins import ai as ai_plugin
 
 class BogonameView(discord.ui.LayoutView):
     def __init__(self, original_name: str, new_name: str) -> None:
@@ -17,11 +20,16 @@ class BogonameView(discord.ui.LayoutView):
         ))
         self.add_item(discord.ui.TextDisplay(f"-# <t:{int(time.time())}:f>"))
 
+EMOJI_ALIAS_RE = re.compile(r":([A-Za-z0-9_]+):")
+
 async def setup(bot: BotCore):
     bogo = groups.bogo(bot)
+
     @tasks.loop(seconds=15)
     async def update_status():
         if not bot.user:
+            return
+        if ai_plugin.ai_on_break():
             return
         text = bot.user.name
         tlist = list(text)
@@ -45,7 +53,7 @@ async def setup(bot: BotCore):
         shuffled_text = ''.join(tlist)
         if bot.is_closed():
             return
-        await bot.change_presence(activity=discord.CustomActivity(name=shuffled_text))
+        await bot.discord.change_presence(activity=discord.CustomActivity(name=shuffled_text))
     
     @bot.init_callback
     async def init():
@@ -58,6 +66,10 @@ async def setup(bot: BotCore):
             update_status.cancel()
 
     @bogo.command(name="name", description="Bogoes your name", perm_requirement=0, defer=False)
+    @action(
+        "bogo name",
+        "Shuffle the user's display name. Does not take any parameters.",
+    )
     async def bogo_name(interaction: discord.Interaction):
         member = interaction.user
         if isinstance(member, discord.User):

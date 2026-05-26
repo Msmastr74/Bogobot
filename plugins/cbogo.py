@@ -8,6 +8,7 @@ import time
 import discord
 
 from bogobot_core import BotCore
+from utils.ai import AIParam, action
 
 
 CBOGO_N = 10
@@ -604,6 +605,14 @@ async def setup(bot: BotCore):
         defer=False,
         perm_requirement=0,
     )
+    @action(
+        "cbogo",
+        "Run cbogo.",
+        params={
+            "action": AIParam(type=Literal["run", "info", "leaderboard"], required=False, default="run"),
+            "target": AIParam("Force a user to be shown on the leaderboard.", type=discord.User | discord.Member | None, required=False),
+        },
+    )
     async def cbogo(
         interaction: discord.Interaction,
         action: Literal["run", "info", "leaderboard", "reset", "reset_last_user"] = "run",
@@ -689,7 +698,7 @@ async def setup(bot: BotCore):
                     ephemeral=True,
                 )
                 return
-            await interaction.response.defer()
+            await bot.discord.defer()
             state["last_user"] = interaction.user.id
 
             shuffle_start = state["shuffles"]

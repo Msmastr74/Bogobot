@@ -3,9 +3,12 @@ __pycache__/
 live_720p.png
 ocr_*.png
 local_config.json
+Modelfile
 .DS_Store
 channels.json
 telemetry.jsonl
+ai_history.sqlite3
+ai_history.sqlite3-*
 accounts.json
 tessdata/
 monitor.bga

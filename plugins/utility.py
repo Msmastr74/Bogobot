@@ -6,6 +6,7 @@ from discord import app_commands
 from utils.transformers import ColourTransformer, IntTransformer
 from bogobot_core import BotCore, current_interaction
 from utils import groups
+from utils.ai import AIParam, action
 
 class AvatarView(discord.ui.LayoutView):
     def __init__(
@@ -320,6 +321,13 @@ async def setup(bot: BotCore):
         return True
 
     @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
+    @action(
+        "avatar",
+        "Show a user's avatar.",
+        params={
+            "user": AIParam(type=discord.User | discord.Member | None, required=False),
+        },
+    )
     async def avatar(interaction: discord.Interaction, user: discord.Member | discord.User | None = None) -> None:
         if user is None:
             user = interaction.user
@@ -330,6 +338,13 @@ async def setup(bot: BotCore):
         )
     
     @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
+    @action(
+        "ping",
+        "Show bot latency. Omit the user parameter when the message does not mention a user to target.",
+        params={
+            "user": AIParam("Discord user id to target.", discord.User | discord.Member | None, required=False),
+        }
+    )
     async def ping(
         interaction: discord.Interaction,
         user: discord.User | discord.Member | None = None
@@ -352,7 +367,8 @@ async def setup(bot: BotCore):
         
         user = user or interaction.user
         try:
-            user_msg = await bot.wait_for(
+            can_use_msg = interaction.message if interaction.user.id == user.id else None
+            user_msg = can_use_msg or await bot.wait_for(
                 "message",
                 check=lambda m: m.author.id == user.id and m.channel.id == interaction.channel_id,
                 timeout=60
