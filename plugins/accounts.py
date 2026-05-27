@@ -7,15 +7,21 @@ from utils import groups
 from utils.discord import count_characters
 
 Rank = Literal['basic', 'authorized', 'mod', 'admin', 'owner']
-RANKS: dict[int, Rank] = {
+NAMES: dict[int, str] = {
+    -1: "banned",
     0: "basic",
     1: "authorized",
     2: "mod",
     3: "admin",
     4: "owner"
 }
-RANK_NUMS: dict[Rank, int] = dict((v, k) for k, v in RANKS.items())
-
+RANK_NUMS: dict[Rank, int] = {
+    "basic": 0,
+    "authorized": 1,
+    "mod": 2,
+    "admin": 3,
+    "owner": 4
+}
 class AccountListView(discord.ui.LayoutView):
     def __init__(
         self, *,
@@ -38,7 +44,7 @@ class AccountListView(discord.ui.LayoutView):
         found_account = False
         for uid, account in accounts:
             found_account = True
-            account_text = f"<@{uid}>: {RANKS.get(account['perm_level'], 'Unknown')}"
+            account_text = f"<@{uid}>: {NAMES.get(account['perm_level'], 'Unknown')}"
             if count_remaining(account_text):
                 accounts_container.add_item(
                     discord.ui.TextDisplay(account_text)
@@ -128,15 +134,15 @@ async def setup(bot: BotCore):
                 await bot.discord.send(contents="Must provide level in order to use the set action", response=True, ephemeral=True)
                 return
         assert new_rank is not None
-        cur_rank_name = RANKS.get(current_rank, "Unknown")
-        new_rank_name = RANKS.get(new_rank, "Unknown")
+        cur_rank_name = NAMES.get(current_rank, "Unknown")
+        new_rank_name = NAMES.get(new_rank, "Unknown")
 
         result, current_rank, own_rank = await bot.accounts.set_permission_level_if_overranked(
             actor_uid=interaction.user.id,
             target_uid=user.id,
             new_level=new_rank,
         )
-        cur_rank_name = RANKS.get(current_rank, "Unknown")
+        cur_rank_name = NAMES.get(current_rank, "Unknown")
         if result == "ok":
             if current_rank < new_rank:
                 await bot.discord.send(
@@ -156,7 +162,7 @@ async def setup(bot: BotCore):
     @accounts.command(name="perm_info", description="Gets a user's current rank")
     async def perm_info(interaction: discord.Interaction, user: discord.Member):
         current_rank = await bot.accounts.permission_level(user.id)
-        current_rank_name = RANKS.get(current_rank, "Unknown")
+        current_rank_name = NAMES.get(current_rank, "Unknown")
         await bot.discord.send(
             contents=f"<@{user.id}>'s current rank is {current_rank_name}",
             response=True, ephemeral=True,

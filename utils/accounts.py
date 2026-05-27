@@ -83,7 +83,7 @@ class AccountManager:
                 continue
 
             try:
-                perm_level = max(0, int(raw_account.get("perm_level", 0)))
+                perm_level = int(raw_account.get("perm_level", 0))
             except (TypeError, ValueError):
                 perm_level = 0
 
@@ -176,13 +176,13 @@ class AccountManager:
         if uid in self.accounts:
             return False
 
-        self.accounts[uid] = {"perm_level": max(0, int(perm_level))}
+        self.accounts[uid] = {"perm_level": int(perm_level)}
         return True
 
     async def set_permission_level(self, uid: int | str, level: int) -> None:
         async with self._lock:
             account = self._account_locked(str(uid))
-            account["perm_level"] = max(0, int(level))
+            account["perm_level"] = int(level)
             self._save_sync()
 
     async def permission_level(self, uid: int | str) -> int:
@@ -196,6 +196,7 @@ class AccountManager:
         actor_uid: int | str,
         target_uid: int | str,
         new_level: int,
+        clamp_zero = True
     ) -> tuple[
         Literal['same', 'actor_not_over_current', 'actor_not_over_new', 'ok'],
         int, int
@@ -206,7 +207,9 @@ class AccountManager:
 
             current_level = int(self._record_or_fake(str(target_uid)).get("perm_level", 0))
             actor_level = int(actor.get("perm_level", 0)) if actor is not None else 0
-            new_level = max(0, int(new_level))
+            new_level = int(new_level)
+            if clamp_zero:
+                new_level = max(new_level, 0)
 
             if current_level == new_level:
                 return "same", current_level, actor_level
