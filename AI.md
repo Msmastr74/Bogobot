@@ -143,25 +143,25 @@ For Gemini/Gemma models on Google endpoints, Bogobot strips the first `<thought>
 
 Bogobot sends Discord metadata as XML-style context blocks with the `ctx:` prefix. These blocks are model input only.
 
-Example message header:
+Example attached metadata:
 
 ```xml
-<ctx:message_header>
+<ctx:attached_metadata>
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-</ctx:message_header>
+</ctx:attached_metadata>
 ```
 
 Reply context is sent as a separate assistant-role message:
 
 ```xml
 <ctx:replied_to>
-<ctx:message_header>
+<ctx:attached_metadata>
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-</ctx:message_header>
+</ctx:attached_metadata>
 previous bot message
 </ctx:replied_to>
 ```

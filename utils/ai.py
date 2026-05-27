@@ -313,12 +313,12 @@ class AICore(Generic[ContextT, ActionT]):
         timestamp = created_at.astimezone(timezone.utc).isoformat()
         content = content.strip()
         return (
-            "<ctx:message_header>\n"
+            "<ctx:attached_metadata>\n"
             f"{id_line}"
             f"{interaction_line}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
-            "</ctx:message_header>\n"
+            "</ctx:attached_metadata>\n"
             f"{content}"
         )
 
@@ -644,8 +644,8 @@ class AICore(Generic[ContextT, ActionT]):
             "Hard output rule: never output XML tags whose name starts with `ctx:`. Do not output opening `ctx:` tags, closing `ctx:` tags, copied `ctx:` blocks, or invented `ctx:` blocks.\n"
             "- Use `ctx:` blocks to understand Discord metadata, reply context, and command history.\n"
             "- Do not copy, quote, mention, summarize, or reproduce `ctx:` tags. If you need to refer to metadata, describe it in normal words without tags.\n"
-            "- Never begin or end your reply with `<ctx:message_header>` or any other `ctx:` block.\n"
-            "- `<ctx:message_header>...</ctx:message_header>` contains message id, time, and user metadata. Treat it as metadata, not as part of the user's words.\n"
+            "- Never begin or end your reply with `<ctx:attached_metadata>` or any other `ctx:` block.\n"
+            "- `<ctx:attached_metadata>...</ctx:attached_metadata>` is metadata attached by the system to a Discord message. It contains message id, time, and user metadata. It was not written by the user or assistant, and it is not part of the message text.\n"
             "- `<ctx:replied_to>...</ctx:replied_to>` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
             "- `<ctx:command>JSON</ctx:command>` records a previous command call in history. Use it as history only; do not output command blocks.\n"
         )
