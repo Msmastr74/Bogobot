@@ -11,6 +11,7 @@ from discord.poll import Poll
 from discord.ui.view import BaseView
 
 from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
+from utils.discord import count_characters
 from utils.type import Coro
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ class BotActionParameters(TypedDict, total=False):
 
 BotAction: TypeAlias = Callable[..., Coro[None]]
 MAX_ASSISTANT_CONTEXT_CHARS = 4000
+MAX_REPLY_CHARS = 2000
 _ai_break_until: datetime.datetime | None = None
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +267,10 @@ def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | No
     return text or None
 
 
+def truncate_text_to_character_limit(text: str, max_len: int) -> str:
+    return "".join(split_text_to_character_limit(text, max_len)[:1])
+
+
 def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple[discord.Message, str] | None:
     if bot.user is None or message.reference is None:
         return None
@@ -278,7 +284,7 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
     text = " ".join(resolved.content.split())
     if not text:
         return None
-    return resolved, text[:MAX_ASSISTANT_CONTEXT_CHARS]
+    return resolved, truncate_text_to_character_limit(text, MAX_ASSISTANT_CONTEXT_CHARS)
 
 def json_string(text: str) -> str:
     import json
@@ -348,6 +354,67 @@ async def capture_interaction_output(interaction: discord.Interaction):
         cast(Any, response).send_message = original_send_message
         cast(Any, followup).send = original_followup_send
 
+def split_text_to_character_limit(text: str, max_len: int) -> list[str]:
+    pieces: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for character in text:
+        character_length = count_characters(character)
+        if current and current_length + character_length > max_len:
+            pieces.append("".join(current))
+            current = []
+            current_length = 0
+        current.append(character)
+        current_length += character_length
+
+    if current:
+        pieces.append("".join(current))
+    return pieces
+
+
+def chunk_text(text: str, max_len: int) -> list[str]:
+    """Splits text into chunks of max_len, respecting line boundaries."""
+    if max_len <= 0:
+        raise ValueError("max_len must be greater than 0")
+        
+    chunks: list[str] = []
+    current_chunk: list[str] = []
+    current_length = 0
+
+    lines = text.splitlines(keepends=True)
+
+    for line in lines:
+        line_length = count_characters(line)
+        # Case 1: The line itself is longer than max_len
+        if line_length > max_len:
+            if current_chunk:
+                chunks.append("".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+
+            split_pieces = split_text_to_character_limit(line, max_len)
+            chunks.extend(split_pieces[:-1])
+            if split_pieces:
+                current_chunk = [split_pieces[-1]]
+                current_length = count_characters(split_pieces[-1])
+                
+        # Case 2: Line fits into the current chunk perfectly
+        elif current_length + line_length <= max_len:
+            current_chunk.append(line)
+            current_length += line_length
+            
+        # Case 3: Line exceeds current chunk capacity (but is <= max_len)
+        else:
+            chunks.append("".join(current_chunk))
+            current_chunk = [line]
+            current_length = line_length
+
+    # Clean up any leftover text at the very end
+    if current_chunk:
+        chunks.append("".join(current_chunk))
+
+    return chunks
 
 async def setup(bot: 'BotCore'):
     from utils.ai import ai as ai_core
@@ -398,24 +465,34 @@ async def setup(bot: 'BotCore'):
             if not matches:
                 return
 
-        for index, match in enumerate(matches):
-            followup_only = index > 0
+        followup_only = False
+        for match in matches:
             if match.reply is not None:
                 reply = ai_core.visual_reply(match.reply)
                 if reply is None:
                     continue
-                if followup_only:
+                chunks = chunk_text(reply, MAX_REPLY_CHARS)
+                if len(chunks) < 1:
+                    continue
+                
+                sent_message: discord.Message | None = None
+                if not followup_only:
+                    sent_message = await message.reply(
+                        chunks[0],
+                        allowed_mentions=discord.AllowedMentions.none(),
+                        mention_author=False
+                    )
+                    followup_only = True
+                    chunks = chunks[1:]
+                for reply in chunks:
                     sent_message = await message.channel.send(
                         reply,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-                else:
-                    sent_message = await message.reply(
-                        reply,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                        mention_author=False
-                    )
-                ai_core.record_message("assistant", match.reply, sent_message, channel_id=message.channel.id)
+                ai_core.record_message(
+                    "assistant", match.reply, sent_message,
+                    channel_id=message.channel.id
+                )
                 continue
             if match.action is None:
                 continue
@@ -437,6 +514,8 @@ async def setup(bot: 'BotCore'):
                     eph=False,
                     defer=False,
                 )
+            if len(output_messages) > 0:
+                followup_only = True
             ai_core.record_message(
                 "assistant",
                 ai_core.format_command_call(match.command_name, match.kwargs),
@@ -477,11 +556,17 @@ async def setup(bot: 'BotCore'):
                 reply = ai_core.visual_reply(match.reply)
                 if reply is None:
                     continue
-                sent_message = await bot.discord.send(
-                    contents=reply,
-                    response=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+                chunks = chunk_text(reply, MAX_REPLY_CHARS)
+                if len(chunks) < 1:
+                    continue
+                
+                sent_message = None
+                for reply in chunks:
+                    sent_message = await bot.discord.send(
+                        contents=reply,
+                        response=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 ai_core.record_message(
                     "assistant",
                     match.reply,

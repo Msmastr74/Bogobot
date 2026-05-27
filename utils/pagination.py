@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Generic, Literal
+from utils.discord import count_characters
 from utils.type import T
 
 import discord
@@ -7,6 +8,22 @@ import discord
 DISPLAY_TEXT_LIMIT = 3200
 DISPLAY_CONTENT_LIMIT = 2800
 TRUNCATION_TEXT = "\n... truncated ..."
+
+
+def truncate_text(text: str, limit: int) -> str:
+    if count_characters(text) <= limit:
+        return text
+
+    suffix_budget = max(0, limit - count_characters(TRUNCATION_TEXT))
+    current: list[str] = []
+    current_length = 0
+    for character in text:
+        character_length = count_characters(character)
+        if current_length + character_length > suffix_budget:
+            break
+        current.append(character)
+        current_length += character_length
+    return "".join(current) + TRUNCATION_TEXT
 
 
 @dataclass
@@ -144,11 +161,10 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
         remaining = DISPLAY_TEXT_LIMIT
         if header:
             self.add_item(discord.ui.TextDisplay(header))
-            remaining -= len(header)
+            remaining -= count_characters(header)
 
         text = self._page_body_text(page.sections)
-        if len(text) > remaining:
-            text = text[:max(0, remaining - len(TRUNCATION_TEXT))] + TRUNCATION_TEXT
+        text = truncate_text(text, remaining)
 
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(text or "\u200d"),
@@ -186,7 +202,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
                 return sections, None
 
             text = self._section_text(read.section)
-            text_len = len(text) + (1 if sections else 0)
+            text_len = count_characters(text) + (1 if sections else 0)
             if text_len > remaining and sections:
                 return sections, successful_state
 

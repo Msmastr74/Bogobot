@@ -10,6 +10,7 @@ import discord
 
 from bogobot_core import BotCore
 from utils.ai import AIParam, action
+from utils.discord import count_characters
 
 
 BOGOTREE_N = 12
@@ -194,7 +195,7 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
 
     def try_append_line(self, lines: list[str], line: str) -> bool:
         next_text = "\n".join([*lines, line])
-        if len(next_text) > LEADERBOARD_SECTION_LIMIT:
+        if count_characters(next_text) > LEADERBOARD_SECTION_LIMIT:
             return False
         lines.append(line)
         return True

@@ -4,6 +4,7 @@ from typing import Iterable, Literal
 from bogobot_core import BotCore
 from utils.accounts import AccountRecord
 from utils import groups
+from utils.discord import count_characters
 
 Rank = Literal['basic', 'authorized', 'mod', 'admin', 'owner']
 RANKS: dict[int, Rank] = {
@@ -27,7 +28,7 @@ class AccountListView(discord.ui.LayoutView):
         remaining = 3900 # reserve 100
         def count_remaining(text: str) -> bool:
             nonlocal remaining
-            remaining -= len(text)
+            remaining -= count_characters(text)
             return remaining >= 0
         title_text = f"## {title}"
         count_remaining(title_text)

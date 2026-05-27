@@ -110,6 +110,7 @@ class StreamHandler:
             streamlink.stderr,
             self.logger,
             prefix="streamlink",
+            level=logging.WARNING,
         ):
             self._stderr_loggers.append(streamlink_logger)
         if streamlink.stdout is None:
@@ -134,6 +135,7 @@ class StreamHandler:
             ffmpeg.stderr,
             self.logger,
             prefix="ffmpeg",
+            level=logging.DEBUG,
         ):
             self._stderr_loggers.append(ffmpeg_logger)
         self._procs = [streamlink, ffmpeg]
@@ -150,6 +152,9 @@ class StreamHandler:
                 img = Image.open(io.BytesIO(png))
                 img.load()
                 self._emit_frame(img)
+
+        self._close_pipe_logger(streamlink_logger)
+        self._close_pipe_logger(ffmpeg_logger)
 
     def _emit_frame(self, img: Image.Image) -> None:
         if self._callback_is_async():
@@ -211,6 +216,15 @@ class StreamHandler:
         for pipe_logger in self._stderr_loggers:
             pipe_logger.close()
         self._stderr_loggers = []
+
+    def _close_pipe_logger(self, pipe_logger: PipeLogger | None) -> None:
+        if pipe_logger is None:
+            return
+        pipe_logger.close()
+        try:
+            self._stderr_loggers.remove(pipe_logger)
+        except ValueError:
+            pass
 
     def _sleep(self, seconds: float) -> None:
         end = time.monotonic() + seconds

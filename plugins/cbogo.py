@@ -9,6 +9,7 @@ import discord
 
 from bogobot_core import BotCore
 from utils.ai import AIParam, action
+from utils.discord import count_characters
 
 
 CBOGO_N = 10
@@ -185,7 +186,7 @@ class CbogoLeaderboard(discord.ui.LayoutView):
 
     def try_append_line(self, lines: list[str], line: str) -> bool:
         next_text = "\n".join([*lines, line])
-        if len(next_text) > CBOGO_LEADERBOARD_SECTION_LIMIT:
+        if count_characters(next_text) > CBOGO_LEADERBOARD_SECTION_LIMIT:
             return False
         lines.append(line)
         return True
