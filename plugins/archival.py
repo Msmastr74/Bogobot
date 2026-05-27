@@ -22,7 +22,7 @@ DEFAULT_VIDEO_ARCHIVE_DIR = "archive/video"
 ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
 ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
-DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFR])?>$")
+DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFRsS])?>$")
 EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
 
@@ -902,7 +902,7 @@ async def setup(bot: BotCore):
     )
     @action(
         "archive_frame",
-        "Show a visual archive frame by timestamp.",
+        "Show a visual archive frame by epoch timestamp.",
         params={
             "time": AIParam(type=str),
         },
