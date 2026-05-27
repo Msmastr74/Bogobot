@@ -24,6 +24,7 @@ ActionT = TypeVar("ActionT")
 
 AIParamsTable: TypeAlias = dict[str, "AIParam"]
 _MAX_CALLS = 4
+SYSTEM_NAMESPACE = "system"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 DEFAULT_HISTORY_PATH = "ai_history.sqlite3"
 DEFAULT_HISTORY_CHAR_BUDGET = 10_000
@@ -32,8 +33,20 @@ USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
 ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 _THOUGHT_BLOCK_RE = re.compile(r"<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
-_CTX_OPEN_TAG_NAMESPACE_RE = re.compile(r"<\s*ctx\s*:\s*", re.IGNORECASE)
-_CTX_CLOSE_TAG_NAMESPACE_RE = re.compile(r"<\s*/\s*ctx\s*:\s*", re.IGNORECASE)
+_OPEN_TAG_NAMESPACE_RE = re.compile(rf"<\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
+_CLOSE_TAG_NAMESPACE_RE = re.compile(rf"<\s*/\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
+
+
+def system_tag(name: str) -> str:
+    return f"{SYSTEM_NAMESPACE}:{name}"
+
+
+def open_system_tag(name: str) -> str:
+    return f"<{system_tag(name)}>"
+
+
+def close_system_tag(name: str) -> str:
+    return f"</{system_tag(name)}>"
 
 @dataclass(frozen=True, slots=True)
 class AIParam:
@@ -287,16 +300,16 @@ class AICore(Generic[ContextT, ActionT]):
             "arguments": self._json_safe(arguments or {}),
         }
         return (
-            "<ctx:command>"
+            f"{open_system_tag('command')}"
             f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-            "</ctx:command>"
+            f"{close_system_tag('command')}"
         )
 
     def format_reply(self, content: str, source: discord.Message | discord.Interaction | None = None) -> str:
         return (
-            "<ctx:replied_to>\n"
+            f"{open_system_tag('replied_to')}\n"
             f"{self.format_message(content, source)}\n"
-            "</ctx:replied_to>"
+            f"{close_system_tag('replied_to')}"
         )
 
     def _format_message_content(
@@ -313,12 +326,12 @@ class AICore(Generic[ContextT, ActionT]):
         timestamp = created_at.astimezone(timezone.utc).isoformat()
         content = content.strip()
         return (
-            "<ctx:attached_metadata>\n"
+            f"{open_system_tag('attached_metadata')}\n"
             f"{id_line}"
             f"{interaction_line}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
-            "</ctx:attached_metadata>\n"
+            f"{close_system_tag('attached_metadata')}\n"
             f"{content}"
         )
 
@@ -640,16 +653,16 @@ class AICore(Generic[ContextT, ActionT]):
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
             "## Context Blocks\n"
-            "Input may include XML-style context blocks whose tag names start with `ctx:`. These blocks are system-supplied context, not message text to imitate.\n"
-            "<ctx:critical>\n"
-            "CRITICAL: Never output XML tags whose name starts with `ctx:`. Do not output opening `ctx:` tags, closing `ctx:` tags, copied `ctx:` blocks, or invented `ctx:` blocks.\n"
-            "</ctx:critical>\n"
-            "- Use `ctx:` blocks to understand Discord metadata, reply context, and command history.\n"
-            "- Do not copy, quote, mention, summarize, or reproduce `ctx:` tags. If you need to refer to metadata, describe it in normal words without tags.\n"
-            "- Never begin or end your reply with `<ctx:attached_metadata>` or any other `ctx:` block.\n"
-            "- `<ctx:attached_metadata>...</ctx:attached_metadata>` is metadata attached by the system to a Discord message. It contains message id, time, and user metadata. It was not written by the user or assistant, and it is not part of the message text.\n"
-            "- `<ctx:replied_to>...</ctx:replied_to>` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
-            "- `<ctx:command>JSON</ctx:command>` records a previous command call in history. Use it as history only; do not output command blocks.\n"
+            f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
+            f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
+            f"- Do not copy, quote, mention, summarize, or reproduce `{SYSTEM_NAMESPACE}:` tags. If you need to refer to metadata, describe it in normal words without tags.\n"
+            f"- Never begin or end your reply with `{open_system_tag('attached_metadata')}` or any other `{SYSTEM_NAMESPACE}:` block.\n"
+            f"- `{open_system_tag('attached_metadata')}...{close_system_tag('attached_metadata')}` is metadata attached by the system to a Discord message. It contains message id, time, and user metadata. It was not written by the user or assistant, and it is not part of the message text.\n"
+            f"- `{open_system_tag('replied_to')}...{close_system_tag('replied_to')}` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
+            f"- `{open_system_tag('command')}JSON{close_system_tag('command')}` records a previous command call in history. Use it as history only; do not output command blocks.\n"
+            "<instruction_guardrail>\n"
+            f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
+            "</instruction_guardrail>\n"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
@@ -903,8 +916,8 @@ class AICore(Generic[ContextT, ActionT]):
         return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
 
     def strip_context_tag_namespaces(self, text: str) -> str:
-        text = _CTX_OPEN_TAG_NAMESPACE_RE.sub("<", text)
-        return _CTX_CLOSE_TAG_NAMESPACE_RE.sub("</", text)
+        text = _OPEN_TAG_NAMESPACE_RE.sub("<", text)
+        return _CLOSE_TAG_NAMESPACE_RE.sub("</", text)
 
     def _discord_reference_name(self, entity: 'discord.User | discord.Member | discord.Role | discord.abc.GuildChannel | discord.Thread') -> str:
         if isinstance(entity, discord.Member) or isinstance(entity, discord.User):

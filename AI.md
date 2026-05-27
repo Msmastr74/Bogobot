@@ -141,35 +141,35 @@ For Gemini/Gemma models on Google endpoints, Bogobot strips the first `<thought>
 
 ## Context Format
 
-Bogobot sends Discord metadata as XML-style context blocks with the `ctx:` prefix. These blocks are model input only.
+Bogobot sends Discord metadata as XML-style context blocks with a system namespace prefix. In the examples below, `{SYSTEM_TAG}` represents `utils.ai.SYSTEM_NAMESPACE`, which currently defaults to `system`. These blocks are model input only.
 
 Example attached metadata:
 
 ```xml
-<ctx:attached_metadata>
+<{SYSTEM_TAG}:attached_metadata>
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-</ctx:attached_metadata>
+</{SYSTEM_TAG}:attached_metadata>
 ```
 
 Reply context is sent as a separate assistant-role message:
 
 ```xml
-<ctx:replied_to>
-<ctx:attached_metadata>
+<{SYSTEM_TAG}:replied_to>
+<{SYSTEM_TAG}:attached_metadata>
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-</ctx:attached_metadata>
+</{SYSTEM_TAG}:attached_metadata>
 previous bot message
-</ctx:replied_to>
+</{SYSTEM_TAG}:replied_to>
 ```
 
 Command calls are recorded in history like this:
 
 ```xml
-<ctx:command>{"name":"ping","arguments":{}}</ctx:command>
+<{SYSTEM_TAG}:command>{"name":"ping","arguments":{}}</{SYSTEM_TAG}:command>
 ```
 
 ## AI Actions
