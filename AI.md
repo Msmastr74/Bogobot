@@ -172,6 +172,23 @@ Command calls are recorded in history like this:
 <{SYSTEM_TAG}:command>{"name":"ping","arguments":{}}</{SYSTEM_TAG}:command>
 ```
 
+Each rolling channel history message is wrapped before being sent to the model. The chat message keeps its original role; the wrapper only marks that it came from stored history.
+
+```xml
+<{SYSTEM_TAG}:message_history>
+<{SYSTEM_TAG}:attached_metadata>
+...
+</{SYSTEM_TAG}:attached_metadata>
+hello
+</{SYSTEM_TAG}:message_history>
+```
+
+```xml
+<{SYSTEM_TAG}:message_history>
+Hi.
+</{SYSTEM_TAG}:message_history>
+```
+
 ## AI Actions
 
 Plugins register AI-callable actions with `@utils.ai.action(...)`.
