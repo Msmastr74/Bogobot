@@ -283,10 +283,12 @@ def parse_activity_time_to_schedule(value: str, purpose: str) -> AISchedule | No
             k, v = token.split(":", 1)
             if k in valid_keys and v.isdigit():
                 schedule[k] = int(v)
-                
-        # Structural safety fallback validation
-        if "minute" in schedule:
-            return schedule
+
+        if "minute" not in schedule:
+            schedule["minute"] = 0
+
+        return schedule
+
 
     # 2. Relative offset helper (e.g., "30m", "2h")
     relative_match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([mhd])", value)
