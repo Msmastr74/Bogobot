@@ -271,11 +271,9 @@ class AICore(Generic[ContextT, ActionT]):
             user_id=user_id,
         )
         dont_respond = self._extract_dont_respond(content)
-        if dont_respond:
-            return matches
         self._queue_context_requests(requests)
         reply = self._coerce_reply(content)
-        if reply is not None:
+        if reply is not None and not dont_respond:
             matches.append(AIMatch(
                 name="conversation",
                 command_name="conversation",
