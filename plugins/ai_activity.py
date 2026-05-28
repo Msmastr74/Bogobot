@@ -272,7 +272,7 @@ class AIScheduler(ChannelScheduler[AISchedule]):
 
     async def _run_trigger(
         self,
-        channel: discord.abc.MessageableChannel,
+        channel: 'discord.abc.MessageableChannel',
         purpose: str,
     ) -> None:
         try:
