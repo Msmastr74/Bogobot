@@ -1,12 +1,9 @@
 import asyncio
-from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
 from logging import Logger, WARNING, getLogger
 import os
 import re
-import sqlite3
 import time
 import types
 from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin, TYPE_CHECKING
@@ -16,6 +13,19 @@ if TYPE_CHECKING:
 
 import discord
 import plugins.ai as ai_plugin
+from utils.ai_context import (
+    AIContext,
+    ASSISTANT_NAMESPACE,
+    ContextRequest,
+    DEFAULT_HISTORY_CHAR_BUDGET,
+    DEFAULT_HISTORY_PATH,
+    HistoryMessage,
+    SYSTEM_NAMESPACE,
+    close_system_tag,
+    open_system_tag,
+    strip_context_tag_namespaces,
+    strip_discord_reference_annotations,
+)
 
 getLogger("httpx").setLevel(WARNING)
 
@@ -24,29 +34,14 @@ ActionT = TypeVar("ActionT")
 
 AIParamsTable: TypeAlias = dict[str, "AIParam"]
 _MAX_CALLS = 4
-SYSTEM_NAMESPACE = "system"
+_CONTEXT_REQUEST_TOOL_NAME = "request_context"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
-DEFAULT_HISTORY_PATH = "ai_history.sqlite3"
-DEFAULT_HISTORY_CHAR_BUDGET = 10_000
-ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
-USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
-ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
-CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 _THOUGHT_BLOCK_RE = re.compile(r"<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
-_OPEN_TAG_NAMESPACE_RE = re.compile(rf"<\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
-_CLOSE_TAG_NAMESPACE_RE = re.compile(rf"<\s*/\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
-
-
-def system_tag(name: str) -> str:
-    return f"{SYSTEM_NAMESPACE}:{name}"
-
-
-def open_system_tag(name: str) -> str:
-    return f"<{system_tag(name)}>"
-
-
-def close_system_tag(name: str) -> str:
-    return f"</{system_tag(name)}>"
+_TEXT_CONTEXT_REQUEST_RE = re.compile(
+    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
+    re.DOTALL | re.IGNORECASE,
+)
+_XML_ATTR_RE = re.compile(r"([A-Za-z_][\w:-]*)\s*=\s*('([^']*)'|\"([^\"]*)\")")
 
 @dataclass(frozen=True, slots=True)
 class AIParam:
@@ -85,12 +80,6 @@ class _ToolCall:
     arguments: dict[str, Any]
 
 
-@dataclass(frozen=True, slots=True)
-class _HistoryMessage:
-    role: Literal["user", "assistant"]
-    content: str
-
-
 class AICore(Generic[ContextT, ActionT]):
     def __init__(
         self,
@@ -120,6 +109,13 @@ class AICore(Generic[ContextT, ActionT]):
         self._last_request_at: float | None = None
         self._lock = asyncio.Lock()
         self.logger = logger or getLogger("Bogobot.AI")
+        self.context = AIContext(
+            normalize_discord=self.normalize_discord,
+            history_enabled=self.history_enabled,
+            history_path=self.history_path,
+            history_char_budget=self.history_char_budget,
+            logger=self.logger,
+        )
 
     def configure(
         self,
@@ -168,6 +164,14 @@ class AICore(Generic[ContextT, ActionT]):
         if logger is not None:
             self.logger = logger
 
+        self.context.configure(
+            normalize_discord=self.normalize_discord,
+            history_enabled=self.history_enabled,
+            history_path=self.history_path,
+            history_char_budget=self.history_char_budget,
+            logger=self.logger,
+        )
+
     def action(
         self,
         name: str,
@@ -190,194 +194,6 @@ class AICore(Generic[ContextT, ActionT]):
             return action
         return decorator
 
-    def format_message(
-        self,
-        content: str,
-        source: discord.Message | discord.Interaction | None,
-    ) -> str:
-        content = self.strip_context_tag_namespaces(content)
-        if isinstance(source, discord.Message):
-            content = self.annotate_discord_references(source, content)
-            return self._format_message_content(
-                content=content,
-                user=source.author,
-                message_id=source.id,
-                interaction=False,
-                created_at=source.created_at,
-            )
-        if isinstance(source, discord.Interaction):
-            content = self.annotate_discord_references(source, content)
-            return self._format_message_content(
-                content=content,
-                user=source.user,
-                message_id=None,
-                interaction=True,
-                created_at=source.created_at,
-            )
-        return content.strip()
-
-    def annotate_discord_references(
-        self,
-        source: discord.Message | discord.Interaction | None,
-        text: str,
-    ) -> str:
-        if not self.normalize_discord or source is None:
-            return text
-
-        if isinstance(source, discord.Message):
-            user_names = {
-                str(user.id): self._discord_reference_name(user)
-                for user in source.mentions
-            }
-            role_names = {
-                str(role.id): self._discord_reference_name(role)
-                for role in source.role_mentions
-            }
-            channel_names = {
-                str(channel.id): self._discord_reference_name(channel)
-                for channel in source.channel_mentions
-            }
-        else:
-            user_names: dict[str, str] = {}
-            role_names: dict[str, str] = {}
-            channel_names: dict[str, str] = {}
-        guild = source.guild
-        if guild:
-            for _, snowflake in USER_MENTION_RE.findall(text):
-                if snowflake in user_names:
-                    continue
-                user = guild.get_member(int(snowflake))
-                if user is not None:
-                    user_names[snowflake] = self._discord_reference_name(user)
-            for snowflake in ROLE_MENTION_RE.findall(text):
-                if snowflake in role_names:
-                    continue
-                role = guild.get_role(int(snowflake))
-                if role is not None:
-                    role_names[snowflake] = self._discord_reference_name(role)
-            for snowflake in CHANNEL_MENTION_RE.findall(text):
-                if snowflake in channel_names:
-                    continue
-                channel = guild.get_channel(int(snowflake))
-                if channel is not None:
-                    channel_names[snowflake] = self._discord_reference_name(channel)
-
-        def annotate_user(match: re.Match[str]) -> str:
-            prefix, snowflake = match.groups()
-            name = user_names.get(snowflake)
-            if name is None:
-                return match[0]
-            return f"<{prefix}{snowflake} {json.dumps(name, ensure_ascii=False)}>"
-
-        def annotate_role(match: re.Match[str]) -> str:
-            snowflake = match[1]
-            name = role_names.get(snowflake)
-            if name is None:
-                return match[0]
-            return f"<@&{snowflake} {json.dumps(name, ensure_ascii=False)}>"
-
-        def annotate_channel(match: re.Match[str]) -> str:
-            snowflake = match[1]
-            name = channel_names.get(snowflake)
-            if name is None:
-                return match[0]
-            return f"<#{snowflake} {json.dumps(name, ensure_ascii=False)}>"
-
-        text = USER_MENTION_RE.sub(annotate_user, text)
-        text = ROLE_MENTION_RE.sub(annotate_role, text)
-        return CHANNEL_MENTION_RE.sub(annotate_channel, text)
-
-    def format_block(
-        self,
-        role: Literal["user", "assistant"],
-        content: str,
-    ) -> str:
-        return content.strip()
-
-    def format_command_call(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
-        payload = {
-            "name": command_name,
-            "arguments": self._json_safe(arguments or {}),
-        }
-        return (
-            f"{open_system_tag('command')}"
-            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-            f"{close_system_tag('command')}"
-        )
-
-    def format_reply(self, content: str, source: discord.Message | discord.Interaction | None = None) -> str:
-        return (
-            f"{open_system_tag('replied_to')}\n"
-            f"{self.format_message(content, source)}\n"
-            f"{close_system_tag('replied_to')}"
-        )
-
-    def _format_message_content(
-        self,
-        *,
-        content: str,
-        user: discord.User | discord.Member,
-        message_id: int | None,
-        interaction: bool,
-        created_at: datetime,
-    ) -> str:
-        id_line = f"id: {message_id}\n" if message_id is not None else ""
-        interaction_line = "interaction: true\n" if interaction else ""
-        timestamp = created_at.astimezone(timezone.utc).isoformat()
-        content = content.strip()
-        return (
-            f"{open_system_tag('attached_metadata')}\n"
-            f"{id_line}"
-            f"{interaction_line}"
-            f"time: {timestamp}\n"
-            f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
-            f"{close_system_tag('attached_metadata')}\n"
-            f"{content}"
-        )
-
-    def record_message(
-        self,
-        role: Literal["user", "assistant"],
-        content: str,
-        source: discord.Message | discord.Interaction | None = None,
-        *,
-        channel_id: int | None = None,
-    ) -> None:
-        channel_id = channel_id if channel_id is not None else self._source_channel_id(source)
-        if not content.strip():
-            return
-
-        message = self.format_block(role, self.format_message(content, source))
-        self.logger.debug(f"\n[role={role} channel_id={channel_id}]\n{message}")
-        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
-            return
-
-        self._record_history_message(
-            channel_id,
-            _HistoryMessage(role, message),
-        )
-
-    def record_reply(
-        self,
-        content: str,
-        source: discord.Message | discord.Interaction | None = None,
-        *,
-        channel_id: int | None = None,
-    ) -> None:
-        channel_id = channel_id if channel_id is not None else self._source_channel_id(source)
-        if not content.strip():
-            return
-
-        message = self.format_reply(content, source)
-        self.logger.debug(f"\n[role=assistant channel_id={channel_id}]\n{message}")
-        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
-            return
-
-        self._record_history_message(
-            channel_id,
-            _HistoryMessage("assistant", message),
-        )
-
     async def match(self, text: str) -> ActionT | None:
         matches = await self.ai_turn(text)
         if not matches:
@@ -391,28 +207,41 @@ class AICore(Generic[ContextT, ActionT]):
         source: discord.Message | discord.Interaction | None = None,
         assistant_context: str | None = None,
         assistant_context_source: discord.Message | discord.Interaction | None = None,
+        requested_context: str | None = None,
     ) -> list[AIMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
 
-        channel_id = self._source_channel_id(source)
-        history = self._history_messages(channel_id)
+        text = strip_context_tag_namespaces(text)
+        if not text.strip():
+            return []
+
+        channel_id = self.context.source_channel_id(source)
+        history = self.context.history_messages(channel_id)
         if assistant_context is not None:
-            self.record_reply(
+            self.context.record_reply(
                 assistant_context,
                 assistant_context_source,
                 channel_id=channel_id,
             )
-        self.record_message("user", text, source, channel_id=channel_id)
-        formatted_text = self.format_block(
+        self.context.record_message("user", text, source, channel_id=channel_id)
+        formatted_text = self.context.format_block(
             "user",
-            self.format_message(text, source),
+            self.context.format_message(text, source),
         )
         formatted_assistant_context = (
-            self.format_reply(assistant_context, assistant_context_source)
+            self.context.format_reply(assistant_context, assistant_context_source)
             if assistant_context is not None else
             None
         )
+        formatted_requested_context = requested_context.strip() if requested_context is not None else None
+        if formatted_requested_context:
+            self.context.record_message(
+                "assistant",
+                formatted_requested_context,
+                None,
+                channel_id=channel_id,
+            )
 
         async with self._lock:
             client = self._ensure_client()
@@ -423,10 +252,18 @@ class AICore(Generic[ContextT, ActionT]):
                 self._actions,
                 formatted_assistant_context,
                 history,
+                formatted_requested_context,
             )
 
         matches: list[AIMatch[ContextT, ActionT]] = []
+        user_id = self._source_user_id(source)
         if not calls:
+            content, requests = self._extract_text_context_requests(
+                content,
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+            self._queue_context_requests(requests)
             reply = self._coerce_reply(content)
             if reply is None:
                 return []
@@ -444,6 +281,16 @@ class AICore(Generic[ContextT, ActionT]):
         message_source = source if isinstance(source, discord.Message) else None
         interaction_source = source if isinstance(source, discord.Interaction) else None
         for call in calls[:_MAX_CALLS]:
+            if call.name == _CONTEXT_REQUEST_TOOL_NAME:
+                request = self._context_request_from_tool_call(
+                    call,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                )
+                if request is not None:
+                    self._queue_context_requests([request])
+                continue
+
             action = action_by_tool.get(call.name)
             if action is None:
                 self.logger.debug(f"tool call rejected unknown action {call.name!r}.")
@@ -472,105 +319,6 @@ class AICore(Generic[ContextT, ActionT]):
 
         return matches
 
-    def _source_channel_id(self, source: discord.Message | discord.Interaction | None) -> int | None:
-        if isinstance(source, discord.Message):
-            return source.channel.id
-        if isinstance(source, discord.Interaction):
-            return source.channel_id
-        return None
-
-    def _record_history_message(
-        self,
-        channel_id: int,
-        message: _HistoryMessage,
-    ) -> None:
-        if not message.content:
-            return
-
-        with closing(self._history_connection()) as connection:
-            with connection:
-                self._ensure_history_schema(connection)
-                connection.execute(
-                    """
-                    INSERT INTO ai_history_messages(channel_id, created_at, role, content)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (channel_id, datetime.now(timezone.utc).isoformat(), message.role, message.content),
-                )
-                self._evict_history(connection, channel_id)
-
-    def _history_messages(self, channel_id: int | None) -> list[_HistoryMessage]:
-        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
-            return []
-
-        with closing(self._history_connection()) as connection:
-            self._ensure_history_schema(connection)
-            rows = connection.execute(
-                """
-                SELECT role, content
-                FROM ai_history_messages
-                WHERE channel_id = ?
-                ORDER BY id
-                """,
-                (channel_id,),
-            ).fetchall()
-        return [
-            _HistoryMessage(role, content)
-            for role, content in rows
-        ]
-
-    def _history_connection(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.history_path)
-
-    def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
-        columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(ai_history_messages)").fetchall()
-        }
-        if columns and not {"id", "channel_id", "created_at"}.issubset(columns):
-            connection.execute("DROP TABLE IF EXISTS ai_history_messages")
-            connection.execute("DROP TABLE IF EXISTS ai_history_blocks")
-
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS ai_history_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                content TEXT NOT NULL
-            )
-        """)
-        connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ai_history_messages_channel_id_id
-            ON ai_history_messages(channel_id, id)
-        """)
-
-    def _evict_history(self, connection: sqlite3.Connection, channel_id: int) -> None:
-        total = int(connection.execute(
-            """
-            SELECT COALESCE(SUM(LENGTH(content)), 0)
-            FROM ai_history_messages
-            WHERE channel_id = ?
-            """,
-            (channel_id,),
-        ).fetchone()[0])
-        while total > self.history_char_budget:
-            row = connection.execute(
-                """
-                SELECT id, LENGTH(content)
-                FROM ai_history_messages
-                WHERE channel_id = ?
-                ORDER BY id
-                LIMIT 1
-                """,
-                (channel_id,),
-            ).fetchone()
-            if row is None:
-                return
-            message_id, char_count = int(row[0]), int(row[1])
-            connection.execute("DELETE FROM ai_history_messages WHERE id = ?", (message_id,))
-            total -= char_count
-
     async def _wait_for_rate_limit(self) -> None:
         now = time.monotonic()
         if self._last_request_at is not None:
@@ -580,6 +328,13 @@ class AICore(Generic[ContextT, ActionT]):
                 await asyncio.sleep(wait_seconds)
                 now = time.monotonic()
         self._last_request_at = now
+
+    def _source_user_id(self, source: discord.Message | discord.Interaction | None) -> int | None:
+        if isinstance(source, discord.Message):
+            return source.author.id
+        if isinstance(source, discord.Interaction):
+            return source.user.id
+        return None
 
     def _ensure_client(self):
         if self._client is None:
@@ -600,12 +355,14 @@ class AICore(Generic[ContextT, ActionT]):
         text: str,
         actions: list[_AIAction[ContextT, ActionT]],
         reply_message: str | None,
-        history: list[_HistoryMessage],
+        history: list[HistoryMessage],
+        requested_context: str | None,
     ) -> tuple[str, list[_ToolCall]]:
         reply_message_text = reply_message.strip() if reply_message is not None else ""
         has_reply_message = bool(reply_message_text)
         system_prompt = self._system_prompt(actions)
         tools = [self._tool_schema(action) for action in actions]
+        tools.append(self._context_request_tool_schema())
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
         ]
@@ -622,6 +379,8 @@ class AICore(Generic[ContextT, ActionT]):
         )
         if has_reply_message:
             messages.append({"role": "assistant", "content": reply_message_text})
+        if requested_context:
+            messages.append({"role": "assistant", "content": requested_context})
         messages.append({"role": "user", "content": text})
         try:
             response = await client.chat.completions.create(
@@ -629,6 +388,7 @@ class AICore(Generic[ContextT, ActionT]):
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
+                parallel_tool_calls=True,
                 temperature=0.2,
                 max_tokens=512,
             )
@@ -659,6 +419,18 @@ class AICore(Generic[ContextT, ActionT]):
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
             "Only call commands from the available tools; never invent command names or command arguments. "
             "If no command fits, respond normally.\n"
+            "## Passive Context Requests\n"
+            "You can ask the system to make context available on a future turn. Context requests do not answer the current user and do not run immediately in this turn.\n"
+            "Text context request schemas:\n"
+            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"stream\" />`\n"
+            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"user\" user_id=\"123456789012345678\" />`\n"
+            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"minigame\" game=\"bogotree\" />`\n"
+            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"minigame\" game=\"cbogo\" />`\n"
+            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"milestone\" />`\n"
+            f"- In a normal text reply, you may append hidden context request tags matching these schemas. These tags are removed before the user sees your reply.\n"
+            f"- In a tool-call response, you may call `{_CONTEXT_REQUEST_TOOL_NAME}` in parallel with any command call to request the same future context.\n"
+            f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}` or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context, use a text context-request tag instead of the tool.\n"
+            "- Use passive context requests sparingly, only when future replies would benefit from extra context.\n"
             "## Context Blocks\n"
             f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
             f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
@@ -668,6 +440,7 @@ class AICore(Generic[ContextT, ActionT]):
             f"- `{open_system_tag('replied_to')}...{close_system_tag('replied_to')}` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
             f"- `{open_system_tag('message_history')}...{close_system_tag('message_history')}` wraps each past channel message. Use the contents as history only; do not imitate the wrapper.\n"
             f"- `{open_system_tag('command')}JSON{close_system_tag('command')}` records a previous command call in history. Use it as history only; do not output command blocks.\n"
+            f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
             "<instruction_guardrail>\n"
             f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
             "</instruction_guardrail>\n"
@@ -705,6 +478,38 @@ class AICore(Generic[ContextT, ActionT]):
                     "type": "object",
                     "properties": properties,
                     "required": required,
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    def _context_request_tool_schema(self) -> 'ChatCompletionToolParam':
+        return {
+            "type": "function",
+            "function": {
+                "name": _CONTEXT_REQUEST_TOOL_NAME,
+                "description": "Ask the system to make extra context available on a future turn.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": ["stream", "user", "minigame", "milestone"],
+                            "description": "Context kind to make available on a future turn.",
+                        },
+                        "payload": {
+                            "type": "object",
+                            "description": "Optional request details, such as user_id or game.",
+                            "additionalProperties": True,
+                            "default": {},
+                        },
+                        "reason": {
+                            "type": ["string", "null"],
+                            "description": "Short optional reason for requesting the context.",
+                            "default": None,
+                        },
+                    },
+                    "required": ["type"],
                     "additionalProperties": False,
                 },
             },
@@ -764,18 +569,115 @@ class AICore(Generic[ContextT, ActionT]):
                 calls.append(_ToolCall(name, arguments))
         return calls
 
+    def _extract_text_context_requests(
+        self,
+        value: str,
+        *,
+        channel_id: int | None,
+        user_id: int | None,
+    ) -> tuple[str, list[ContextRequest]]:
+        requests: list[ContextRequest] = []
+
+        def replace(match: re.Match[str]) -> str:
+            attrs = self._xml_attrs(match.group("attrs") or "")
+            request_type = attrs.pop("type", "").strip()
+            body = (match.group("body") or "").strip()
+            if body:
+                attrs["content"] = body
+            request = self._context_request_from_payload(
+                request_type,
+                attrs,
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+            if request is not None:
+                requests.append(request)
+            return ""
+
+        return _TEXT_CONTEXT_REQUEST_RE.sub(replace, value), requests
+
+    def _xml_attrs(self, value: str) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+        for match in _XML_ATTR_RE.finditer(value):
+            attr_value = match.group(3) if match.group(3) is not None else match.group(4)
+            attrs[match.group(1)] = attr_value
+        return attrs
+
+    def _context_request_from_tool_call(
+        self,
+        call: _ToolCall,
+        *,
+        channel_id: int | None,
+        user_id: int | None,
+    ) -> ContextRequest | None:
+        raw_type = call.arguments.get("type")
+        if not isinstance(raw_type, str):
+            return None
+        raw_payload = call.arguments.get("payload")
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+        payload = {
+            **payload,
+            **{
+                key: value
+                for key, value in call.arguments.items()
+                if key not in ("type", "payload") and value is not None
+            },
+        }
+        payload = {
+            key: value
+            for key, value in payload.items()
+            if value is not None
+        }
+        return self._context_request_from_payload(
+            raw_type,
+            payload,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+
+    def _context_request_from_payload(
+        self,
+        request_type: str,
+        payload: dict[str, Any],
+        *,
+        channel_id: int | None,
+        user_id: int | None,
+    ) -> ContextRequest | None:
+        request_type = request_type.strip().casefold()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", request_type):
+            return None
+        normalized_payload = {
+            str(key): value
+            for key, value in payload.items()
+            if value is not None and str(key) != "type"
+        }
+        return ContextRequest(
+            type=request_type,
+            payload=normalized_payload,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+
+    def _queue_context_requests(self, requests: list[ContextRequest]) -> None:
+        for request in requests:
+            queued = self.context.queue_context_request(request)
+            self.logger.debug(
+                f"queued context request {queued.type!r} "
+                f"channel_id={queued.channel_id} user_id={queued.user_id} payload={queued.payload!r}."
+            )
+
     def _coerce_reply(self, value: Any) -> str | None:
         if not isinstance(value, str):
             return None
         if self._should_strip_first_thought_block():
             value = _THOUGHT_BLOCK_RE.sub("", value, count=1)
-        value = self.strip_context_tag_namespaces(value)
+        value = strip_context_tag_namespaces(value)
         value = value.strip()
         return value if self._discord_string_valid(value) else None
 
     def visual_reply(self, value: str) -> str | None:
-        value = self.strip_context_tag_namespaces(value)
-        value = self.strip_discord_reference_annotations(value)
+        value = strip_context_tag_namespaces(value)
+        value = strip_discord_reference_annotations(value)
         value = value.strip()
         return value if self._discord_string_valid(value) else None
 
@@ -865,8 +767,8 @@ class AICore(Generic[ContextT, ActionT]):
                 return value.casefold() == "true"
             return _MISSING
         if target in (str, object):
-            string = self.strip_discord_reference_annotations(str(value))
-            string = self.strip_context_tag_namespaces(string)
+            string = strip_discord_reference_annotations(str(value))
+            string = strip_context_tag_namespaces(string)
             string = string.strip()
             return string if self._discord_string_valid(string) else _MISSING
         return value
@@ -912,7 +814,7 @@ class AICore(Generic[ContextT, ActionT]):
             return value
         if not isinstance(value, str):
             return None
-        value = self.strip_discord_reference_annotations(value.strip())
+        value = strip_discord_reference_annotations(value.strip())
         match = re.fullmatch(r"<@!?([0-9]{15,20})(?: .*)?>", value)
         if match is not None:
             return int(match[1])
@@ -920,39 +822,9 @@ class AICore(Generic[ContextT, ActionT]):
             return int(value)
         return None
 
-    def strip_discord_reference_annotations(self, text: str) -> str:
-        return ANNOTATED_DISCORD_REFERENCE_RE.sub(r"<\1\2>", text)
-
-    def strip_context_tag_namespaces(self, text: str) -> str:
-        text = _OPEN_TAG_NAMESPACE_RE.sub("<", text)
-        return _CLOSE_TAG_NAMESPACE_RE.sub("</", text)
-
-    def _discord_reference_name(self, entity: 'discord.User | discord.Member | discord.Role | discord.abc.GuildChannel | discord.Thread') -> str:
-        if isinstance(entity, discord.Member) or isinstance(entity, discord.User):
-            return entity.display_name
-        return entity.name
-
     def _compact_description(self, text: str) -> str:
         text = " ".join(text.split())
         return text[:180]
-
-    def _json_safe(self, value: Any) -> Any:
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return value
-        if isinstance(value, (discord.User, discord.Member)):
-            return {
-                "id": value.id,
-                "name": value.name,
-                "display_name": value.display_name,
-            }
-        if isinstance(value, dict):
-            return {
-                str(key): self._json_safe(item)
-                for key, item in value.items()
-            }
-        if isinstance(value, (list, tuple)):
-            return [self._json_safe(item) for item in value]
-        return str(value)
 
     def _unique_tool_name(self, name: str) -> str:
         base = re.sub(r"\W+", "_", name.casefold()).strip("_") or "action"

@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 from contextlib import asynccontextmanager
+import json
 
 import discord
 from discord import File
@@ -11,6 +12,7 @@ from discord.poll import Poll
 from discord.ui.view import BaseView
 
 from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
+from utils.ai_context import ContextRequest, close_system_tag, open_system_tag
 from utils.discord import count_characters
 from utils.type import Coro
 
@@ -287,7 +289,6 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
     return resolved, truncate_text_to_character_limit(text, MAX_ASSISTANT_CONTEXT_CHARS)
 
 def json_string(text: str) -> str:
-    import json
     return json.dumps(text, ensure_ascii=False)
 
 
@@ -309,6 +310,208 @@ def ai_break_config(bot: 'BotCore') -> dict[str, Any]:
 
 def ai_enabled(bot: 'BotCore') -> bool:
     return bool(ai_config(bot).get("enabled", True))
+
+
+class ContextRequestExecutor:
+    def __init__(self, bot: "BotCore"):
+        from utils.ai import ai as ai_core
+
+        self.bot = bot
+        self.ai_core = ai_core
+
+    async def execute(
+        self,
+        source: discord.Message | discord.Interaction,
+        text: str,
+    ) -> str | None:
+        channel_id = self.ai_core.context.source_channel_id(source)
+        user_id = self._source_user_id(source)
+        requests = self.ai_core.context.query_context_requests(
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+        if not requests:
+            return None
+
+        blocks: list[str] = []
+        for request in requests:
+            content = await self._execute_request(request, source, text)
+            self.ai_core.context.discard_context_request(request)
+            if content is None:
+                continue
+            blocks.append(self._format_requested_context(request, content))
+
+        return "\n".join(blocks) if blocks else None
+
+    async def _execute_request(
+        self,
+        request: ContextRequest,
+        source: discord.Message | discord.Interaction,
+        text: str,
+    ) -> str | None:
+        if request.type == "user":
+            return self._user_context(request, source)
+        if request.type == "stream":
+            return self._stream_context()
+        if request.type == "minigame":
+            return await self._minigame_context(request)
+        if request.type == "milestone":
+            return await self._milestone_context()
+        return None
+
+    def _user_context(
+        self,
+        request: ContextRequest,
+        source: discord.Message | discord.Interaction,
+    ) -> str | None:
+        user_id = self._payload_user_id(request) or self._source_user_id(source)
+        if user_id is None:
+            return None
+        guild = source.guild
+        user = guild.get_member(user_id) if guild is not None else self.bot.get_user(user_id)
+        if user is None:
+            return f"user_id: {user_id}\nknown: false"
+        return (
+            f"user_id: {user.id}\n"
+            f"username: {user.name}\n"
+            f"display_name: {json_string(user.display_name)}\n"
+            f"bot: {user.bot}"
+        )
+
+    def _stream_context(self) -> str:
+        return f"stream_uptime: {self.bot.get_stream_uptime()}"
+
+    async def _minigame_context(self, request: ContextRequest) -> str | None:
+        game = str(request.payload.get("game") or request.payload.get("query") or "").strip().casefold()
+        if game in ("bogotree", "tree"):
+            data = await self._json_file("bogotree.json")
+            raw_state = data.get("state")
+            state = raw_state if isinstance(raw_state, dict) else {}
+            return self._bogotree_context(state)
+        if game in ("cbogo", "community_bogosort", "community-bogosort"):
+            data = await self._json_file("cbogo.json")
+            raw_state = data.get("state")
+            state = raw_state if isinstance(raw_state, dict) else data
+            return self._cbogo_context(state)
+        return None
+
+    def _bogotree_context(self, state: dict[str, Any]) -> str:
+        x = self._int_list(state.get("x"))
+        best_x = self._int_list(state.get("best_x"))
+        return "\n".join((
+            "game: bogotree",
+            f"solved: {bool(state.get('solved', False))}",
+            f"current_values: {x}",
+            f"current_step: {self._int_value(state.get('current_step'))}",
+            f"total_steps: {self._int_value(state.get('total_steps'))}",
+            f"best_values: {best_x}",
+            f"best_step: {self._int_value(state.get('best_step'))}",
+            f"best_score: {self._float_value(state.get('best_score'))}",
+            f"best_equal_count: {self._int_value(state.get('best_equal_count'))}",
+        ))
+
+    def _cbogo_context(self, state: dict[str, Any]) -> str:
+        return "\n".join((
+            "game: cbogo",
+            f"solved: {bool(state.get('solved', False))}",
+            f"current_array: {self._int_list(state.get('current_array'))}",
+            f"shuffles: {self._int_value(state.get('shuffles'))}",
+            f"uses: {self._int_value(state.get('uses'))}",
+            f"best_array: {self._int_list(state.get('best_array'))}",
+            f"best_score: {self._int_value(state.get('best_score'))}",
+            f"best_run_shuffle: {self._int_value(state.get('best_run_shuffle'))}",
+            f"best_run_count: {self._int_value(state.get('best_run_count'))}",
+            f"winner_id: {state.get('winner_id')}",
+            f"last_user: {state.get('last_user')}",
+        ))
+
+    async def _milestone_context(self) -> str | None:
+        if self.bot.milestones is None:
+            return "milestones: unavailable"
+
+        names = sorted(await self.bot.milestones.names(), key=str.casefold)
+        if not names:
+            return "milestones: none"
+
+        lines: list[str] = []
+        for milestone_name in names:
+            current_value = await self.bot.milestones.get(milestone_name)
+            history = self.bot.milestones.history.get(milestone_name)
+            history_items = list(history) if history else []
+            lines.extend((
+                f"milestone: {milestone_name}",
+                f"current_value: {current_value or 'None'}",
+                f"history_count: {len(history_items)}",
+                "recent_history:",
+            ))
+            if history_items:
+                for value, timestamp, _image in history_items[-10:]:
+                    lines.append(f"- time: {timestamp}, value: {value}")
+            else:
+                lines.append("- (empty)")
+            lines.append("")
+        return "\n".join(lines)
+
+    async def _json_file(self, path: str) -> dict[str, Any]:
+        def load() -> dict[str, Any]:
+            try:
+                with open(path, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+            except (OSError, json.JSONDecodeError):
+                return {}
+            return data if isinstance(data, dict) else {}
+
+        return await asyncio.to_thread(load)
+
+    def _int_list(self, value: Any) -> list[int]:
+        if not isinstance(value, list):
+            return []
+        result: list[int] = []
+        for item in value:
+            try:
+                result.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _int_value(self, value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _float_value(self, value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _format_requested_context(self, request: ContextRequest, content: str) -> str:
+        attrs = [
+            f'time={json_string(discord.utils.utcnow().isoformat())}',
+            f'type={json_string(request.type)}',
+        ]
+        if request.id is not None:
+            attrs.append(f'id={json_string(str(request.id))}')
+        if request.payload:
+            attrs.append(f'payload={json_string(json.dumps(request.payload, ensure_ascii=False, separators=(",", ":")))}')
+        open_tag = open_system_tag("requested_context").replace(">", f" {' '.join(attrs)}>")
+        return f"{open_tag}\n{content.strip()}\n{close_system_tag('requested_context')}"
+
+    def _source_user_id(self, source: discord.Message | discord.Interaction) -> int | None:
+        if isinstance(source, discord.Message):
+            return source.author.id
+        if isinstance(source, discord.Interaction):
+            return source.user.id
+        return None
+
+    def _payload_user_id(self, request: ContextRequest) -> int | None:
+        raw_user_id = request.payload.get("user_id")
+        if isinstance(raw_user_id, int):
+            return raw_user_id
+        if isinstance(raw_user_id, str) and raw_user_id.isdigit():
+            return int(raw_user_id)
+        return None
 
 
 @asynccontextmanager
@@ -421,6 +624,7 @@ async def setup(bot: 'BotCore'):
 
     bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
+    context_request_executor = ContextRequestExecutor(bot)
 
     async def ai_break_cycle() -> None:
         global _ai_break_until
@@ -454,6 +658,7 @@ async def setup(bot: 'BotCore'):
         assistant_context_message = replied_assistant_message(bot, message)
         assistant_context = assistant_context_message[1] if assistant_context_message is not None else None
         assistant_context_source = assistant_context_message[0] if assistant_context_message is not None else None
+        requested_context = await context_request_executor.execute(message, text)
         
         async with message.channel.typing():
             matches = await ai_core.ai_turn(
@@ -461,6 +666,7 @@ async def setup(bot: 'BotCore'):
                 source=message,
                 assistant_context=assistant_context,
                 assistant_context_source=assistant_context_source,
+                requested_context=requested_context,
             )
             if not matches:
                 return
@@ -489,7 +695,7 @@ async def setup(bot: 'BotCore'):
                         reply,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-                ai_core.record_message(
+                ai_core.context.record_message(
                     "assistant", match.reply, sent_message,
                     channel_id=message.channel.id
                 )
@@ -516,9 +722,9 @@ async def setup(bot: 'BotCore'):
                 )
             if len(output_messages) > 0:
                 followup_only = True
-            ai_core.record_message(
+            ai_core.context.record_message(
                 "assistant",
-                ai_core.format_command_call(match.command_name, match.kwargs),
+                ai_core.context.format_command_call(match.command_name, match.kwargs),
                 output_messages[-1] if output_messages else None,
                 channel_id=message.channel.id,
             )
@@ -542,7 +748,8 @@ async def setup(bot: 'BotCore'):
             return
 
         await bot.discord.defer(ephemeral=False)
-        matches = await ai_core.ai_turn(prompt, source=interaction)
+        requested_context = await context_request_executor.execute(interaction, prompt)
+        matches = await ai_core.ai_turn(prompt, source=interaction, requested_context=requested_context)
         if not matches:
             await bot.discord.send(
                 contents="I'm not sure I understand.",
@@ -567,7 +774,7 @@ async def setup(bot: 'BotCore'):
                         response=True,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-                ai_core.record_message(
+                ai_core.context.record_message(
                     "assistant",
                     match.reply,
                     sent_message.message if sent_message is not None else None,
@@ -587,9 +794,9 @@ async def setup(bot: 'BotCore'):
                     eph=False,
                     defer=False,
                 )
-            ai_core.record_message(
+            ai_core.context.record_message(
                 "assistant",
-                ai_core.format_command_call(match.command_name, match.kwargs),
+                ai_core.context.format_command_call(match.command_name, match.kwargs),
                 output_messages[-1] if output_messages else None,
                 channel_id=interaction.channel_id,
             )
