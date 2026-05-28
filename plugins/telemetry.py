@@ -64,9 +64,12 @@ class UsageView(discord.ui.LayoutView):
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
     accounts = groups.accounts(bot)
+    ai_activity = groups.ai_activity(bot)
     hidden_commands: list[str] = [
         manage.group.name,
         accounts.group.name,
+        f"{ai_activity.group.name} schedule",
+        f"{ai_activity.group.name} trigger"
     ]
 
     telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.jsonl"))

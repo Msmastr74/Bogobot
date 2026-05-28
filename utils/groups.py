@@ -10,3 +10,6 @@ def accounts(bot: 'BotCore'):
 
 def bogo(bot: 'BotCore'):
     return bot.setup.group("bogo", "Fun /bogo commands")
+
+def ai_activity(bot: 'BotCore'):
+    return bot.setup.group("ai_activity", "AI activity controls")
