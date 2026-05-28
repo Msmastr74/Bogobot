@@ -42,21 +42,22 @@ class AccountListView(discord.ui.LayoutView):
         
         accounts_container = discord.ui.Container()
         found_account = False
+        text = ""
         for uid, account in accounts:
             found_account = True
             account_text = f"<@{uid}>: {NAMES.get(account['perm_level'], 'Unknown')}"
             if count_remaining(account_text):
-                accounts_container.add_item(
-                    discord.ui.TextDisplay(account_text)
-                )
+                text += account_text + "\n"
             else:
-                accounts_container.add_item(
-                    discord.ui.TextDisplay(truncated_text)
-                )
+                text += truncated_text + "\n"
                 break
         if not found_account:
             accounts_container.add_item(
                 discord.ui.TextDisplay(error_text)
+            )
+        else:
+            accounts_container.add_item(
+                discord.ui.TextDisplay(text[:-1])
             )
         self.add_item(accounts_container)
 
