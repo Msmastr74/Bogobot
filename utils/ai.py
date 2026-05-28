@@ -257,18 +257,16 @@ class AICore(Generic[ContextT, ActionT]):
 
         matches: list[AIMatch[ContextT, ActionT]] = []
         user_id = self._source_user_id(source)
-        if not calls:
-            content = self._strip_first_thought_block(content)
-            content, requests = self._extract_text_context_requests(
-                content,
-                channel_id=channel_id,
-                user_id=user_id,
-            )
-            self._queue_context_requests(requests)
-            reply = self._coerce_reply(content)
-            if reply is None:
-                return []
-            return [AIMatch(
+        content = self._strip_first_thought_block(content)
+        content, requests = self._extract_text_context_requests(
+            content,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+        self._queue_context_requests(requests)
+        reply = self._coerce_reply(content)
+        if reply is not None:
+            matches.append(AIMatch(
                 name="conversation",
                 command_name="conversation",
                 description="Conversational AI response",
@@ -276,7 +274,9 @@ class AICore(Generic[ContextT, ActionT]):
                 action=None,
                 score=1.0,
                 reply=reply,
-            )]
+            ))
+        if not calls:
+            return matches
 
         action_by_tool = {action.tool_name: action for action in self._actions}
         message_source = source if isinstance(source, discord.Message) else None
