@@ -72,12 +72,12 @@ async def trigger_ai_activity(
                         sent_messages.append(raw_message)
             if sent_message is not None:
                 followup_only = True
-                ai_core.context.record_message(
-                    "assistant",
-                    match.reply,
-                    sent_message,
-                    channel_id=channel_id,
-                )
+            ai_core.context.record_message(
+                "assistant",
+                match.reply,
+                sent_message,
+                channel_id=channel_id,
+            )
             continue
 
         if match.action is None:

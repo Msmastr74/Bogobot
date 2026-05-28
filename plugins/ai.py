@@ -757,19 +757,20 @@ async def setup(bot: 'BotCore'):
                     continue
                 
                 sent_message: discord.Message | None = None
-                if not followup_only:
-                    sent_message = await message.reply(
-                        chunks[0],
-                        allowed_mentions=discord.AllowedMentions.none(),
-                        mention_author=False
-                    )
-                    followup_only = True
-                    chunks = chunks[1:]
-                for reply in chunks:
-                    sent_message = await message.channel.send(
-                        reply,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
+                if match.respond:
+                    if not followup_only:
+                        sent_message = await message.reply(
+                            chunks[0],
+                            allowed_mentions=discord.AllowedMentions.none(),
+                            mention_author=False
+                        )
+                        followup_only = True
+                        chunks = chunks[1:]
+                    for reply in chunks:
+                        sent_message = await message.channel.send(
+                            reply,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
                 ai_core.context.record_message(
                     "assistant", match.reply, sent_message,
                     channel_id=message.channel.id
@@ -843,12 +844,13 @@ async def setup(bot: 'BotCore'):
                     continue
                 
                 sent_message = None
-                for reply in chunks:
-                    sent_message = await bot.discord.send(
-                        contents=reply,
-                        response=True,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
+                if match.respond:
+                    for reply in chunks:
+                        sent_message = await bot.discord.send(
+                            contents=reply,
+                            response=True,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
                 ai_core.context.record_message(
                     "assistant",
                     match.reply,
