@@ -38,11 +38,11 @@ _CONTEXT_REQUEST_TOOL_NAME = "request_context"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
 _TEXT_CONTEXT_REQUEST_RE = re.compile(
-    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>\s+(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
+    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>\s+(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:\s*/\s*>|\s*>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
     re.DOTALL | re.IGNORECASE,
 )
 _TEXT_DONT_RESPOND_RE = re.compile(
-    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\b(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\s*>)",
+    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\b(?:\s*/\s*>|\s*>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\s*>)",
     re.DOTALL | re.IGNORECASE,
 )
 _XML_ATTR_RE = re.compile(r"([A-Za-z_][\w:-]*)\s*=\s*('([^']*)'|\"([^\"]*)\")")
