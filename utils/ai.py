@@ -640,7 +640,7 @@ class AICore(Generic[ContextT, ActionT]):
         self,
         value: str
     ) -> bool:
-        return _TEXT_DONT_RESPOND_RE.match(value) is not None
+        return _TEXT_DONT_RESPOND_RE.search(value) is not None
 
     def _xml_attrs(self, value: str) -> dict[str, Any]:
         attrs: dict[str, Any] = {}
