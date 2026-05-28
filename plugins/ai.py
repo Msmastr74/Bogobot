@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 from contextlib import asynccontextmanager
+from functools import cache
 import json
 
 import discord
@@ -39,6 +40,59 @@ BotAction: TypeAlias = Callable[..., Coro[None]]
 MAX_ASSISTANT_CONTEXT_CHARS = 4000
 MAX_REPLY_CHARS = 2000
 _ai_break_until: datetime.datetime | None = None
+_capture_add_message_by_id: dict[int, Callable[[discord.Message | None], None]] = {}
+
+
+@cache
+def capturing_response_class(response_class: type) -> type:
+    class CapturingResponse(response_class):
+        __slots__ = ()
+
+        async def send_message(self, *args: Any, **kwargs: Any) -> Any:
+            result = await super(CapturingResponse, self).send_message(*args, **kwargs)
+            add_message = _capture_add_message_by_id.get(id(self))
+            if add_message is None:
+                return result
+            if isinstance(result, discord.Message):
+                add_message(result)
+                return result
+
+            message = getattr(self, "_message", None)
+            if isinstance(message, discord.Message):
+                add_message(message)
+                return result
+
+            parent = getattr(self, "_parent", None)
+            if parent is None:
+                return result
+            try:
+                response_message = await parent.original_response()
+            except (discord.HTTPException, discord.ClientException):
+                return result
+            add_message(response_message if isinstance(response_message, discord.Message) else None)
+            return result
+
+    return CapturingResponse
+
+
+@cache
+def capturing_followup_class(followup_class: type) -> type:
+    class CapturingFollowup(followup_class):
+        __slots__ = ()
+
+        async def send(self, *args: Any, **kwargs: Any) -> Any:
+            add_message = _capture_add_message_by_id.get(id(self))
+            capturing = add_message is not None
+            caller_requested_wait = bool(kwargs.get("wait", False))
+            if capturing:
+                kwargs["wait"] = True
+            result = await super(CapturingFollowup, self).send(*args, **kwargs)
+            if capturing:
+                add_message(result if isinstance(result, discord.Message) else None)
+                return result if caller_requested_wait else None
+            return result
+
+    return CapturingFollowup
 
 @dataclass(frozen=True, slots=True)
 class MessageInteractionCommand:
@@ -519,8 +573,8 @@ async def capture_interaction_output(interaction: discord.Interaction):
     output_messages: list[discord.Message] = []
     response = interaction.response
     followup = interaction.followup
-    original_send_message = response.send_message
-    original_followup_send = followup.send
+    response_class = type(response)
+    followup_class = type(followup)
 
     def add_message(message: discord.Message | None) -> None:
         if message is None:
@@ -529,33 +583,17 @@ async def capture_interaction_output(interaction: discord.Interaction):
             return
         output_messages.append(message)
 
-    async def send_message(*args: Any, **kwargs: Any) -> Any:
-        result = await original_send_message(*args, **kwargs)
-        if isinstance(result, discord.Message):
-            add_message(result)
-            return result
-        try:
-            response_message = await interaction.original_response()
-        except discord.HTTPException:
-            return result
-        if isinstance(response_message, discord.Message):
-            add_message(response_message)
-        return result
-
-    async def followup_send(*args: Any, **kwargs: Any) -> Any:
-        caller_requested_wait = bool(kwargs.get("wait", False))
-        kwargs["wait"] = True
-        result = await original_followup_send(*args, **kwargs)
-        add_message(result if isinstance(result, discord.Message) else None)
-        return result if caller_requested_wait else None
-
-    cast(Any, response).send_message = send_message
-    cast(Any, followup).send = followup_send
+    response.__class__ = capturing_response_class(response_class)
+    followup.__class__ = capturing_followup_class(followup_class)
+    _capture_add_message_by_id[id(response)] = add_message
+    _capture_add_message_by_id[id(followup)] = add_message
     try:
         yield output_messages
     finally:
-        cast(Any, response).send_message = original_send_message
-        cast(Any, followup).send = original_followup_send
+        _capture_add_message_by_id.pop(id(response), None)
+        _capture_add_message_by_id.pop(id(followup), None)
+        response.__class__ = response_class
+        followup.__class__ = followup_class
 
 def split_text_to_character_limit(text: str, max_len: int) -> list[str]:
     pieces: list[str] = []
