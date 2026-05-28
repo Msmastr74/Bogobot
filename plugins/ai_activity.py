@@ -137,8 +137,16 @@ def default_to(value: T | None, default: T) -> T:
 def calculate_next_time(schedule: AISchedule, start_from: datetime, *, max_years: int = 100) -> datetime | None:
     current = start_from.replace(microsecond=0)
 
-    calc_hr = default_to(schedule.get("hour"), current.hour)
+    calc_hr = schedule.get("hour")
     calc_min = schedule.get("minute")
+
+    if calc_hr is None:
+        calc_hr = current.hour
+        if schedule.get("minute") is not None and calc_min <= current.minute:
+            calc_hr += 1
+            if calc_hr == 24:
+                current = current + timedelta(days=1)
+                calc_hr = 0
 
     try:
         candidate = current.replace(hour=calc_hr, minute=calc_min, second=0)
@@ -227,12 +235,13 @@ class AIScheduler(ChannelScheduler[AISchedule]):
     
     async def _worker(self):
         try:
+            start_time = discord.utils.utcnow()
             while True:
                 pending_tasks: list[PendingSchedule] = []
                 channels = await self.get_channels()
                 for channel_id, schedules in channels.items():
                     for schedule in schedules:
-                        next_event = calculate_next_time(schedule["payload"], discord.utils.utcnow())
+                        next_event = calculate_next_time(schedule["payload"], start_time)
                         if next_event is not None:
                             pending_tasks.append({
                                 "channel_id": channel_id,
@@ -242,22 +251,37 @@ class AIScheduler(ChannelScheduler[AISchedule]):
                         else:
                             await self.remove_schedule(channel_id, schedule["id"])
                 pending_tasks.sort(key=lambda x: x["next_event"])
-                loop_sched = discord.utils.utcnow() + timedelta(minutes=1)
+                
+                end_time = start_time + timedelta(minutes=1)
                 for task in pending_tasks:
-                    if task["next_event"] > loop_sched:
+                    if task["next_event"] > end_time:
                         break
                     await asyncio.sleep(max(0, (task["next_event"] - discord.utils.utcnow()).total_seconds()))
                     channel = self.bot.get_channel(task["channel_id"])
                     if channel is None or  not hasattr(channel, "send"):
                         continue
                     channel = cast('discord.abc.MessageableChannel', channel)
-                    await trigger_ai_activity(self.bot, channel, task["purpose"])
-                await asyncio.sleep(max(0, (loop_sched - discord.utils.utcnow()).total_seconds()))
+                    asyncio.create_task(self._run_trigger(channel, task["purpose"]))
+                await asyncio.sleep(max(0, (end_time - discord.utils.utcnow()).total_seconds()))
+                start_time = end_time
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception:
             if self.logger:
                 self.logger.exception("Error occured in AIScheduler worker task.")
+
+    async def _run_trigger(
+        self,
+        channel: discord.abc.MessageableChannel,
+        purpose: str,
+    ) -> None:
+        try:
+            await trigger_ai_activity(self.bot, channel, purpose)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if self.logger:
+                self.logger.exception("Error occurred while running scheduled AI activity.")
 
 def parse_activity_time_to_schedule(value: str, purpose: str) -> AISchedule | None:
     """
