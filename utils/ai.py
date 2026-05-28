@@ -468,7 +468,7 @@ class AICore(Generic[ContextT, ActionT]):
             f"- In a tool-call response, you may call `{_CONTEXT_REQUEST_TOOL_NAME}` in parallel with any command call to request the same future context.\n"
             f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}` or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context, use a text context-request tag instead of the tool.\n"
             "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
-            f"You can avoid responding to the user by including `<{ASSISTANT_NAMESPACE}:dont_respond />`\n"
+            f"You can avoid responding to the user by including `<{ASSISTANT_NAMESPACE}:dont_respond />`. This does not have to be the only content in the message.\n"
             "Use this whenever you would like to. These messages will still be retained in your history/memory, and context requests will still be queued.\n"
             "## Context Blocks\n"
             f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
