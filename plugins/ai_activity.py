@@ -214,11 +214,11 @@ class AIScheduler(ChannelScheduler[AISchedule]):
         self._worker_task = None
 
     async def _save_schedules(self, data: dict[str, Any]):
-        self.bot.config["schedules"] = data
+        self.bot.config["ai_schedules"] = data
         await self.bot.save_config()
     
     def _load_schedules(self) -> dict[str, Any]:
-        schedule_data = self.bot.config.get("schedules")
+        schedule_data = self.bot.config.get("ai_schedules")
 
         if isinstance(schedule_data, dict):
             return schedule_data
