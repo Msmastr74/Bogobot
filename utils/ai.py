@@ -469,7 +469,7 @@ class AICore(Generic[ContextT, ActionT]):
             f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}` or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context, use a text context-request tag instead of the tool.\n"
             "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
             f"You can avoid responding to the user by including `<{ASSISTANT_NAMESPACE}:dont_respond />`\n"
-            "Use this whenever you would like to. These messages will still be retained in history, and context requests will still be queued.\n"
+            "Use this whenever you would like to. These messages will still be retained in your history/memory, and context requests will still be queued.\n"
             "## Context Blocks\n"
             f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
             f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
