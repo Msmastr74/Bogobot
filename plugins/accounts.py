@@ -119,6 +119,9 @@ async def setup(bot: BotCore):
             await bot.discord.send(contents="You cannot edit your own rank", response=True, ephemeral=True)
             return
         current_rank = await bot.accounts.permission_level(user.id)
+        if current_rank < 0:
+            await bot.discord.send(contents=f"<@{user.id}> is banned", response=True, ephemeral=True)
+            return
         new_rank: int | None = None
         if action != "set" and level is not None:
             await bot.discord.send(contents="Level argument should not be provided unless using the set action", response=True, ephemeral=True)
