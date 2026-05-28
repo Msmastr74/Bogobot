@@ -258,6 +258,7 @@ class AICore(Generic[ContextT, ActionT]):
         matches: list[AIMatch[ContextT, ActionT]] = []
         user_id = self._source_user_id(source)
         if not calls:
+            content = self._strip_first_thought_block(content)
             content, requests = self._extract_text_context_requests(
                 content,
                 channel_id=channel_id,
@@ -430,7 +431,7 @@ class AICore(Generic[ContextT, ActionT]):
             f"- In a normal text reply, you may append hidden context request tags matching these schemas. These tags are removed before the user sees your reply.\n"
             f"- In a tool-call response, you may call `{_CONTEXT_REQUEST_TOOL_NAME}` in parallel with any command call to request the same future context.\n"
             f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}` or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context, use a text context-request tag instead of the tool.\n"
-            "- Use passive context requests sparingly, only when future replies would benefit from extra context.\n"
+            "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
             "## Context Blocks\n"
             f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
             f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
@@ -669,11 +670,17 @@ class AICore(Generic[ContextT, ActionT]):
     def _coerce_reply(self, value: Any) -> str | None:
         if not isinstance(value, str):
             return None
-        if self._should_strip_first_thought_block():
-            value = _THOUGHT_BLOCK_RE.sub("", value, count=1)
-        value = strip_context_tag_namespaces(value)
+        value = self._strip_reply_context_tag_namespaces(value)
         value = value.strip()
         return value if self._discord_string_valid(value) else None
+
+    def _strip_first_thought_block(self, value: str) -> str:
+        if not self._should_strip_first_thought_block():
+            return value
+        return _THOUGHT_BLOCK_RE.sub("", value, count=1)
+
+    def _strip_reply_context_tag_namespaces(self, value: str) -> str:
+        return strip_context_tag_namespaces(value)
 
     def visual_reply(self, value: str) -> str | None:
         value = strip_context_tag_namespaces(value)
