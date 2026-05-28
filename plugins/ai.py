@@ -834,6 +834,7 @@ async def setup(bot: 'BotCore'):
             )
             return
 
+        has_responded = False
         for match in matches:
             if match.reply is not None:
                 reply = ai_core.visual_reply(match.reply)
@@ -851,6 +852,7 @@ async def setup(bot: 'BotCore'):
                             response=True,
                             allowed_mentions=discord.AllowedMentions.none(),
                         )
+                has_responded = has_responded or sent_message is not None
                 ai_core.context.record_message(
                     "assistant",
                     match.reply,
@@ -871,11 +873,18 @@ async def setup(bot: 'BotCore'):
                     eph=False,
                     defer=False,
                 )
+            has_responded = has_responded or len(output_messages) > 0
             ai_core.context.record_message(
                 "assistant",
                 ai_core.context.format_command_call(match.command_name, match.kwargs),
                 output_messages[-1] if output_messages else None,
                 channel_id=interaction.channel_id,
+            )
+        if not has_responded:
+            await bot.discord.cleanup_defer_status(interaction)
+            await bot.discord.send(
+                contents="The assistant did not provide a response.",
+                ephemeral=True
             )
 
     @bot.init_callback
