@@ -129,7 +129,6 @@ async def setup(bot: "BotCore"):
     @activity.command(
         name="schedule",
         description="Schedule an AI activity trigger",
-        perm_requirement=0,
         eph=True,
         defer=False,
     )
@@ -173,7 +172,6 @@ async def setup(bot: "BotCore"):
     @activity.command(
         name="trigger",
         description="Trigger AI activity now",
-        perm_requirement=0,
         eph=True,
         defer=False,
     )
