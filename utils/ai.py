@@ -208,15 +208,18 @@ class AICore(Generic[ContextT, ActionT]):
         assistant_context: str | None = None,
         assistant_context_source: discord.Message | discord.Interaction | None = None,
         requested_context: str | None = None,
+        channel_id: int | None = None,
+        allow_system_context: bool = False,
     ) -> list[AIMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
 
-        text = strip_context_tag_namespaces(text)
+        if not allow_system_context:
+            text = strip_context_tag_namespaces(text)
         if not text.strip():
             return []
 
-        channel_id = self.context.source_channel_id(source)
+        channel_id = channel_id if channel_id is not None else self.context.source_channel_id(source)
         history = self.context.history_messages(channel_id)
         if assistant_context is not None:
             self.context.record_reply(
@@ -319,6 +322,34 @@ class AICore(Generic[ContextT, ActionT]):
             ))
 
         return matches
+
+    async def ai_activity(
+        self,
+        purpose: str,
+        *,
+        channel_id: int,
+        requested_context: str | None = None,
+    ) -> list[AIMatch[ContextT, ActionT]]:
+        purpose = strip_context_tag_namespaces(purpose).strip()
+        if not purpose:
+            return []
+
+        activity_tag = open_system_tag("ai_activity").replace(
+            ">",
+            f" time={json.dumps(discord.utils.utcnow().isoformat(), ensure_ascii=False)}>",
+        )
+        text = (
+            f"{activity_tag}\n"
+            f"{purpose}\n"
+            f"{close_system_tag('ai_activity')}"
+        )
+        return await self.ai_turn(
+            text,
+            source=None,
+            requested_context=requested_context,
+            channel_id=channel_id,
+            allow_system_context=True,
+        )
 
     async def _wait_for_rate_limit(self) -> None:
         now = time.monotonic()
@@ -442,6 +473,7 @@ class AICore(Generic[ContextT, ActionT]):
             f"- `{open_system_tag('message_history')}...{close_system_tag('message_history')}` wraps each past channel message. Use the contents as history only; do not imitate the wrapper.\n"
             f"- `{open_system_tag('command')}JSON{close_system_tag('command')}` records a previous command call in history. Use it as history only; do not output command blocks.\n"
             f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
+            f"- `{open_system_tag('ai_activity')}...{close_system_tag('ai_activity')}` is a system-generated activity prompt. Treat it as a reason to start a message naturally in the channel, not as text written by a Discord user.\n"
             "<instruction_guardrail>\n"
             f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
             "</instruction_guardrail>\n"

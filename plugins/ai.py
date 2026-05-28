@@ -8,6 +8,7 @@ import discord
 from discord import File
 from discord.abc import Snowflake
 from discord.embeds import Embed
+from requests import Response
 from discord.mentions import AllowedMentions
 from discord.poll import Poll
 from discord.ui.view import BaseView
@@ -150,7 +151,7 @@ class MessageInteractionFollowup(discord.Webhook):
             for key, value in optional_kwargs.items()
             if value is not discord.utils.MISSING
         })
-        message = await self.interaction.source_message.channel.send(
+        message = await cast(Any, self.interaction.send_channel).send(
             None if content is discord.utils.MISSING else content,
             **kwargs,
         )
@@ -217,15 +218,22 @@ class MessageInteractionResponse(discord.InteractionResponse[discord.Client]):
             for key, value in optional_kwargs.items()
             if value is not discord.utils.MISSING
         })
-        self._message = await self._message_interaction.source_message.reply(
-            content,
-            **kwargs,
-        )
+        if self._message_interaction.source_message is not None:
+            self._message = await self._message_interaction.source_message.reply(
+                content,
+                **kwargs,
+            )
+        else:
+            self._message = await cast(Any, self._message_interaction.send_channel).send(
+                content,
+                **kwargs,
+            )
 
 
 class MessageInteraction(discord.Interaction[discord.Client]):
     __slots__ = (
         "source_message",
+        "send_channel",
         "_message_command",
         "_followup_only",
     )
@@ -233,29 +241,43 @@ class MessageInteraction(discord.Interaction[discord.Client]):
     def __init__(
         self,
         bot: "BotCore",
-        message: discord.Message,
+        source: discord.Message | discord.abc.MessageableChannel,
         command_name: str,
         *,
+        user: discord.User | discord.Member | None = None,
+        guild: discord.Guild | None = None,
+        state: Any | None = None,
         followup_only: bool = False,
     ):
-        self._state = message._state
+        if isinstance(source, discord.Message):
+            source_message: discord.Message | None = source
+            send_channel = source.channel
+        else:
+            source_message = None
+            send_channel = source
+        self._state = state or getattr(source, "_state", None) or getattr(send_channel, "_state")
         self._client = bot
         self._session = getattr(self._state.http, "_HTTPClient__session")
         self._baton = None
         self._original_response = None
-        self.id = message.id
+        self.id = source_message.id if source_message is not None else discord.utils.time_snowflake(discord.utils.utcnow())
         self.type = discord.InteractionType.application_command
         self.data = None
         self.application_id = bot.user.id if bot.user is not None else 0
-        self.message = message
-        self.source_message = message
-        self.user = message.author
-        self.channel = cast(Any, message.channel)
-        self.guild_id = message.guild.id if message.guild is not None else None
+        self.message = source_message
+        self.source_message = source_message
+        self.send_channel = send_channel
+        resolved_user = user or (source_message.author if source_message is not None else bot.user)
+        if resolved_user is None:
+            raise RuntimeError("MessageInteraction requires a user when bot.user is unavailable.")
+        self.user = cast(Any, resolved_user)
+        self.channel = cast(Any, send_channel)
+        resolved_guild = guild or (source_message.guild if source_message is not None else getattr(send_channel, "guild", None))
+        self.guild_id = resolved_guild.id if resolved_guild is not None else None
         self.token = ""
         self.version = 1
         self.locale = discord.Locale.american_english
-        self.guild_locale = None
+        self.guild_locale = resolved_guild.preferred_locale if resolved_guild is not None else None
         self.extras = {}
         self.command_failed = False
         self.entitlement_sku_ids = []
@@ -295,7 +317,10 @@ class MessageInteraction(discord.Interaction[discord.Client]):
     async def original_response(self) -> Any:
         response = cast(MessageInteractionResponse, self.response)
         if response._message is None:
-            return self.source_message
+            resp = Response()
+            resp.status_code = 404
+            resp.reason = "Not Found"
+            raise discord.NotFound(resp, "Interaction response has not sent a message.")
         return response._message
 
     async def delete_original_response(self) -> None:
@@ -306,7 +331,9 @@ class MessageInteraction(discord.Interaction[discord.Client]):
 
     @property
     def created_at(self) -> datetime.datetime:
-        return self.source_message.created_at
+        if self.source_message is not None:
+            return self.source_message.created_at
+        return discord.utils.snowflake_time(self.id)
 
     @property
     def expires_at(self) -> datetime.datetime:
@@ -375,14 +402,12 @@ class ContextRequestExecutor:
 
     async def execute(
         self,
-        source: discord.Message | discord.Interaction,
+        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
         text: str,
     ) -> str | None:
-        channel_id = self.ai_core.context.source_channel_id(source)
-        user_id = self._source_user_id(source)
+        channel_id = self._source_channel_id(source)
         requests = self.ai_core.context.query_context_requests(
-            channel_id=channel_id,
-            user_id=user_id,
+            channel_id=channel_id
         )
         if not requests:
             return None
@@ -400,7 +425,7 @@ class ContextRequestExecutor:
     async def _execute_request(
         self,
         request: ContextRequest,
-        source: discord.Message | discord.Interaction,
+        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
         text: str,
     ) -> str | None:
         if request.type == "user":
@@ -416,12 +441,12 @@ class ContextRequestExecutor:
     def _user_context(
         self,
         request: ContextRequest,
-        source: discord.Message | discord.Interaction,
+        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
     ) -> str | None:
         user_id = self._payload_user_id(request) or self._source_user_id(source)
         if user_id is None:
             return None
-        guild = source.guild
+        guild = getattr(source, "guild", None)
         user = guild.get_member(user_id) if guild is not None else self.bot.get_user(user_id)
         if user is None:
             return f"user_id: {user_id}\nknown: false"
@@ -552,7 +577,19 @@ class ContextRequestExecutor:
         open_tag = open_system_tag("requested_context").replace(">", f" {' '.join(attrs)}>")
         return f"{open_tag}\n{content.strip()}\n{close_system_tag('requested_context')}"
 
-    def _source_user_id(self, source: discord.Message | discord.Interaction) -> int | None:
+    def _source_channel_id(
+        self,
+        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+    ) -> int | None:
+        if isinstance(source, discord.Message) or isinstance(source, discord.Interaction):
+            return self.ai_core.context.source_channel_id(source)
+        channel_id = getattr(source, "id", None)
+        return channel_id if isinstance(channel_id, int) else None
+
+    def _source_user_id(
+        self,
+        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+    ) -> int | None:
         if isinstance(source, discord.Message):
             return source.author.id
         if isinstance(source, discord.Interaction):
