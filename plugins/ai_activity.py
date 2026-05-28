@@ -222,7 +222,7 @@ def parse_activity_time(value: str) -> datetime.datetime | None:
             return now + datetime.timedelta(hours=amount)
         return now + datetime.timedelta(days=amount)
 
-    timestamp_match = re.fullmatch(r"<t:(\d{1,12})(?::[tTdDfFR])?>", value)
+    timestamp_match = re.fullmatch(r"<t:(\d{1,12})(?::[tTdDfFRsS])?>", value)
     if timestamp_match is not None:
         return datetime.datetime.fromtimestamp(int(timestamp_match[1]), datetime.timezone.utc)
 
