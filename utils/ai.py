@@ -36,7 +36,7 @@ AIParamsTable: TypeAlias = dict[str, "AIParam"]
 _MAX_CALLS = 4
 _CONTEXT_REQUEST_TOOL_NAME = "request_context"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
-_THOUGHT_BLOCK_RE = re.compile(r"<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
+_THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
 _TEXT_CONTEXT_REQUEST_RE = re.compile(
     rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
     re.DOTALL | re.IGNORECASE,
@@ -391,7 +391,7 @@ class AICore(Generic[ContextT, ActionT]):
                 tool_choice="auto",
                 parallel_tool_calls=True,
                 temperature=0.2,
-                max_tokens=512,
+                max_tokens=1024,
             )
         except Exception as exc:
             tool_error = self._tool_use_failed_message(exc)

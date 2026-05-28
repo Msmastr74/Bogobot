@@ -141,7 +141,9 @@ For Gemini/Gemma models on Google endpoints, Bogobot strips the first `<thought>
 
 ## Context Format
 
-Bogobot sends Discord metadata as XML-style context blocks with a system namespace prefix. In the examples below, `{SYSTEM_TAG}` represents `utils.ai.SYSTEM_NAMESPACE`, which currently defaults to `system`. These blocks are model input only.
+Bogobot sends Discord metadata as XML-style context blocks with a system namespace prefix. In the examples below, `{SYSTEM_TAG}` represents `utils.ai_context.SYSTEM_NAMESPACE`, which currently defaults to `system`. `{ASSISTANT_TAG}` represents `utils.ai_context.ASSISTANT_NAMESPACE`, which currently defaults to `assistant`.
+
+`{SYSTEM_TAG}:...` blocks are system-supplied model input. The model is instructed not to output them. User input and model output have reserved system-tag namespaces stripped before they can be treated as normal text.
 
 Example attached metadata:
 
@@ -172,6 +174,14 @@ Command calls are recorded in history like this:
 <{SYSTEM_TAG}:command>{"name":"ping","arguments":{}}</{SYSTEM_TAG}:command>
 ```
 
+Requested context is recorded and injected as an assistant-role history/context message:
+
+```xml
+<{SYSTEM_TAG}:requested_context time="2026-05-27T02:20:53.966000+00:00" type="stream">
+stream_uptime: 12:03:44:10
+</{SYSTEM_TAG}:requested_context>
+```
+
 Each rolling channel history message is wrapped before being sent to the model. The chat message keeps its original role; the wrapper only marks that it came from stored history.
 
 ```xml
@@ -188,6 +198,40 @@ hello
 Hi.
 </{SYSTEM_TAG}:message_history>
 ```
+
+## Passive Context Requests
+
+The model can ask Bogobot to make extra context available on a future AI turn. These requests do not run a second model call in the current turn. They are queued in SQLite, resolved before the next matching channel/user AI turn, injected as `{SYSTEM_TAG}:requested_context`, recorded into history, then discarded.
+
+For normal text replies, the model can append hidden XML request tags. These are removed before sending the visible Discord reply:
+
+```xml
+<{ASSISTANT_TAG}:context_request type="stream" />
+<{ASSISTANT_TAG}:context_request type="user" user_id="123456789012345678" />
+<{ASSISTANT_TAG}:context_request type="minigame" game="bogotree" />
+<{ASSISTANT_TAG}:context_request type="minigame" game="cbogo" />
+<{ASSISTANT_TAG}:context_request type="milestone" />
+```
+
+For tool-call turns, Bogobot also exposes a `request_context` tool:
+
+```json
+{
+  "type": "minigame",
+  "payload": {
+    "game": "bogotree"
+  }
+}
+```
+
+The tool version is useful when the model is already making tool calls. If the model needs to answer with normal text and request future context, it should use the hidden XML form instead, because tool-call turns cannot also send normal text reliably.
+
+Supported context request types:
+
+- `stream`: Adds current stream/bot state such as stream uptime.
+- `user`: Resolves a Discord user id into known username/display name/bot metadata.
+- `minigame`: Adds compact state for `bogotree` or `cbogo`.
+- `milestone`: Adds all milestone names, current values, and recent text history. Images are intentionally omitted.
 
 ## AI Actions
 

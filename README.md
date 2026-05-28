@@ -96,7 +96,7 @@ May 26 00:51:57.280 INFO     Bogobot         Automatic account creation finished
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
  * /get_sort: Retrieves the latest observed sort state and frame image when stream data is available.
- * @mention AI actions: Mention Bogobot and it will interpret the text based on registered AI actions. See `AI.md`.
+ * @mention AI and /ai: Bogobot can chat, call registered command actions, and queue passive context requests. See `AI.md`.
  * /archive: Shows archived monitor values.
  * /archive_frame: Shows a visual archive frame by epoch or Discord timestamp.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
