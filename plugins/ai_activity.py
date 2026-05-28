@@ -257,7 +257,7 @@ class AIScheduler(ChannelScheduler[AISchedule]):
                             await self.remove_schedule(channel_id, schedule["id"])
                 pending_tasks.sort(key=lambda x: x["next_event"])
                 
-                end_time = start_time + timedelta(minutes=1)
+                end_time = start_time + timedelta(seconds=30)
                 for task in pending_tasks:
                     if task["next_event"] > end_time:
                         break
