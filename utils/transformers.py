@@ -15,7 +15,7 @@ class ColourTransformer(app_commands.Transformer):
                 value, self.type, self
             )
     
-    async def autocomplete(self, interaction: discord.Interaction, value: str) -> list[app_commands.Choice[str]]: # pyright: ignore
+    async def autocomplete(self, interaction: discord.Interaction, value: str) -> list[app_commands.Choice[str]]: # type: ignore
         value = value.strip().lower()
         
         choices: list[app_commands.Choice[str]] = []

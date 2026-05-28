@@ -389,7 +389,8 @@ class BotCore(discord.Client):
                 return await interaction.original_response()
 
             if interaction and hasattr(interaction.channel, 'send'):
-                return await interaction.channel.send(**kwargs) # pyright: ignore
+                channel = cast('discord.abc.MessageableChannel', interaction.channel)
+                return await channel.send(**kwargs)
 
             return None
         

@@ -282,7 +282,7 @@ def parse_activity_time_to_schedule(value: str, purpose: str) -> AISchedule | No
                 continue
             k, v = token.split(":", 1)
             if k in valid_keys and v.isdigit():
-                schedule[k] = int(v) # type: ignore
+                schedule[k] = int(v)
                 
         # Structural safety fallback validation
         if "minute" in schedule:
@@ -422,6 +422,46 @@ async def setup(bot: "BotCore"):
 
         view = AISchedulesView(channel.id, channel_schedules)
         await bot.discord.send(view=view, response=True, ephemeral=True)
+    
+    @ai_activity.command(
+        name="remove",
+        description="Remove a scheduled AI activity by its unique ID",
+        eph=True,
+        defer=False,
+    )
+    async def remove_cmd(interaction: discord.Interaction, id: str):
+        channel = interaction_messageable_channel(interaction)
+        if channel is None:
+            await bot.discord.send("This command needs an accessible channel.", response=True, ephemeral=True)
+            return
+
+        target_id = id.strip()
+        if not target_id:
+            await bot.discord.send("A valid schedule ID is required.", response=True, ephemeral=True)
+            return
+
+        channels = await scheduler.get_channels()
+        channel_schedules = channels.get(channel.id, [])
+        
+        exists = any(item["id"] == target_id for item in channel_schedules)
+
+        if not exists:
+            await bot.discord.send(
+                f"❌ **Error:** No active schedule with ID `{target_id}` was found in <#{channel.id}>.\n"
+                f"Use `/ai_activity list` to check active IDs for this channel.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        await scheduler.remove_schedule(channel.id, target_id)
+
+        await bot.discord.send(
+            f"🗑️ **Schedule Removed Successfully**\n"
+            f"The AI automation rule matching ID `{target_id}` has been deleted from <#{channel.id}> configuration registers.",
+            response=True,
+            ephemeral=True,
+        )
 
     @bot.init_callback
     async def init():

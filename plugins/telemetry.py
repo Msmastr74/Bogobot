@@ -69,7 +69,8 @@ async def setup(bot: BotCore):
         manage.group.name,
         accounts.group.name,
         f"{ai_activity.group.name} schedule",
-        f"{ai_activity.group.name} trigger"
+        f"{ai_activity.group.name} remove",
+        f"{ai_activity.group.name} trigger",
     ]
 
     telemetry_path = Path(bot.config.get("telemetry_path", "telemetry.jsonl"))
