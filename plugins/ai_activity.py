@@ -59,16 +59,17 @@ async def trigger_ai_activity(
             chunks = chunk_text(reply, MAX_REPLY_CHARS)
             if len(chunks) < 1:
                 continue
-
+            
             sent_message: discord.Message | None = None
-            for chunk in chunks:
-                raw_message = await cast_channel(channel).send(
-                    chunk,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                if isinstance(raw_message, discord.Message):
-                    sent_message = raw_message
-                    sent_messages.append(raw_message)
+            if match.respond:
+                for chunk in chunks:
+                    raw_message = await cast_channel(channel).send(
+                        chunk,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    if isinstance(raw_message, discord.Message):
+                        sent_message = raw_message
+                        sent_messages.append(raw_message)
             if sent_message is not None:
                 followup_only = True
                 ai_core.context.record_message(

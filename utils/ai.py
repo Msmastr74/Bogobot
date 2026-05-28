@@ -65,6 +65,7 @@ class AIMatch(Generic[ContextT, ActionT]):
     score: float
     kwargs: dict[str, Any] | None = None
     reply: str | None = None
+    respond: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +274,7 @@ class AICore(Generic[ContextT, ActionT]):
         dont_respond = self._extract_dont_respond(content)
         self._queue_context_requests(requests)
         reply = self._coerce_reply(content)
-        if reply is not None and not dont_respond:
+        if reply is not None:
             matches.append(AIMatch(
                 name="conversation",
                 command_name="conversation",
@@ -282,6 +283,7 @@ class AICore(Generic[ContextT, ActionT]):
                 action=None,
                 score=1.0,
                 reply=reply,
+                respond=not dont_respond
             ))
         if not calls:
             return matches
