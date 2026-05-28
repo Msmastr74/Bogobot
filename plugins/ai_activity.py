@@ -159,12 +159,14 @@ def calculate_next_time(schedule: AISchedule, start_from: datetime, *, max_years
         current = candidate
 
     loops = int(365.2425 * max_years)
+    max_year: int | None = None
     if (target_year := schedule.get("year")) is not None:
         if current.year > target_year:
             return None
         if current.year < target_year:
             current = current.replace(year=target_year, month=1, day=1)
         loops = 366
+        max_year = target_year
     elif schedule.get("month") == 2 and schedule.get("day") == 29:
         leap_year = get_next_leap_year(current.year)
         if current.year == leap_year and current.month > 2:
@@ -173,6 +175,9 @@ def calculate_next_time(schedule: AISchedule, start_from: datetime, *, max_years
         current = current.replace(year=leap_year, month=2, day=29)
         loops = max_years
     for _ in range(loops):
+        if max_year is not None and current.year > max_year:
+            return None
+
         if (m := schedule.get("month")) is not None and current.month != m:
             if current.month > m:
                 current = current.replace(year=current.year + 1, month=m, day=1)
