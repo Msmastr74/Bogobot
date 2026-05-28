@@ -241,7 +241,7 @@ class MessageInteraction(discord.Interaction[discord.Client]):
     def __init__(
         self,
         bot: "BotCore",
-        source: discord.Message | discord.abc.MessageableChannel,
+        source: 'discord.Message | discord.abc.MessageableChannel',
         command_name: str,
         *,
         user: discord.User | discord.Member | None = None,
@@ -402,7 +402,7 @@ class ContextRequestExecutor:
 
     async def execute(
         self,
-        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
         text: str,
     ) -> str | None:
         channel_id = self._source_channel_id(source)
@@ -425,7 +425,7 @@ class ContextRequestExecutor:
     async def _execute_request(
         self,
         request: ContextRequest,
-        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
         text: str,
     ) -> str | None:
         if request.type == "user":
@@ -441,7 +441,7 @@ class ContextRequestExecutor:
     def _user_context(
         self,
         request: ContextRequest,
-        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
     ) -> str | None:
         user_id = self._payload_user_id(request) or self._source_user_id(source)
         if user_id is None:
@@ -579,7 +579,7 @@ class ContextRequestExecutor:
 
     def _source_channel_id(
         self,
-        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
     ) -> int | None:
         if isinstance(source, discord.Message) or isinstance(source, discord.Interaction):
             return self.ai_core.context.source_channel_id(source)
@@ -588,7 +588,7 @@ class ContextRequestExecutor:
 
     def _source_user_id(
         self,
-        source: discord.Message | discord.Interaction | discord.abc.MessageableChannel,
+        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
     ) -> int | None:
         if isinstance(source, discord.Message):
             return source.author.id

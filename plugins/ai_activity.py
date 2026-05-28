@@ -22,7 +22,7 @@ from utils.ai import ai as ai_core
 
 async def trigger_ai_activity(
     bot: "BotCore",
-    channel: discord.abc.MessageableChannel,
+    channel: 'discord.abc.MessageableChannel',
     purpose: str,
 ) -> list[discord.Message]:
     if bot.user is None or not ai_enabled(bot) or ai_on_break():
@@ -109,17 +109,17 @@ async def trigger_ai_activity(
     return sent_messages
 
 
-def cast_channel(channel: discord.abc.MessageableChannel) -> Any:
+def cast_channel(channel: 'discord.abc.MessageableChannel') -> Any:
     return channel
 
 
 def interaction_messageable_channel(
     interaction: discord.Interaction,
-) -> discord.abc.MessageableChannel | None:
+) -> 'discord.abc.MessageableChannel | None':
     channel = interaction.channel
     if channel is None or not hasattr(channel, "send"):
         return None
-    return cast(discord.abc.MessageableChannel, channel)
+    return cast('discord.abc.MessageableChannel', channel)
 
 
 async def setup(bot: "BotCore"):
@@ -192,7 +192,7 @@ async def setup(bot: "BotCore"):
         await trigger_ai_activity(bot, channel, user_activity_purpose(purpose))
 
     async def run_scheduled_activity(
-        channel: discord.abc.MessageableChannel,
+        channel: 'discord.abc.MessageableChannel',
         target_time: datetime.datetime,
         purpose: str,
     ) -> None:
