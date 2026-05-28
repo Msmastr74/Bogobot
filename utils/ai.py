@@ -38,7 +38,11 @@ _CONTEXT_REQUEST_TOOL_NAME = "request_context"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
 _TEXT_CONTEXT_REQUEST_RE = re.compile(
-    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
+    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>\s+(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
+    re.DOTALL | re.IGNORECASE,
+)
+_TEXT_DONT_RESPOND_RE = re.compile(
+    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\b(?:/\s*>|>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\s*>)",
     re.DOTALL | re.IGNORECASE,
 )
 _XML_ATTR_RE = re.compile(r"([A-Za-z_][\w:-]*)\s*=\s*('([^']*)'|\"([^\"]*)\")")
@@ -266,6 +270,9 @@ class AICore(Generic[ContextT, ActionT]):
             channel_id=channel_id,
             user_id=user_id,
         )
+        dont_respond = self._extract_dont_respond(content)
+        if dont_respond:
+            return matches
         self._queue_context_requests(requests)
         reply = self._coerce_reply(content)
         if reply is not None:
@@ -463,6 +470,8 @@ class AICore(Generic[ContextT, ActionT]):
             f"- In a tool-call response, you may call `{_CONTEXT_REQUEST_TOOL_NAME}` in parallel with any command call to request the same future context.\n"
             f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}` or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context, use a text context-request tag instead of the tool.\n"
             "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
+            f"You can avoid responding to the user by including `<{ASSISTANT_NAMESPACE}:dont_respond />`\n"
+            "Use this whenever you would like to. These messages will still be retained in history, and context requests will still be queued.\n"
             "## Context Blocks\n"
             f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
             f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
@@ -628,6 +637,12 @@ class AICore(Generic[ContextT, ActionT]):
             return ""
 
         return _TEXT_CONTEXT_REQUEST_RE.sub(replace, value), requests
+
+    def _extract_dont_respond(
+        self,
+        value: str
+    ) -> bool:
+        return _TEXT_DONT_RESPOND_RE.match(value) is not None
 
     def _xml_attrs(self, value: str) -> dict[str, Any]:
         attrs: dict[str, Any] = {}
