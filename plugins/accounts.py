@@ -261,7 +261,7 @@ async def setup(bot: BotCore):
                         response=True, ephemeral=True
                     )
         else:
-            if bot.accounts.permission_level(user.id) != -1:
+            if await bot.accounts.permission_level(user.id) != -1:
                 await bot.discord.send(
                     contents=f"{user.name} is not banned",
                     response=True, ephemeral=True
