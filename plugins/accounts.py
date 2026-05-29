@@ -223,7 +223,7 @@ async def setup(bot: BotCore):
                     )
                 case "actor_not_over_current":
                     await bot.discord.send(
-                        contents=f"Must overrank {NAMES.get(bot.accounts.permission_level(user.id), 0)} in order to ban",
+                        contents=f"Must overrank {NAMES.get(await bot.accounts.permission_level(user.id), 0)} in order to ban",
                         response=True, ephemeral=True
                     )
         else:
@@ -249,6 +249,6 @@ async def setup(bot: BotCore):
                     )
                 case _:
                     await bot.discord.send(
-                        contents=f"Something went wrong",
+                        contents="Something went wrong",
                         response=True, ephemeral=True
                     )
