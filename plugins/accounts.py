@@ -72,11 +72,19 @@ class AccountView(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=None)
         container = discord.ui.Container()
+        
+        basic_info = [
+            f"Permission level: {NAMES.get(account['perm_level'], 'Unknown')}"
+        ]
+        basic_info.append(f"Account creation: {discord.utils.format_dt(user.created_at, style='R')}")
+        if isinstance(user, discord.Member):
+            basic_info.append(f"Joined server: {discord.utils.format_dt(user.joined_at, style='R') if user.joined_at else 'Unknown'}")
+        
         bogotree_data = bogotree_user_stats(account.get(BOGOTREE_ACCOUNT_KEY))
         cbogo_data = cbogo_user_stats(account.get(CBOGO_ACCOUNT_KEY))
         container.add_item(discord.ui.Section(
             discord.ui.TextDisplay(f"### {user.mention}"),
-            discord.ui.TextDisplay(f"Permission level: {NAMES.get(account['perm_level'], 'Unknown')}"),
+            discord.ui.TextDisplay('\n'.join(basic_info)),
             discord.ui.TextDisplay(''.join([
                 format_user_usage(user_usage(user.id, None), False) + "\n",
                 self._format_data("Bogotree", bogotree_data),
