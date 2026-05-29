@@ -1,10 +1,13 @@
 import discord
 
-from typing import Iterable, Literal
+from typing import Any, Iterable, Literal, Mapping
 from bogobot_core import BotCore
-from utils.accounts import AccountRecord
+from utils.accounts import AccountRecord, Account
 from utils import groups
 from utils.discord import count_characters
+from plugins.bogotree import normalize_user_stats as bogotree_user_stats, BOGOTREE_ACCOUNT_KEY
+from plugins.cbogo import normalize_user_stats as cbogo_user_stats, CBOGO_ACCOUNT_KEY
+from plugins.telemetry import user_usage, format_user_usage
 
 Rank = Literal['basic', 'authorized', 'mod', 'admin', 'owner']
 NAMES: dict[int, str] = {
@@ -60,6 +63,39 @@ class AccountListView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(text[:-1])
             )
         self.add_item(accounts_container)
+
+class AccountView(discord.ui.LayoutView):
+    def __init__(
+        self, *,
+        user: discord.Member | discord.User,
+        account: Account,
+    ) -> None:
+        super().__init__(timeout=None)
+        container = discord.ui.Container()
+        bogotree_data = bogotree_user_stats(account.get(BOGOTREE_ACCOUNT_KEY))
+        cbogo_data = cbogo_user_stats(account.get(CBOGO_ACCOUNT_KEY))
+        container.add_item(discord.ui.Section(
+            discord.ui.TextDisplay(f"### {user.mention}"),
+            discord.ui.TextDisplay(f"Permission level: {NAMES.get(account['perm_level'], 'Unknown')}"),
+            discord.ui.TextDisplay(''.join([
+                format_user_usage(user_usage(user.id, None), False) + "\n",
+                self._format_data("Bogotree", bogotree_data),
+                self._format_data("Cbogo", cbogo_data),
+            ])),
+            accessory=discord.ui.Thumbnail(user.display_avatar.url)
+        ))
+        self.add_item(container)
+    
+    def _format_data(self, title: str, data: Mapping[str, Any]):
+        text = f"### {title}\n"
+        for k, v in data.items():
+            if k == "username":
+                continue
+            if "timestamp" in k:
+                v = f"<t:{int(v)}:F>"
+            k = k.replace("_", " ").capitalize()
+            text += f"{k}: {v}\n"
+        return text
 
 async def setup(bot: BotCore):
     accounts = groups.accounts(bot)
@@ -163,17 +199,7 @@ async def setup(bot: BotCore):
         elif result == "actor_not_over_new":
             await bot.discord.send(contents=f"Must overrank {new_rank_name} to edit rank to {new_rank_name}", response=True, ephemeral=True)
     
-    @accounts.command(name="perm_info", description="Gets a user's current rank")
-    async def perm_info(interaction: discord.Interaction, user: discord.Member):
-        current_rank = await bot.accounts.permission_level(user.id)
-        current_rank_name = NAMES.get(current_rank, "Unknown")
-        await bot.discord.send(
-            contents=f"<@{user.id}>'s current rank is {current_rank_name}",
-            response=True, ephemeral=True,
-            safety_filter=True
-        )
-    
-    @accounts.command(name="list_users", description="List users in the accounts database")
+    @accounts.command(name="list_users", description="List users in the accounts database", perm_requirement=0)
     async def list_users(
         interaction: discord.Interaction, minimum_rank: Rank | None
     ):
@@ -252,3 +278,11 @@ async def setup(bot: BotCore):
                         contents="Something went wrong",
                         response=True, ephemeral=True
                     )
+
+    @accounts.command(name="info", description="Gets information about a user", defer=False)
+    async def info(interaction: discord.Interaction, user: discord.Member | discord.User | None, eph: bool = True):
+        if user is None:
+            user = interaction.user
+        account = bot.accounts[user.id]
+        view = AccountView(user=user, account=account)
+        await bot.discord.send(view=view, ephemeral=eph, response=True, safety_filter=True)

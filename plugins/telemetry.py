@@ -55,19 +55,24 @@ class UsageView(discord.ui.LayoutView):
         body: str,
     ):
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay(f"## {title}"))
+        self.add_item(discord.ui.TextDisplay(f"### {title}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(body or "\u200d"),
             accent_colour=discord.Color.blurple(),
         ))
 
+total_by_user: Counter[int] = Counter()
+commands_by_user: defaultdict[int, Counter[str]] = defaultdict(Counter)
+users_by_command: defaultdict[str, Counter[int]] = defaultdict(Counter)
+username_by_user: dict[int, str] = {}
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
     accounts = groups.accounts(bot)
     ai_activity = groups.ai_activity(bot)
     hidden_commands: list[str] = [
         manage.group.name,
-        accounts.group.name,
+        f"{accounts.group.name} perm_edit",
+        f"{accounts.group.name} ban_mgr",
         f"{ai_activity.group.name} schedule",
         f"{ai_activity.group.name} remove",
         f"{ai_activity.group.name} trigger",
@@ -79,10 +84,6 @@ async def setup(bot: BotCore):
     pending_lines: list[str] = []
     flush_task: asyncio.Task[None] | None = None
     telemetry_lock = asyncio.Lock()
-    username_by_user: dict[int, str] = {}
-    total_by_user: Counter[int] = Counter()
-    commands_by_user: defaultdict[int, Counter[str]] = defaultdict(Counter)
-    users_by_command: defaultdict[str, Counter[int]] = defaultdict(Counter)
 
     def is_public_action(action: CommandTelemetryEnd) -> bool:
         return action["status"] == "ok" and is_public_command(action["command"])
@@ -470,65 +471,6 @@ async def setup(bot: BotCore):
         if item["error"]:
             line += f" | error={item['error']}"
         return line
-    
-    def ranked_usage(commands: list[str] | None) -> list[UserUsage]:
-        cache_key = () if commands is None else tuple(dict.fromkeys(commands))
-
-        if not cache_key:
-            user_totals = total_by_user
-        elif len(cache_key) == 1:
-            user_totals = users_by_command.get(cache_key[0], Counter())
-        else:
-            user_totals: Counter[int] = Counter()
-
-            for command in cache_key:
-                user_totals.update(users_by_command.get(command, Counter()))
-
-        top_users = heapq.nlargest(10, user_totals.items(), key=lambda item: item[1])
-        ranked = [
-            UserUsage(
-                user_id=user_id,
-                name=username_by_user.get(user_id, str(user_id)),
-                total=total,
-                commands=commands_by_user[user_id] if not cache_key else Counter({
-                    command: commands_by_user[user_id][command]
-                    for command in cache_key
-                    if commands_by_user[user_id][command]
-                }),
-            )
-            for user_id, total in top_users
-        ]
-        return ranked
-
-    def usage_title(requested_commands: list[str] | None) -> str:
-        if requested_commands:
-            return f"Usage: {', '.join('/' + command for command in requested_commands)}"
-        return "Usage"
-
-    def usage_body(
-        ranked: list[UserUsage],
-        requested_commands: list[str] | None,
-    ) -> str:
-        if not ranked:
-            return "No usage data for that query."
-
-        lines = []
-        single_command = requested_commands is not None and len(requested_commands) == 1
-        total_width = max(len(str(user.total)) for user in ranked)
-
-        for index, user in enumerate(ranked, start=1):
-            total = f"`{str(user.total).ljust(total_width)}`"
-            mention = f"<@{user.user_id}>"
-
-            if single_command:
-                lines.append(f"{index}. {total} {mention}")
-            else:
-                top_command, top_total = user.commands.most_common(1)[0]
-                lines.append(
-                    f"{index}. {total} {mention} - top: `/{top_command}` ({top_total})"
-                )
-
-        return "\n".join(lines)
 
     def parse_commands(commands: str | None) -> list[str] | None:
         if commands is None or not commands.strip():
@@ -678,9 +620,10 @@ async def setup(bot: BotCore):
         "Show command usage totals.",
         params={
             "commands": AIParam(type=str | None, required=False),
+            "user": AIParam("Optional user to target, disabling the leaderboard.", type=discord.User | None, required=False),
         },
     )
-    async def usage(interaction: discord.Interaction, commands: str | None = None):
+    async def usage(interaction: discord.Interaction, commands: str | None = None, user: discord.User | None = None):
         requested_commands = parse_commands(commands)
         invalid = invalid_commands(requested_commands, valid_public_commands)
 
@@ -695,15 +638,23 @@ async def setup(bot: BotCore):
 
         await bot.discord.defer()
 
-        ranked = ranked_usage(requested_commands)
-        view = UsageView(
-            title=usage_title(requested_commands),
-            body=usage_body(ranked, requested_commands),
-        )
+        if user is None:
+            ranked = ranked_usage(requested_commands)
+            view = UsageView(
+                title=usage_title(requested_commands),
+                body=usage_body(ranked, requested_commands),
+            )
+        else:
+            user_data = user_usage(user.id, requested_commands)
+            single_command = requested_commands is not None and len(requested_commands) == 1
+            view = UsageView(
+                title=f"{user.mention}'s {usage_title(requested_commands)}",
+                body=format_user_usage(user_data, single_command=single_command)
+            )
 
         await bot.discord.send(
             view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
+            safety_filter=True,
             response=True
         )
 
@@ -713,3 +664,92 @@ async def setup(bot: BotCore):
         current: str,
     ) -> list[app_commands.Choice[str]]:
         return autocomplete_commands(current, valid_public_commands)
+
+
+def ranked_usage(commands: list[str] | None) -> list[UserUsage]:
+    cache_key = () if commands is None else tuple(dict.fromkeys(commands))
+
+    if not cache_key:
+        user_totals = total_by_user
+    elif len(cache_key) == 1:
+        user_totals = users_by_command.get(cache_key[0], Counter())
+    else:
+        user_totals: Counter[int] = Counter()
+
+        for command in cache_key:
+            user_totals.update(users_by_command.get(command, Counter()))
+
+    top_users = heapq.nlargest(10, user_totals.items(), key=lambda item: item[1])
+    ranked = [
+        UserUsage(
+            user_id=user_id,
+            name=username_by_user.get(user_id, str(user_id)),
+            total=total,
+            commands=commands_by_user[user_id] if not cache_key else Counter({
+                command: commands_by_user[user_id][command]
+                for command in cache_key
+                if commands_by_user[user_id][command]
+            }),
+        )
+        for user_id, total in top_users
+    ]
+    return ranked
+
+def user_usage(user_id: int, commands: list[str] | None) -> UserUsage:
+    cache_key = () if commands is None else tuple(dict.fromkeys(commands))
+
+    if not cache_key:
+        user_totals = total_by_user
+    elif len(cache_key) == 1:
+        user_totals = users_by_command.get(cache_key[0], Counter())
+    else:
+        user_totals: Counter[int] = Counter()
+
+        for command in cache_key:
+            user_totals.update(users_by_command.get(command, Counter()))
+
+    return UserUsage(
+        user_id=user_id,
+        name=username_by_user.get(user_id, str(user_id)),
+        total=user_totals.get(user_id, 0),
+        commands=commands_by_user[user_id] if not cache_key else Counter({
+            command: commands_by_user[user_id][command]
+            for command in cache_key
+            if commands_by_user[user_id][command]
+        })
+    )
+
+def usage_title(requested_commands: list[str] | None) -> str:
+    if requested_commands:
+        return f"Usage: {', '.join('/' + command for command in requested_commands)}"
+    return "Usage"
+
+def usage_body(
+    ranked: list[UserUsage],
+    requested_commands: list[str] | None,
+) -> str:
+    if not ranked:
+        return "No usage data for that query."
+
+    lines = []
+    single_command = requested_commands is not None and len(requested_commands) == 1
+    total_width = max(len(str(user.total)) for user in ranked)
+
+    for index, user in enumerate(ranked, start=1):
+        lines.append(f"{index}. {format_user_usage(user, single_command, total_width=total_width)}")
+
+    return "\n".join(lines)
+
+def format_user_usage(user: UserUsage, single_command: bool, total_width: int = 0) -> str:
+    total = f"`{str(user.total).ljust(total_width)}`"
+    mention = f"<@{user.user_id}>"
+
+    if single_command:
+        return f"{total} {mention}"
+    else:
+        mc = user.commands.most_common(1)
+        text = f"{total} {mention}"
+        if mc:
+            top_command, top_total = mc[0]
+            text += f" - top: `/{top_command}` ({top_total})"
+        return text
