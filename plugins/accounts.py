@@ -197,3 +197,58 @@ async def setup(bot: BotCore):
             response=True, ephemeral=True,
             safety_filter=True
         )
+    
+    @accounts.command(name="ban_mgr", description="Manages a user's ban state", perm_requirement=2)
+    async def ban_mgr(interaction: discord.Interaction, user: discord.Member, action: Literal["ban", "unban"] | "ban"):
+        is_banning = True if action == "ban" else False
+        
+        if is_banning:
+            result, cur_rank, own_rank = await bot.accounts.set_permission_level_if_overranked(
+                actor_uid=interaction.user.id,
+                target_uid=user.id,
+                new_level=-1,
+                clamp_zero=False
+            )
+            
+            match result:
+                case "ok":
+                    bot.discord.send(
+                        contents=f"{user.name} has been successfully banned",
+                        response=True, ephemeral=True
+                    )
+                case "same":
+                    bot.discord.send(
+                        contents=f"{user.name} is already banned",
+                        response=True, ephemeral=True
+                    )
+                case "actor_not_over_current":
+                    bot.discord.send(
+                        contents=f"Must overrank {NAMES.get(bot.accounts.permission_level(user.id), 0)} in order to ban",
+                        response=True, ephemeral=True
+                    )
+        else:
+            if bot.accounts.permission_level(user.id) != -1:
+                bot.discord.send(
+                    contents=f"{user.name} is not banned",
+                    response=True, ephemeral=True
+                )
+                return
+            
+            result, cur_rank, own_rank = await bot.accounts.set_permission_level_if_overranked(
+                actor_uid=interaction.user.id,
+                target_uid=user.id,
+                new_level=0,
+                clamp_zero=False
+            )
+            
+            match result:
+                case "ok":
+                    bot.discord.send(
+                        contents=f"{user.name} has been successfully unbanned",
+                        response=True, ephemeral=True
+                    )
+                case _:
+                    bot.discord.send(
+                        contents=f"Something went wrong",
+                        response=True, ephemeral=True
+                    )
