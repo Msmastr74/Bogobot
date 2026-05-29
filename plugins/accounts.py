@@ -233,7 +233,7 @@ async def setup(bot: BotCore):
         )
     
     @accounts.command(name="ban_mgr", description="Manages a user's ban state", perm_requirement=2)
-    async def ban_mgr(interaction: discord.Interaction, user: discord.Member, action: Literal["ban", "unban"]):
+    async def ban_mgr(interaction: discord.Interaction, action: Literal["ban", "unban"], user: discord.Member):
         is_banning = True if action == "ban" else False
         
         if is_banning:
