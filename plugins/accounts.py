@@ -212,23 +212,23 @@ async def setup(bot: BotCore):
             
             match result:
                 case "ok":
-                    bot.discord.send(
+                    await bot.discord.send(
                         contents=f"{user.name} has been successfully banned",
                         response=True, ephemeral=True
                     )
                 case "same":
-                    bot.discord.send(
+                    await bot.discord.send(
                         contents=f"{user.name} is already banned",
                         response=True, ephemeral=True
                     )
                 case "actor_not_over_current":
-                    bot.discord.send(
+                    await bot.discord.send(
                         contents=f"Must overrank {NAMES.get(bot.accounts.permission_level(user.id), 0)} in order to ban",
                         response=True, ephemeral=True
                     )
         else:
             if bot.accounts.permission_level(user.id) != -1:
-                bot.discord.send(
+                await bot.discord.send(
                     contents=f"{user.name} is not banned",
                     response=True, ephemeral=True
                 )
@@ -243,12 +243,12 @@ async def setup(bot: BotCore):
             
             match result:
                 case "ok":
-                    bot.discord.send(
+                    await bot.discord.send(
                         contents=f"{user.name} has been successfully unbanned",
                         response=True, ephemeral=True
                     )
                 case _:
-                    bot.discord.send(
+                    await bot.discord.send(
                         contents=f"Something went wrong",
                         response=True, ephemeral=True
                     )
