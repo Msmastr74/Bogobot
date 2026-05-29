@@ -82,7 +82,7 @@ class SortView(discord.ui.LayoutView):
 class StatsPayload(TypedDict):
     view: StatsView
 
-async def setup(bot: BotCore):
+async def setup(bot: BotCore) -> None:
     manage = groups.manage(bot)
     
     def stats_payload(title="Bogostream Statistics Monitor") -> StatsPayload:

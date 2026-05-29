@@ -7,6 +7,7 @@ set -e
 winget install -e --id Python.Python.3.12
 winget install -e --id UB-Mannheim.TesseractOCR
 winget install -e --id Gyan.FFmpeg
+winget install -e --id BytecodeAlliance.Wasmtime
 
 # Install Python libraries.
 # openai provides hosted or OpenAI-compatible AI action selection and replies.

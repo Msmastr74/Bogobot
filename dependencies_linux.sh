@@ -10,6 +10,8 @@ sudo apt update && sudo apt upgrade -y
 # ffmpeg for stream piping
 sudo apt install python3 python3-pip tesseract-ocr libtesseract-dev ffmpeg -y
 
+curl https://wasmtime.dev/install.sh -sSf | bash
+
 # Install Python libraries
 # discord.py: Bot API
 # openai: hosted or OpenAI-compatible AI action selection and replies

@@ -19,3 +19,5 @@ cbogo.json
 cbogo_global.json
 uv.lock
 .python-version
+python-wasi/
+python-wasi-runtime/

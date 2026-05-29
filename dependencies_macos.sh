@@ -13,7 +13,7 @@ brew update
 # tesseract: OCR engine and libtesseract shared library
 # ffmpeg: stream piping
 # streamlink: livestream extraction
-brew install python tesseract ffmpeg streamlink
+brew install python tesseract ffmpeg streamlink wasmtime
 
 # Install Python libraries
 # discord.py: Bot API

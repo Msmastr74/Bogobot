@@ -19,7 +19,7 @@ from plugins.ai import (
     capture_interaction_output,
     chunk_text,
 )
-from utils.ai import ai as ai_core
+from utils.ai import action, ai as ai_core
 from datetime import datetime, timedelta, timezone
 from utils import groups
 
@@ -442,6 +442,10 @@ async def setup(bot: "BotCore"):
         name="list",
         description="List all scheduled AI activities for this channel",
         perm_requirement=0
+    )
+    @action(
+        "ai_activity list",
+        "List all scheduled AI activities for this channel."
     )
     async def list_cmd(interaction: discord.Interaction):
         channel = interaction_messageable_channel(interaction)

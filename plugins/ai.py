@@ -15,7 +15,7 @@ from discord.ui.view import BaseView
 
 from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.ai_context import ContextRequest, close_system_tag, open_system_tag
-from utils.discord import count_characters
+from utils.discord import chunk_text, split_text_to_character_limit
 from utils.type import Coro
 
 if TYPE_CHECKING:
@@ -351,7 +351,7 @@ def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | No
 
 
 def truncate_text_to_character_limit(text: str, max_len: int) -> str:
-    return "".join(split_text_to_character_limit(text, max_len)[:1])
+    return "".join(split_text_to_character_limit(text, max_len, max_pieces=1))
 
 
 def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple[discord.Message, str] | None:
@@ -631,68 +631,6 @@ async def capture_interaction_output(interaction: discord.Interaction):
         _capture_add_message_by_id.pop(id(followup), None)
         response.__class__ = response_class
         followup.__class__ = followup_class
-
-def split_text_to_character_limit(text: str, max_len: int) -> list[str]:
-    pieces: list[str] = []
-    current: list[str] = []
-    current_length = 0
-
-    for character in text:
-        character_length = count_characters(character)
-        if current and current_length + character_length > max_len:
-            pieces.append("".join(current))
-            current = []
-            current_length = 0
-        current.append(character)
-        current_length += character_length
-
-    if current:
-        pieces.append("".join(current))
-    return pieces
-
-
-def chunk_text(text: str, max_len: int) -> list[str]:
-    """Splits text into chunks of max_len, respecting line boundaries."""
-    if max_len <= 0:
-        raise ValueError("max_len must be greater than 0")
-        
-    chunks: list[str] = []
-    current_chunk: list[str] = []
-    current_length = 0
-
-    lines = text.splitlines(keepends=True)
-
-    for line in lines:
-        line_length = count_characters(line)
-        # Case 1: The line itself is longer than max_len
-        if line_length > max_len:
-            if current_chunk:
-                chunks.append("".join(current_chunk))
-                current_chunk = []
-                current_length = 0
-
-            split_pieces = split_text_to_character_limit(line, max_len)
-            chunks.extend(split_pieces[:-1])
-            if split_pieces:
-                current_chunk = [split_pieces[-1]]
-                current_length = count_characters(split_pieces[-1])
-                
-        # Case 2: Line fits into the current chunk perfectly
-        elif current_length + line_length <= max_len:
-            current_chunk.append(line)
-            current_length += line_length
-            
-        # Case 3: Line exceeds current chunk capacity (but is <= max_len)
-        else:
-            chunks.append("".join(current_chunk))
-            current_chunk = [line]
-            current_length = line_length
-
-    # Clean up any leftover text at the very end
-    if current_chunk:
-        chunks.append("".join(current_chunk))
-
-    return chunks
 
 async def setup(bot: 'BotCore'):
     from utils.ai import ai as ai_core

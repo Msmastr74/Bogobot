@@ -1,0 +1,606 @@
+import asyncio
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import urllib.request
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal, overload
+
+
+class SandboxError(Exception):
+    pass
+
+
+class SandboxSetupError(SandboxError):
+    pass
+
+
+class SandboxTimeoutError(SandboxError):
+    pass
+
+
+class SandboxOutputLimitError(SandboxError):
+    pass
+
+
+@dataclass(frozen=True)
+class PythonWasiInstall:
+    root: Path
+    python_wasm: Path
+    python_version: str
+
+
+@dataclass
+class SandboxedExecutor:
+    # Trusted cache dir. This is never mounted into WASI.
+    cache_root: Path = Path("./python-wasi")
+
+    # Writable/disposable runtime dir. This is what gets mounted.
+    runtime_root: Path = Path("./python-wasi-runtime")
+
+    python_version: str | None = None
+
+    max_memory_size: int = 128 * 1024 * 1024
+    max_wasm_stack: int = 512 * 1024
+    fuel: int | None = None
+
+    max_output_bytes: int = 256 * 1024
+    max_program_bytes: int = 128 * 1024
+
+    releases_url: str = (
+        "https://api.github.com/repos/brettcannon/cpython-wasi-build/releases"
+    )
+
+    manifest_name: str = ".tree-sha256"
+
+    def __post_init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    async def execute(self, program: str, timeout: float = 60) -> str:
+        async with self._lock:
+            return await self._execute_locked(program, timeout)
+    
+    @staticmethod
+    def _wasmtime_timeout(timeout: float) -> str:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+
+        milliseconds = max(1, int(timeout * 1000))
+        return f"{milliseconds}ms"
+
+    async def _execute_locked(self, program: str, timeout: float) -> str:
+        if len(program.encode("utf-8")) > self.max_program_bytes:
+            raise ValueError(
+                f"program is too large; max is {self.max_program_bytes} bytes"
+            )
+
+        wasmtime = shutil.which("wasmtime")
+        if wasmtime is None:
+            raise SandboxSetupError("wasmtime was not found on PATH")
+
+        # Ensure trusted cache exists.
+        cache_install = await asyncio.to_thread(self._ensure_python_wasi)
+
+        # Ensure mounted runtime copy matches trusted cache.
+        await asyncio.to_thread(self._ensure_runtime_tree, cache_install)
+
+        runtime_install = self._inspect_install(self.runtime_root)
+        if runtime_install is None:
+            raise SandboxSetupError("runtime CPython WASI tree is invalid")
+
+        proc = await asyncio.create_subprocess_exec(
+            wasmtime,
+            "run",
+            *(["-W", f"fuel={self.fuel}"] if self.fuel is not None else []),
+            "-W", f"timeout={self._wasmtime_timeout(timeout)}",
+            "-W", f"max-memory-size={self.max_memory_size}",
+            "-W", f"max-wasm-stack={self.max_wasm_stack}",
+            "-W", "max-instances=1",
+            "-W", "max-memories=1",
+            "-W", "max-tables=1",
+            "--dir", f"{runtime_install.root}::/",
+            str(runtime_install.python_wasm),
+            "-I",
+            "-B",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+        try:
+            async def write_to_stdin():
+                if proc.stdin is None:
+                  return
+                proc.stdin.write(program.encode('utf-8', errors="ignore"))
+                await proc.stdin.drain()
+                proc.stdin.close()
+                await proc.stdin.wait_closed()
+
+            output_task = asyncio.create_task(
+                self._read_limited(proc.stdout, self.max_output_bytes, "output")
+            )
+
+            try:
+                output_bytes, _ = await asyncio.wait_for(
+                    asyncio.gather(output_task, write_to_stdin()),
+                    timeout=timeout + 1.0,
+                )
+            except asyncio.TimeoutError as exc:
+                self._kill(proc)
+                raise SandboxTimeoutError(f"execution timed out after {timeout}s") from exc
+
+            await proc.wait()
+
+            return output_bytes.decode("utf-8", errors="replace")
+
+        except SandboxOutputLimitError:
+            self._kill(proc)
+            raise
+
+        finally:
+            if proc.returncode is None:
+                self._kill(proc)
+                await proc.wait()
+
+            await asyncio.to_thread(self._repair_runtime_tree_if_modified, cache_install)
+
+    def _ensure_python_wasi(self) -> PythonWasiInstall:
+        """
+        Ensure `self.root` is the trusted extracted CPython WASI cache.
+
+        After setup, self.root should directly contain things like:
+
+            ./python-wasi/
+              python.wasm
+              lib/
+                python3.14/
+
+        This directory is not mounted into the sandbox.
+        """
+        existing = self._inspect_install(self.cache_root)
+        if existing is not None:
+            self._ensure_cache_manifest(existing.root)
+            return existing
+
+        self.cache_root.parent.mkdir(parents=True, exist_ok=True)
+
+        releases = self._fetch_releases()
+        asset = self._select_asset(releases)
+
+        zip_path = self.cache_root.with_suffix(".zip")
+        self._download_asset(asset, zip_path)
+        self._verify_asset_digest(asset, zip_path)
+
+        tmp_extract = self.cache_root.parent / f".extracting-{self.cache_root.name}"
+        tmp_old = self.cache_root.parent / f".old-{self.cache_root.name}"
+
+        self._remove_tree(tmp_extract)
+        tmp_extract.mkdir(parents=True)
+
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp_extract)
+            os.remove(zip_path)
+
+            extracted_root = self._normalize_extracted_root(tmp_extract)
+
+            candidate = self._inspect_install(extracted_root)
+            if candidate is None:
+                raise SandboxSetupError(
+                    f"downloaded archive does not look like CPython WASI: "
+                    f"{asset.get('name')}"
+                )
+
+            self._remove_tree(tmp_old)
+
+            if self.cache_root.exists():
+                self.cache_root.rename(tmp_old)
+
+            extracted_root.rename(self.cache_root)
+            self._remove_tree(tmp_old)
+
+        except Exception:
+            if not self.cache_root.exists() and tmp_old.exists():
+                tmp_old.rename(self.cache_root)
+            raise
+
+        finally:
+            self._remove_tree(tmp_extract)
+            self._remove_tree(tmp_old)
+
+        install = self._inspect_install(self.cache_root)
+        if install is None:
+            raise SandboxSetupError("failed to install CPython WASI")
+
+        self._ensure_cache_manifest(install.root)
+        return install
+
+    def _ensure_runtime_tree(self, cache_install: PythonWasiInstall) -> None:
+        expected = self._ensure_cache_manifest(cache_install.root)
+
+        if not self.runtime_root.exists():
+            self._replace_dir(cache_install.root, self.runtime_root)
+            return
+
+        actual = self._hash_tree(self.runtime_root, do_raise=False)
+        if actual != expected:
+            self._replace_dir(cache_install.root, self.runtime_root)
+
+    def _repair_runtime_tree_if_modified(self, cache_install: PythonWasiInstall) -> None:
+        expected = self._ensure_cache_manifest(cache_install.root)
+
+        if not self.runtime_root.exists():
+            self._replace_dir(cache_install.root, self.runtime_root)
+            return
+
+        actual = self._hash_tree(self.runtime_root, do_raise=False)
+        if actual != expected:
+            self._replace_dir(cache_install.root, self.runtime_root)
+
+    def _ensure_cache_manifest(self, cache_root: Path) -> str:
+        manifest = cache_root / self.manifest_name
+
+        if manifest.is_file():
+            value = manifest.read_text(encoding="utf-8").strip()
+            if re.fullmatch(r"[0-9a-fA-F]{64}", value):
+                return value.lower()
+
+        digest = self._hash_tree(cache_root)
+        manifest.write_text(digest + "\n", encoding="utf-8")
+        return digest
+
+    @overload
+    def _hash_tree(self, root: Path, *, do_raise: Literal[True] = True) -> str: ...
+    @overload
+    def _hash_tree(self, root: Path, *, do_raise: Literal[False]) -> str | None: ...
+  
+    def _hash_tree(self, root: Path, *, do_raise: bool = True) -> str | None:
+        """
+        Deterministic content hash of a directory tree.
+
+        If do_raise=True:
+            Raise SandboxSetupError on unreadable/unhashable paths.
+
+        If do_raise=False:
+            Return None on unreadable/unhashable paths, so callers can treat
+            the tree as "does not match" and replace it.
+
+        Ignores self.manifest_name so the cache can store its own hash inside
+        the tree without changing the tree hash.
+        """
+        h = hashlib.sha256()
+
+        def fail(message: str, exc: BaseException | None = None) -> None:
+            if do_raise:
+                if exc is None:
+                    raise SandboxSetupError(message)
+                raise SandboxSetupError(message) from exc
+            raise _HashTreeFailed
+
+        class _HashTreeFailed(Exception):
+            pass
+
+        try:
+            entries: list[Path] = []
+
+            def onerror(exc: OSError) -> None:
+                fail(f"failed to traverse {root}: {exc}", exc)
+
+            for dirpath, dirnames, filenames in os.walk(
+                root,
+                onerror=onerror,
+                followlinks=False,
+            ):
+                base = Path(dirpath)
+
+                for name in dirnames:
+                    entries.append(base / name)
+
+                for name in filenames:
+                    entries.append(base / name)
+
+            entries.sort(key=lambda p: p.relative_to(root).as_posix())
+
+            for path in entries:
+                rel = path.relative_to(root).as_posix()
+
+                if rel == self.manifest_name:
+                    continue
+
+                try:
+                    st = path.lstat()
+
+                    h.update(rel.encode("utf-8"))
+                    h.update(b"\0")
+                    h.update(str(st.st_mode & 0o7777).encode("ascii"))
+                    h.update(b"\0")
+
+                    if path.is_symlink():
+                        h.update(b"symlink\0")
+                        h.update(
+                            os.readlink(path).encode(
+                                "utf-8",
+                                errors="surrogateescape",
+                            )
+                        )
+
+                    elif path.is_file():
+                        h.update(b"file\0")
+                        with path.open("rb") as f:
+                            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                                h.update(chunk)
+
+                    elif path.is_dir():
+                        h.update(b"dir\0")
+
+                    else:
+                        fail(f"unsupported filesystem entry in sandbox tree: {path}")
+
+                    h.update(b"\0")
+
+                except OSError as exc:
+                    fail(f"failed to hash {path}: {exc}", exc)
+
+            return h.hexdigest()
+
+        except _HashTreeFailed:
+            return None
+    
+    def _replace_dir(self, src: Path, dst: Path) -> None:
+        """
+        Replace dst with a copy of src.
+
+        Handles previously chmod'd or otherwise awkward permissions by making
+        dst/tmp writable before deleting them.
+        """
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp = dst.parent / f".tmp-{dst.name}"
+
+        self._remove_tree(tmp)
+        shutil.copytree(src, tmp, symlinks=True)
+
+        self._remove_tree(dst)
+        tmp.rename(dst)
+
+    def _remove_tree(self, path: Path) -> None:
+        if not path.exists() and not path.is_symlink():
+            return
+
+        self._make_tree_writable(path)
+
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        else:
+            shutil.rmtree(path)
+
+    @staticmethod
+    def _make_tree_writable(path: Path) -> None:
+        """
+        Best-effort permission repair before deletion/replacement.
+
+        This is not a sandbox boundary. It is only to make cleanup reliable.
+        """
+        if not path.exists() and not path.is_symlink():
+            return
+
+        def chmod_writable(p: Path) -> None:
+            try:
+                mode = p.lstat().st_mode
+                p.chmod(mode | 0o700)
+            except FileNotFoundError:
+                pass
+            except PermissionError:
+                pass
+
+        chmod_writable(path)
+
+        if path.is_dir() and not path.is_symlink():
+            for child in path.rglob("*"):
+                chmod_writable(child)
+
+    def _fetch_releases(self) -> list[dict[str, Any]]:
+        req = urllib.request.Request(
+            self.releases_url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "sandboxed-executor",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        if not isinstance(data, list):
+            raise SandboxSetupError("GitHub releases response was not a list")
+
+        return data
+
+    def _select_asset(self, releases: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        Select a release asset.
+
+        python_version examples:
+          None      -> newest available normal asset
+          "3.14"    -> newest 3.14.x asset
+          "3.14.5"  -> exact 3.14.5 asset
+        """
+        pattern = re.compile(
+            r"^python-(?P<version>\d+\.\d+\.\d+)-wasi_sdk-(?P<sdk>\d+)\.zip$"
+        )
+
+        for release in releases:
+            assets = release.get("assets", [])
+            if not isinstance(assets, list):
+                continue
+
+            for asset in assets:
+                if not isinstance(asset, dict):
+                    continue
+
+                name = asset.get("name")
+                if not isinstance(name, str):
+                    continue
+
+                if name.startswith("_build-"):
+                    continue
+
+                match = pattern.fullmatch(name)
+                if match is None:
+                    continue
+
+                version = match.group("version")
+
+                if self.python_version is None:
+                    return asset
+
+                if re.fullmatch(r"\d+\.\d+\.\d+", self.python_version):
+                    if version == self.python_version:
+                        return asset
+
+                elif re.fullmatch(r"\d+\.\d+", self.python_version):
+                    if version.startswith(self.python_version + "."):
+                        return asset
+
+                else:
+                    raise ValueError(
+                        "python_version must look like '3.14' or '3.14.5'"
+                    )
+
+        raise SandboxSetupError(
+            f"no CPython WASI asset found for version {self.python_version!r}"
+        )
+
+    def _download_asset(self, asset: dict[str, Any], destination: Path) -> None:
+        url = asset.get("browser_download_url")
+        if not isinstance(url, str):
+            raise SandboxSetupError("release asset has no browser_download_url")
+
+        tmp = destination.with_suffix(destination.suffix + ".tmp")
+
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "sandboxed-executor"},
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as response:
+            with tmp.open("wb") as f:
+                shutil.copyfileobj(response, f)
+
+        tmp.replace(destination)
+
+    def _verify_asset_digest(self, asset: dict[str, Any], path: Path) -> None:
+        digest = asset.get("digest")
+
+        if not isinstance(digest, str):
+            return
+
+        if not digest.startswith("sha256:"):
+            return
+
+        expected = digest.removeprefix("sha256:").lower()
+        actual = self._sha256_file(path).lower()
+
+        if actual != expected:
+            raise SandboxSetupError(
+                f"sha256 mismatch for {path.name}: expected {expected}, got {actual}"
+            )
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        h = hashlib.sha256()
+
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+
+        return h.hexdigest()
+
+    @staticmethod
+    def _normalize_extracted_root(tmp_extract: Path) -> Path:
+        children = list(tmp_extract.iterdir())
+
+        if len(children) == 1 and children[0].is_dir():
+            return children[0]
+
+        return tmp_extract
+
+    def _inspect_install(self, root: Path) -> PythonWasiInstall | None:
+        if not root.is_dir():
+            return None
+
+        python_wasm = self._find_python_wasm(root)
+        python_version = self._find_stdlib_version(root)
+
+        if python_wasm is None or python_version is None:
+            return None
+
+        return PythonWasiInstall(
+            root=root,
+            python_wasm=python_wasm,
+            python_version=python_version,
+        )
+
+    @staticmethod
+    def _find_python_wasm(root: Path) -> Path | None:
+        candidates = [
+            root / "python.wasm",
+            root / "bin" / "python.wasm",
+        ]
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+
+        matches = sorted(root.rglob("python*.wasm"))
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _find_stdlib_version(root: Path) -> str | None:
+        lib = root / "lib"
+        if not lib.is_dir():
+            return None
+
+        versions = sorted(
+            p.name.removeprefix("python")
+            for p in lib.iterdir()
+            if p.is_dir() and re.fullmatch(r"python\d+\.\d+", p.name)
+        )
+
+        return versions[-1] if versions else None
+
+    @staticmethod
+    async def _read_limited(
+        stream: asyncio.StreamReader | None,
+        limit: int,
+        name: str,
+    ) -> bytes:
+        if stream is None:
+            return b""
+
+        data = bytearray()
+
+        while True:
+            chunk = await stream.read(8192)
+            if not chunk:
+                return bytes(data)
+
+            data += chunk
+            if len(data) > limit:
+                raise SandboxOutputLimitError(f"{name} exceeded {limit} bytes")
+
+    @staticmethod
+    def _kill(proc: asyncio.subprocess.Process) -> None:
+        if proc.returncode is not None:
+            return
+
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
