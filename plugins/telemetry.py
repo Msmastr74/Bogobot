@@ -647,9 +647,12 @@ async def setup(bot: BotCore):
         else:
             user_data = user_usage(user.id, requested_commands)
             single_command = requested_commands is not None and len(requested_commands) == 1
+            body = format_user_usage(user_data, single_command=single_command)
+            if commands is None:
+                body = format_ranked_user_usage(user_data)
             view = UsageView(
                 title=f"{user.mention}'s {usage_title(requested_commands)}",
-                body=format_user_usage(user_data, single_command=single_command)
+                body=body
             )
 
         await bot.discord.send(
@@ -679,7 +682,7 @@ def ranked_usage(commands: list[str] | None) -> list[UserUsage]:
         for command in cache_key:
             user_totals.update(users_by_command.get(command, Counter()))
 
-    top_users = heapq.nlargest(10, user_totals.items(), key=lambda item: item[1])
+    top_users = heapq.nlargest(20, user_totals.items(), key=lambda item: item[1])
     ranked = [
         UserUsage(
             user_id=user_id,
@@ -694,6 +697,12 @@ def ranked_usage(commands: list[str] | None) -> list[UserUsage]:
         for user_id, total in top_users
     ]
     return ranked
+
+def format_ranked_user_usage(user: UserUsage) -> str:
+    text = ""
+    for command, total in user.commands.most_common():
+        text += f"`{command}` ({total})\n"
+    return text
 
 def user_usage(user_id: int, commands: list[str] | None) -> UserUsage:
     cache_key = () if commands is None else tuple(dict.fromkeys(commands))
