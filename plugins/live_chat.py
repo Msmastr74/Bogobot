@@ -52,7 +52,6 @@ async def setup(bot: BotCore):
 
         chat = pytchat.create(video_id="DgfiqGPmGWY", hold_exception=False)
 
-        backoff = discord.backoff.ExponentialBackoff(base=2)
         next_retry_at = 0.0
 
         log.info("pytchat connected.")
