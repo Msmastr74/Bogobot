@@ -22,7 +22,7 @@ class Player(TypedDict, total=False):
     max_win_streak: int
 
 LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
-LEADERBOARD_LIMIT = 33
+LEADERBOARD_LIMIT = 34
 LEADERBOARD_MONITOR_INTERVAL_SECONDS = 120
 
 class LeaderboardView(discord.ui.LayoutView):
