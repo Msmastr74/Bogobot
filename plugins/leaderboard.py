@@ -6,7 +6,7 @@ import discord
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups, tasks
-from utils.ai import action
+from utils.ai import AIParam, action
 
 from bogobot_core import BotCore
 
@@ -111,6 +111,7 @@ async def setup(bot: BotCore):
         title: str = "Leaderboard",
         subtitle: str = "Top players ranked by ELO",
         updated_at: int | None = None,
+        **kwargs
     ) -> LeaderboardPayload:
         return {
             "view": LeaderboardView(
@@ -118,7 +119,8 @@ async def setup(bot: BotCore):
                 subtitle=subtitle,
                 rows=rows,
                 updated_at=updated_at,
-                bot=bot
+                bot=bot,
+                **kwargs
             )
         }
 
@@ -127,6 +129,39 @@ async def setup(bot: BotCore):
             await fetch_leaderboard(),
             updated_at=int(time.time()),
             title="Leaderboard Monitor"
+        )
+    
+    @bot.setup.command(
+        name="leaderboard",
+        description="Gets the leaderboard in sortoffs!",
+        defer=False,
+        perm_requirement=0,
+    )
+    @action(
+        "leaderboard",
+        "Show the leaderboard.",
+        params={
+            "a": AIParam("A leaderboard boundary from 1 to 100.", int),
+            "b": AIParam("A leaderboard boundary from 1 to 100.", int)
+        }
+    )
+    async def leaderboard(interaction: discord.Interaction, a: int, b: int):
+        if a < 1 or a > 100 or b < 1 or b > 100:
+            await bot.discord.send(
+                "Leaderboard boundaries must be between 1 and 100.",
+                response=True, ephemeral=True
+            )
+            return
+        await bot.discord.defer()
+        rows = await fetch_leaderboard()
+        await bot.discord.send(
+            response=True,
+            **leaderboard_payload(
+                rows[min(a, b) - 1:max(a, b)],
+                subtitle=f"{min(a, b)} to {max(a, b)} players ranked by ELO",
+                updated_at=int(time.time()),
+                limit=40
+            ),
         )
 
     @bot.setup.command(
@@ -165,50 +200,6 @@ async def setup(bot: BotCore):
             **leaderboard_payload(
                 rows[-LEADERBOARD_LIMIT:],
                 subtitle="Bottom players ranked by ELO",
-                updated_at=int(time.time()),
-            ),
-        )
-
-    @bot.setup.command(
-        name="q2",
-        description="Gets the second quarter leaderboard players in sortoffs!",
-        eph=False,
-        perm_requirement=0,
-    )
-    @action(
-        "q2",
-        "Show the 2nd quarter leaderboard.",
-    )
-    async def q2(interaction: discord.Interaction):
-        rows = await fetch_leaderboard()
-        start = LEADERBOARD_LIMIT
-        await bot.discord.send(
-            response=True,
-            **leaderboard_payload(
-                rows[start:start + LEADERBOARD_LIMIT],
-                subtitle="2nd quarter players ranked by ELO",
-                updated_at=int(time.time()),
-            ),
-        )
-    
-    @bot.setup.command(
-        name="q3",
-        description="Gets the third quarter leaderboard players in sortoffs!",
-        eph=False,
-        perm_requirement=0,
-    )
-    @action(
-        "q3",
-        "Show the 3rd quarter leaderboard.",
-    )
-    async def q3(interaction: discord.Interaction):
-        rows = await fetch_leaderboard()
-        start = LEADERBOARD_LIMIT * 2
-        await bot.discord.send(
-            response=True,
-            **leaderboard_payload(
-                rows[start:start + LEADERBOARD_LIMIT],
-                subtitle="3rd quarter players ranked by ELO",
                 updated_at=int(time.time()),
             ),
         )
