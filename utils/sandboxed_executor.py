@@ -27,6 +27,8 @@ class SandboxTimeoutError(SandboxError):
 class SandboxOutputLimitError(SandboxError):
     pass
 
+class SandboxFilesystemLimitError(SandboxError):
+    pass
 
 @dataclass(frozen=True)
 class PythonWasiInstall:
@@ -51,6 +53,9 @@ class SandboxedExecutor:
 
     max_output_bytes: int = 256 * 1024
     max_program_bytes: int = 128 * 1024
+    
+    max_runtime_tree_bytes: int = 128 * 1024 * 1024
+    runtime_tree_watch_interval: float = 0.1
 
     releases_url: str = (
         "https://api.github.com/repos/brettcannon/cpython-wasi-build/releases"
@@ -114,32 +119,63 @@ class SandboxedExecutor:
         )
 
         try:
-            async def write_to_stdin():
+            async def write_to_stdin() -> None:
                 if proc.stdin is None:
-                  return
-                proc.stdin.write(program.encode('utf-8', errors="ignore"))
-                await proc.stdin.drain()
-                proc.stdin.close()
-                await proc.stdin.wait_closed()
+                    return
+
+                try:
+                    proc.stdin.write(program.encode("utf-8", errors="ignore"))
+                    await proc.stdin.drain()
+                    proc.stdin.close()
+                    await proc.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
             output_task = asyncio.create_task(
                 self._read_limited(proc.stdout, self.max_output_bytes, "output")
             )
+            watchdog_task = asyncio.create_task(
+                self._watch_runtime_tree_size(proc)
+            )
+            write_task = asyncio.create_task(write_to_stdin())
+
+            tasks: set[asyncio.Task] = {output_task, watchdog_task, write_task}
 
             try:
-                output_bytes, _ = await asyncio.wait_for(
-                    asyncio.gather(output_task, write_to_stdin()),
+                done, pending = await asyncio.wait(
+                    tasks,
                     timeout=timeout + 1.0,
+                    return_when=asyncio.FIRST_EXCEPTION,
                 )
-            except asyncio.TimeoutError as exc:
-                self._kill(proc)
-                raise SandboxTimeoutError(f"execution timed out after {timeout}s") from exc
+
+                if pending:
+                    self._kill(proc)
+                    raise SandboxTimeoutError(f"execution timed out after {timeout}s")
+
+                for task in done:
+                    exc = task.exception()
+                    if exc is not None:
+                        self._kill(proc)
+                        raise exc
+
+                output_bytes = output_task.result()
+
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+
+                for task in tasks:
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
             await proc.wait()
 
             return output_bytes.decode("utf-8", errors="replace")
 
-        except SandboxOutputLimitError:
+        except (SandboxOutputLimitError, SandboxFilesystemLimitError):
             self._kill(proc)
             raise
 
@@ -149,6 +185,65 @@ class SandboxedExecutor:
                 await proc.wait()
 
             await asyncio.to_thread(self._repair_runtime_tree_if_modified, cache_install)
+    
+    def _tree_size_or_none(self, root: Path) -> int | None:
+        """
+        Return the apparent size of all files in the tree.
+
+        Returns None if the tree cannot be traversed/read reliably. For the runtime
+        tree, callers should treat None as unsafe and repair/replace the tree.
+        """
+        try:
+            total = 0
+
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                base = Path(dirpath)
+
+                # Count symlink directory entries themselves, not targets.
+                for name in dirnames:
+                    path = base / name
+                    try:
+                        if path.is_symlink():
+                            total += path.lstat().st_size
+                            if total > self.max_runtime_tree_bytes:
+                                return total
+                    except OSError:
+                        return None
+
+                for name in filenames:
+                    path = base / name
+                    try:
+                        total += path.lstat().st_size
+                        if total > self.max_runtime_tree_bytes:
+                            return total
+                    except OSError:
+                        return None
+
+            return total
+
+        except OSError:
+            return None
+
+    async def _watch_runtime_tree_size(
+        self,
+        proc: asyncio.subprocess.Process,
+    ) -> None:
+        while proc.returncode is None:
+            size = await asyncio.to_thread(self._tree_size_or_none, self.runtime_root)
+
+            if size is None:
+                self._kill(proc)
+                raise SandboxFilesystemLimitError(
+                    "runtime filesystem became unreadable"
+                )
+
+            if size > self.max_runtime_tree_bytes:
+                self._kill(proc)
+                raise SandboxFilesystemLimitError(
+                    f"runtime filesystem exceeded {self.max_runtime_tree_bytes} bytes"
+                )
+
+            await asyncio.sleep(self.runtime_tree_watch_interval)
 
     def _ensure_python_wasi(self) -> PythonWasiInstall:
         """
