@@ -28,7 +28,7 @@ async def setup(bot: BotCore) -> None:
         await bot.discord.defer(ephemeral=False)
         try:
             result = await executor.execute(code)
-            chunks = chunk_text(result, 3900, max_chunks=6) or [""]
+            chunks = chunk_text(result, 3900, max_chunks=3) or [""]
             clen = 0
             for chunk in chunks:
               view = discord.ui.LayoutView(timeout=None)
