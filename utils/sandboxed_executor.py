@@ -55,7 +55,7 @@ class SandboxedExecutor:
     max_program_bytes: int = 128 * 1024
     
     max_runtime_tree_bytes: int = 128 * 1024 * 1024
-    runtime_tree_watch_interval: float = 0.1
+    runtime_tree_watch_interval: float = 0.05
 
     releases_url: str = (
         "https://api.github.com/repos/brettcannon/cpython-wasi-build/releases"
