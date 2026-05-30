@@ -22,7 +22,7 @@ class Player(TypedDict, total=False):
     max_win_streak: int
 
 LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
-LEADERBOARD_LIMIT = 10
+LEADERBOARD_LIMIT = 34
 LEADERBOARD_MONITOR_INTERVAL_SECONDS = 120
 
 class LeaderboardView(discord.ui.LayoutView):
@@ -131,7 +131,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="top",
-        description="Gets the top 10 players in sortoffs!",
+        description="Gets the top 34 players in sortoffs!",
         eph=False,
         perm_requirement=0,
     )
@@ -150,7 +150,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="bottom",
-        description="Gets the bottom 10 players in sortoffs!",
+        description="Gets the bottom 34 players in sortoffs!",
         eph=False,
         perm_requirement=0,
     )
@@ -171,7 +171,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="middle",
-        description="Gets the middle 10 players in sortoffs!",
+        description="Gets the middle 34 players in sortoffs!",
         eph=False,
         perm_requirement=0,
     )
