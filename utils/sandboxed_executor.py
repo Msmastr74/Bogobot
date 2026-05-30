@@ -7,9 +7,10 @@ import shutil
 import signal
 import urllib.request
 import zipfile
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 class SandboxError(Exception):
     pass
@@ -334,37 +335,34 @@ class SandboxedExecutor:
         if not path.exists() and not path.is_symlink():
             return
 
-        self._make_tree_writable(path)
-
         if path.is_symlink() or path.is_file():
-            path.unlink()
-        else:
-            shutil.rmtree(path)
-
-    @staticmethod
-    def _make_tree_writable(path: Path) -> None:
-        """
-        Best-effort permission repair before deletion/replacement.
-
-        This is not a sandbox boundary. It is only to make cleanup reliable.
-        """
-        if not path.exists() and not path.is_symlink():
-            return
-
-        def chmod_writable(p: Path) -> None:
             try:
-                mode = p.lstat().st_mode
-                p.chmod(mode | 0o700)
+                self._make_one_writable(path)
+                path.unlink()
             except FileNotFoundError:
                 pass
-            except PermissionError:
-                pass
+            return
 
-        chmod_writable(path)
+        def onerror(func: Callable[..., Any], p: str, _):
+            failed_path = Path(p)
+            try:
+                self._make_one_writable(failed_path)
+                func(failed_path)
+            except Exception:
+                raise
+        
+        if "onexc" in inspect.signature(shutil.rmtree).parameters:
+            shutil.rmtree(path, onexc=onerror)
+        else:
+            shutil.rmtree(path, onerror=onerror)
 
-        if path.is_dir() and not path.is_symlink():
-            for child in path.rglob("*"):
-                chmod_writable(child)
+    @staticmethod
+    def _make_one_writable(path: Path) -> None:
+        try:
+            mode = path.lstat().st_mode
+            path.chmod(mode | 0o700)
+        except FileNotFoundError:
+            pass
 
     def _fetch_releases(self) -> list[dict[str, Any]]:
         req = urllib.request.Request(
