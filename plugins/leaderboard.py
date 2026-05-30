@@ -22,7 +22,7 @@ class Player(TypedDict, total=False):
     max_win_streak: int
 
 LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
-LEADERBOARD_LIMIT = 34
+LEADERBOARD_LIMIT = 25
 LEADERBOARD_MONITOR_INTERVAL_SECONDS = 120
 
 class LeaderboardView(discord.ui.LayoutView):
@@ -131,7 +131,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="top",
-        description="Gets the top 34 players in sortoffs!",
+        description=f"Gets the top {LEADERBOARD_LIMIT} players in sortoffs!",
         eph=False,
         perm_requirement=0,
     )
@@ -150,7 +150,7 @@ async def setup(bot: BotCore):
 
     @bot.setup.command(
         name="bottom",
-        description="Gets the bottom 34 players in sortoffs!",
+        description=f"Gets the bottom {LEADERBOARD_LIMIT} players in sortoffs!",
         eph=False,
         perm_requirement=0,
     )
@@ -170,24 +170,45 @@ async def setup(bot: BotCore):
         )
 
     @bot.setup.command(
-        name="middle",
-        description="Gets the middle 34 players in sortoffs!",
+        name="q2",
+        description="Gets the second quarter leaderboard players in sortoffs!",
         eph=False,
         perm_requirement=0,
     )
     @action(
-        "middle",
-        "Show the middle leaderboard.",
+        "q2",
+        "Show the 2nd quarter leaderboard.",
     )
-    async def middle(interaction: discord.Interaction):
+    async def q2(interaction: discord.Interaction):
         rows = await fetch_leaderboard()
-        middle_index = len(rows) // 2
-        start = max(0, middle_index - (LEADERBOARD_LIMIT // 2))
+        start = LEADERBOARD_LIMIT
         await bot.discord.send(
             response=True,
             **leaderboard_payload(
                 rows[start:start + LEADERBOARD_LIMIT],
-                subtitle="Middle players ranked by ELO",
+                subtitle="2nd quarter players ranked by ELO",
+                updated_at=int(time.time()),
+            ),
+        )
+    
+    @bot.setup.command(
+        name="q3",
+        description="Gets the third quarter leaderboard players in sortoffs!",
+        eph=False,
+        perm_requirement=0,
+    )
+    @action(
+        "q3",
+        "Show the 3rd quarter leaderboard.",
+    )
+    async def q3(interaction: discord.Interaction):
+        rows = await fetch_leaderboard()
+        start = LEADERBOARD_LIMIT * 2
+        await bot.discord.send(
+            response=True,
+            **leaderboard_payload(
+                rows[start:start + LEADERBOARD_LIMIT],
+                subtitle="3rd quarter players ranked by ELO",
                 updated_at=int(time.time()),
             ),
         )
