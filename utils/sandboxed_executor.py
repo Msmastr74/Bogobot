@@ -6,7 +6,7 @@ import json
 import os
 import re
 import shutil
-import time
+import stat
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -46,18 +46,15 @@ class LanguageInvocation:
     args: tuple[str, ...] = ()
     stdin: bytes = b""
     mounts: tuple[Mount, ...] = ()
-    watch_roots: tuple[Path, ...] = ()
-    cleanup_roots: tuple[Path, ...] = ()
-
 
 @dataclass
 class Language(abc.ABC):
     """
     Base class for languages executed by SandboxedExecutor.
 
-    A language adapter owns language-specific setup, cache management, runtime
-    layout, argv construction, and stdin encoding. SandboxedExecutor owns the
-    generic Wasmtime process, limits, output capture, watchdogs, and cleanup.
+    A language adapter owns language-specific setup, runtime layout, argv
+    construction, stdin encoding, and cleanup. SandboxedExecutor owns the
+    generic Wasmtime process, limits, output capture, and cleanup calling.
     """
 
     max_program_bytes: int = 128 * 1024
@@ -80,56 +77,226 @@ class Language(abc.ABC):
     async def _prepare(self, program: bytes) -> LanguageInvocation:
         raise NotImplementedError
 
+    @abc.abstractmethod
     async def cleanup(self, invocation: LanguageInvocation) -> None:
-        for root in invocation.cleanup_roots:
-            await asyncio.to_thread(self._remove_tree, root)
+        raise NotImplementedError
 
-    def _replace_dir(self, src: Path, dst: Path) -> None:
-        """
-        Replace dst with a copy of src.
+def chmod_tree_writable(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
 
-        Handles previously chmod'd or otherwise awkward permissions by making
-        dst/tmp writable before deleting them.
-        """
-        dst.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        chmod_tree_writable_windows(path)
+    else:
+        chmod_tree_writable_posix(path)
 
-        tmp = dst.parent / f".tmp-{dst.name}"
 
-        self._remove_tree(tmp)
-        shutil.copytree(src, tmp, symlinks=True)
+def chmod_tree_readonly(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
 
-        self._remove_tree(dst)
-        tmp.rename(dst)
+    if os.name == "nt":
+        chmod_tree_readonly_windows(path)
+    else:
+        chmod_tree_readonly_posix(path)
 
-    def _remove_tree(self, path: Path) -> None:
-        if not path.exists() and not path.is_symlink():
-            return
 
-        if path.is_symlink() or path.is_file():
-            try:
-                self._make_one_writable(path)
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            return
+def chmod_tree_readonly_posix(root: Path) -> None:
+    if root.is_symlink():
+        return
 
-        def onerror(func: Callable[..., Any], p: str, _: Any) -> None:
-            failed_path = Path(p)
-            self._make_one_writable(failed_path)
-            func(failed_path)
-
-        if "onexc" in inspect.signature(shutil.rmtree).parameters:
-            shutil.rmtree(path, onexc=onerror)
-        else:
-            shutil.rmtree(path, onerror=onerror)
-
-    @staticmethod
-    def _make_one_writable(path: Path) -> None:
+    if root.is_file():
         try:
-            mode = path.lstat().st_mode
-            path.chmod(mode | 0o700)
+            root.chmod(0o444)
         except FileNotFoundError:
             pass
+        return
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+
+        for name in filenames:
+            path = base / name
+            try:
+                if not path.is_symlink():
+                    path.chmod(0o444)
+            except FileNotFoundError:
+                pass
+
+        for name in dirnames:
+            path = base / name
+            try:
+                if not path.is_symlink():
+                    path.chmod(0o555)
+            except FileNotFoundError:
+                pass
+
+        try:
+            base.chmod(0o555)
+        except FileNotFoundError:
+            pass
+
+
+def chmod_tree_writable_posix(root: Path) -> None:
+    if root.is_symlink() or root.is_file():
+        try:
+            root.chmod(0o700)
+        except FileNotFoundError:
+            pass
+        return
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+
+        try:
+            base.chmod(0o700)
+        except FileNotFoundError:
+            pass
+
+        for name in dirnames:
+            path = base / name
+            try:
+                if not path.is_symlink():
+                    path.chmod(0o700)
+            except FileNotFoundError:
+                pass
+
+        for name in filenames:
+            path = base / name
+            try:
+                if not path.is_symlink():
+                    path.chmod(0o700)
+            except FileNotFoundError:
+                pass
+
+
+def chmod_tree_readonly_windows(root: Path) -> None:
+    if root.is_symlink():
+        return
+
+    if root.is_file():
+        try:
+            root.chmod(stat.S_IREAD)
+        except FileNotFoundError:
+            pass
+        _icacls(root, "/inheritance:r", "/grant:r", f"{_windows_acl_identity()}:R", "/C")
+        return
+
+    for dirpath, _, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            path = Path(dirpath) / name
+            try:
+                if not path.is_symlink():
+                    path.chmod(stat.S_IREAD)
+            except FileNotFoundError:
+                pass
+
+    _icacls(
+        root,
+        "/inheritance:r",
+        "/grant:r",
+        f"{_windows_acl_identity()}:(OI)(CI)RX",
+        "/T",
+        "/C",
+    )
+
+
+def chmod_tree_writable_windows(root: Path) -> None:
+    if root.is_symlink():
+        return
+
+    if root.is_file():
+        _icacls(root, "/grant:r", f"{_windows_acl_identity()}:F", "/C")
+        try:
+            root.chmod(stat.S_IWRITE | stat.S_IREAD)
+        except FileNotFoundError:
+            pass
+        return
+
+    _icacls(
+        root,
+        "/grant:r",
+        f"{_windows_acl_identity()}:(OI)(CI)F",
+        "/T",
+        "/C",
+    )
+
+    for dirpath, _, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+
+        try:
+            base.chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+        except FileNotFoundError:
+            pass
+
+        for name in filenames:
+            path = base / name
+            try:
+                if not path.is_symlink():
+                    path.chmod(stat.S_IWRITE | stat.S_IREAD)
+            except FileNotFoundError:
+                pass
+
+
+def _windows_acl_identity() -> str:
+    username = os.environ.get("USERNAME")
+    domain = os.environ.get("USERDOMAIN")
+
+    if username and domain:
+        return f"{domain}\\{username}"
+
+    if username:
+        return username
+
+    user = os.environ.get("USER")
+    if user:
+        return user
+
+    return "Users"
+
+
+def _icacls(path: Path, *args: str) -> None:
+    import subprocess
+
+    if not path.exists() and not path.is_symlink():
+        return
+
+    subprocess.run(
+        ["icacls", str(path), *args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+
+
+def rmdir(path: Path) -> None:
+    """
+    Force-remove a file, symlink, or directory tree.
+
+    Handles read-only POSIX modes and Windows ACL/read-only attributes before
+    deletion.
+    """
+    if not path.exists() and not path.is_symlink():
+        return
+
+    chmod_tree_writable(path)
+
+    if path.is_symlink() or path.is_file():
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    def onerror(func: Callable[..., Any], p: str, _: Any) -> None:
+        failed_path = Path(p)
+        chmod_tree_writable(failed_path)
+        func(failed_path)
+
+    if "onexc" in inspect.signature(shutil.rmtree).parameters:
+        shutil.rmtree(path, onexc=onerror)
+    else:
+        shutil.rmtree(path, onerror=onerror)
 
 
 @dataclass(frozen=True)
@@ -141,10 +308,11 @@ class PythonWasiInstall:
 
 @dataclass
 class PythonLanguage(Language):
-    # The release will be unpacked into this folder.
-    # Per-run runtime dirs are created underneath this directory as
-    # runtime-{time_ns}.
+    # Contains python.wasm, lib/, and runtime/.
     root: Path = Path("./python-wasi")
+
+    # Mounted as guest /. Contains lib/ but not python.wasm.
+    runtime_name: str = "runtime"
 
     python_version: str | None = None
 
@@ -152,42 +320,44 @@ class PythonLanguage(Language):
         "https://api.github.com/repos/brettcannon/cpython-wasi-build/releases"
     )
 
+    def __post_init__(self) -> None:
+        # Setup-only lock. It does not serialize executions.
+        self._setup_lock = asyncio.Lock()
+
     @property
     def name(self) -> str:
         return "python"
 
     async def _prepare(self, program: bytes) -> LanguageInvocation:
-        cache_install = await asyncio.to_thread(self._ensure_python_wasi)
-        runtime_root = self._new_runtime_root()
-        await asyncio.to_thread(
-            self._prepare_runtime_tree,
-            cache_install,
-            runtime_root,
-        )
+        async with self._setup_lock:
+            install = await asyncio.to_thread(self._ensure_python_wasi)
+            runtime_root = await asyncio.to_thread(
+                self._ensure_readonly_runtime,
+                install,
+            )
 
         return LanguageInvocation(
-            # The wasm executable lives in the trusted cache and is not mounted.
-            # Only the disposable runtime root is mounted as guest /.
-            wasm_path=cache_install.python_wasm,
+            wasm_path=install.python_wasm,
             args=("-I", "-B"),
             stdin=program,
             mounts=(Mount(runtime_root, "/"),),
-            watch_roots=(runtime_root,),
-            cleanup_roots=(runtime_root,),
         )
+
+    async def cleanup(self, invocation: LanguageInvocation) -> None:
+        return
 
     def _ensure_python_wasi(self) -> PythonWasiInstall:
         """
-        Ensure self.root is the trusted extracted CPython WASI cache.
-
-        After setup, self.root should directly contain things like:
+        Ensure self.root contains the CPython WASI runtime files:
 
             ./python-wasi/
               python.wasm
               lib/
                 python3.14/
+              runtime/
+                lib/
 
-        This directory is not mounted into the sandbox.
+        runtime/ is mounted into WASI. python.wasm is not inside runtime/.
         """
         existing = self._inspect_install(self.root)
         if existing is not None:
@@ -205,7 +375,7 @@ class PythonLanguage(Language):
         tmp_extract = self.root.parent / f".extracting-{self.root.name}"
         tmp_old = self.root.parent / f".old-{self.root.name}"
 
-        self._remove_tree(tmp_extract)
+        rmdir(tmp_extract)
         tmp_extract.mkdir(parents=True)
 
         try:
@@ -222,13 +392,14 @@ class PythonLanguage(Language):
                     f"{asset.get('name')}"
                 )
 
-            self._remove_tree(tmp_old)
+            rmdir(tmp_old)
 
             if self.root.exists():
+                chmod_tree_writable(self.root / self.runtime_name)
                 self.root.rename(tmp_old)
 
             extracted_root.rename(self.root)
-            self._remove_tree(tmp_old)
+            rmdir(tmp_old)
 
         except Exception:
             if not self.root.exists() and tmp_old.exists():
@@ -236,8 +407,8 @@ class PythonLanguage(Language):
             raise
 
         finally:
-            self._remove_tree(tmp_extract)
-            self._remove_tree(tmp_old)
+            rmdir(tmp_extract)
+            rmdir(tmp_old)
 
         install = self._inspect_install(self.root)
         if install is None:
@@ -245,34 +416,41 @@ class PythonLanguage(Language):
 
         return install
 
-    def _new_runtime_root(self) -> Path:
-        return self.root / f"runtime-{time.time_ns()}"
+    def _ensure_readonly_runtime(self, install: PythonWasiInstall) -> Path:
+        runtime_root = self.root / self.runtime_name
 
-    def _prepare_runtime_tree(
-        self,
-        cache_install: PythonWasiInstall,
-        runtime_root: Path,
-    ) -> None:
-        """Create a fresh per-run Python runtime tree.
+        if self._runtime_has_stdlib(runtime_root, install.python_version):
+            chmod_tree_readonly(runtime_root)
+            return runtime_root
 
-        Only the stdlib/runtime lib directory is copied into the mounted tree.
-        python.wasm stays in the trusted cache and is executed by host path, not
-        mounted into the guest filesystem.
-        """
-        src_lib = cache_install.root / "lib"
-        dst_lib = runtime_root / "lib"
+        tmp = self.root / f".tmp-{self.runtime_name}"
 
-        if not src_lib.is_dir():
-            raise SandboxSetupError("CPython WASI cache is missing lib directory")
-
-        self._remove_tree(runtime_root)
-        runtime_root.mkdir(parents=True, exist_ok=False)
+        rmdir(tmp)
+        tmp.mkdir(parents=True)
 
         try:
-            shutil.copytree(src_lib, dst_lib, symlinks=True)
+            shutil.copytree(
+                install.root / "lib",
+                tmp / "lib",
+                symlinks=True,
+            )
+
+            if not self._runtime_has_stdlib(tmp, install.python_version):
+                raise SandboxSetupError("prepared CPython runtime tree is invalid")
+
+            rmdir(runtime_root)
+            tmp.rename(runtime_root)
+            chmod_tree_readonly(runtime_root)
+
         except Exception:
-            self._remove_tree(runtime_root)
+            rmdir(tmp)
             raise
+
+        return runtime_root
+
+    def _runtime_has_stdlib(self, runtime_root: Path, version: str) -> bool:
+        stdlib = runtime_root / "lib" / f"python{version}"
+        return runtime_root.is_dir() and stdlib.is_dir()
 
     def _fetch_releases(self) -> list[dict[str, Any]]:
         req = urllib.request.Request(
@@ -474,21 +652,27 @@ class JavascriptLanguage(Language):
     wasm_name: str = "js.wasm"
     allow_stale_cache_on_fetch_error: bool = True
 
+    def __post_init__(self) -> None:
+        # Setup-only lock. It does not serialize executions.
+        self._setup_lock = asyncio.Lock()
+
     @property
     def name(self) -> str:
         return "javascript"
 
     async def _prepare(self, program: bytes) -> LanguageInvocation:
-        install = await asyncio.to_thread(self._ensure_javascript_wasi)
+        async with self._setup_lock:
+            install = await asyncio.to_thread(self._ensure_javascript_wasi)
 
         return LanguageInvocation(
             wasm_path=install.js_wasm,
             args=(),
             stdin=program,
             mounts=(),
-            watch_roots=(),
-            cleanup_roots=(),
         )
+
+    async def cleanup(self, invocation: LanguageInvocation) -> None:
+        return
 
     def _ensure_javascript_wasi(self) -> JavascriptWasiInstall:
         existing = self._inspect_install(self.root)
@@ -508,7 +692,7 @@ class JavascriptLanguage(Language):
         tmp = self.root.parent / f".tmp-{self.root.name}"
         tmp_old = self.root.parent / f".old-{self.root.name}"
 
-        self._remove_tree(tmp)
+        rmdir(tmp)
         tmp.mkdir(parents=True)
 
         try:
@@ -525,11 +709,11 @@ class JavascriptLanguage(Language):
             if candidate is None:
                 raise SandboxSetupError("downloaded SpiderMonkey WASI cache is invalid")
 
-            self._remove_tree(tmp_old)
+            rmdir(tmp_old)
             if self.root.exists():
                 self.root.rename(tmp_old)
             tmp.rename(self.root)
-            self._remove_tree(tmp_old)
+            rmdir(tmp_old)
 
         except Exception:
             if not self.root.exists() and tmp_old.exists():
@@ -537,8 +721,8 @@ class JavascriptLanguage(Language):
             raise
 
         finally:
-            self._remove_tree(tmp)
-            self._remove_tree(tmp_old)
+            rmdir(tmp)
+            rmdir(tmp_old)
 
         install = self._inspect_install(self.root)
         if install is None:
@@ -668,8 +852,6 @@ class SandboxedExecutor:
     fuel: int | None = None
 
     max_output_bytes: int = 256 * 1024
-    max_runtime_tree_bytes: int = 128 * 1024 * 1024
-    runtime_tree_watch_interval: float = 0.05
 
     async def execute(self, program: str, timeout: float = 60) -> str:
         return await self._execute_locked(program, timeout)
@@ -723,14 +905,10 @@ class SandboxedExecutor:
             output_task = asyncio.create_task(
                 self._read_limited(proc.stdout, self.max_output_bytes, "output")
             )
-            watchdog_task = asyncio.create_task(
-                self._watch_runtime_tree_size(proc, invocation.watch_roots)
-            )
             write_task = asyncio.create_task(write_to_stdin())
 
             tasks: set[asyncio.Task[Any]] = {
                 output_task,
-                watchdog_task,
                 write_task,
             }
 
@@ -784,83 +962,6 @@ class SandboxedExecutor:
         for mount in mounts:
             args.extend(("--dir", f"{mount.host}::{mount.guest}"))
         return tuple(args)
-
-    def _tree_size_or_none(self, root: Path) -> int | None:
-        """
-        Return a conservative size of all filesystem entries in the tree.
-
-        Uses max(apparent size, allocated blocks) where available. This catches
-        both normal file growth and sparse-file apparent-size abuse. Returns None
-        if the tree cannot be traversed/read reliably.
-        """
-        try:
-            total = 0
-
-            for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-                base = Path(dirpath)
-
-                for name in dirnames:
-                    path = base / name
-                    try:
-                        if path.is_symlink():
-                            total += self._size_for_limit(path)
-                            if total > self.max_runtime_tree_bytes:
-                                return total
-                    except OSError:
-                        return None
-
-                for name in filenames:
-                    path = base / name
-                    try:
-                        total += self._size_for_limit(path)
-                        if total > self.max_runtime_tree_bytes:
-                            return total
-                    except OSError:
-                        return None
-
-            return total
-
-        except OSError:
-            return None
-
-    @staticmethod
-    def _size_for_limit(path: Path) -> int:
-        st = path.lstat()
-        apparent = st.st_size
-        blocks = getattr(st, "st_blocks", None)
-        if blocks is None:
-            return apparent
-        allocated = blocks * 512
-        return max(apparent, allocated)
-
-    async def _watch_runtime_tree_size(
-        self,
-        proc: asyncio.subprocess.Process,
-        roots: tuple[Path, ...],
-    ) -> None:
-        if not roots:
-            return
-
-        while proc.returncode is None:
-            total = 0
-            for root in roots:
-                size = await asyncio.to_thread(self._tree_size_or_none, root)
-
-                if size is None:
-                    self._kill(proc)
-                    raise SandboxFilesystemLimitError(
-                        "runtime filesystem became unreadable"
-                    )
-
-                total += size
-                if total > self.max_runtime_tree_bytes:
-                    self._kill(proc)
-                    raise SandboxFilesystemLimitError(
-                        f"runtime filesystem exceeded "
-                        f"{self.max_runtime_tree_bytes} bytes"
-                    )
-
-            await asyncio.sleep(self.runtime_tree_watch_interval)
 
     @staticmethod
     async def _read_limited(
