@@ -17,7 +17,7 @@ pkg install opencv-python -y
 # Install Python libraries
 # openai provides hosted or OpenAI-compatible AI action selection and replies.
 # Pillow may require a moment to compile on mobile devices
-pip install discord.py openai numpy Pillow aiohttp streamlink pyuca
+pip install discord.py openai numpy Pillow aiohttp streamlink pyuca pytchat
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python - <<'PY'

@@ -13,4 +13,5 @@ dependencies = [
     "pillow>=12.2.0",
     "pyuca>=1.2",
     "streamlink>=8.4.0",
+    "pytchat>=0.5.5",
 ]
