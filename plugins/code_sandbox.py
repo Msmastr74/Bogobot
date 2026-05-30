@@ -79,7 +79,12 @@ class ProgramInputModal(discord.ui.Modal, title="Program"):
             max_values=1,
         )
         self.add_item(discord.ui.Label(text=label_text, component=self.code))
-        self.add_item(discord.ui.Label(text="Program file", component=self.file_upload))
+        self.add_item(discord.ui.Label(
+            text="Program file", component=self.file_upload,
+            description=(
+                "If provided, the file contents are inserted before the inline code. "
+            ),
+        ))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         token = current_interaction.set(interaction)
@@ -110,9 +115,13 @@ class ProgramInputModal(discord.ui.Modal, title="Program"):
             current_interaction.reset(token)
 
     async def _read_code(self) -> str:
+        code = ""
         if self.file_upload.values:
             attachment = self.file_upload.values[0]
             data = await attachment.read()
-            return data.decode("utf-8", errors="ignore")
-
-        return self.code.value
+            code += data.decode("utf-8", errors="ignore")
+        if self.code.value:
+            if code:
+                code += "\n"
+            code += self.code.value
+        return code
