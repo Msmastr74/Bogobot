@@ -21,3 +21,4 @@ uv.lock
 .python-version
 python-wasi/
 python-wasi-runtime/
+javascript-wasi/
