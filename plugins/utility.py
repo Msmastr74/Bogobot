@@ -396,13 +396,6 @@ async def setup(bot: BotCore):
             )
 
     class AnnounceModal(discord.ui.Modal, title="Announcement Message Contents"):
-        message = discord.ui.TextInput(
-            style=discord.TextStyle.long,
-            required=False,
-            placeholder="Type a message..."
-        )
-        label = discord.ui.Label(text="Message", component=message)
-
         def __init__(
             self,
             *,
@@ -420,6 +413,12 @@ async def setup(bot: BotCore):
             self.accent_colour = accent_colour
             self.attachments = attachments
             self.message_id = message_id
+            self.message = discord.ui.TextInput(
+                style=discord.TextStyle.long,
+                required=False,
+                placeholder="Type a message..."
+            )
+            self.add_item(discord.ui.Label(text="Message", component=self.message))
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
             token = current_interaction.set(interaction)

@@ -34,7 +34,7 @@ async def setup(bot: BotCore) -> None:
                 await interaction.response.send_modal(ProgramInputModal(
                     bot,
                     callback=lambda code: execute_code(code, executor),
-                    label=f"{language.name.capitalize()} ccde"
+                    label_text=f"{language.name.capitalize()} ccde"
                 ))
                 return
             await execute_code(code, executor)
@@ -59,31 +59,27 @@ async def setup(bot: BotCore) -> None:
                 await bot.discord.send(f"{type(e).__name__}: {e}", response=True, safety_filter=True)
 
 class ProgramInputModal(discord.ui.Modal, title="Program"):
-    code = discord.ui.TextInput(
-        style=discord.TextStyle.paragraph,
-        required=False,
-    )
-    label = discord.ui.Label(text="Code", component=code)
-
-    file_upload = discord.ui.FileUpload(
-        required=False,
-        min_values=0,
-        max_values=1,
-    )
-    label = discord.ui.Label(text="Program file", component=file_upload)
-
     def __init__(
         self,
         bot: BotCore,
         *,
         callback: Callable[[str], Awaitable[Any]],
-        label: str | None
+        label_text: str
     ) -> None:
         super().__init__()
         self.bot = bot
-        if label is not None:
-            self.label.text = label
         self.callback = callback
+        self.code = discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            required=False,
+        )
+        self.file_upload = discord.ui.FileUpload(
+            required=False,
+            min_values=0,
+            max_values=1,
+        )
+        self.add_item(discord.ui.Label(text=label_text, component=self.code))
+        self.add_item(discord.ui.Label(text="Program file", component=self.file_upload))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         token = current_interaction.set(interaction)

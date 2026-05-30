@@ -847,18 +847,6 @@ async def setup(bot: BotCore):
         except BogoUserError as e:
             await send_bogo_error(interaction, e)
     class CustomBogoscrambleModal(discord.ui.Modal, title="Custom Bogoscramble"):
-        rows = discord.ui.TextInput(
-            default=str(DEFAULT_SCRAMBLE_SHAPE[0]),
-            required=True,
-            max_length=2,
-        )
-        rows_label = discord.ui.Label(text="Rows", component=rows)
-        columns = discord.ui.TextInput(
-            default=str(DEFAULT_SCRAMBLE_SHAPE[1]),
-            required=True,
-            max_length=2,
-        )
-        columns_label = discord.ui.Label(text="Columns", component=columns)
         def __init__(
             self,
             *,
@@ -870,6 +858,19 @@ async def setup(bot: BotCore):
             self.content = content
             self.embeds = embeds
             self.attachments = attachments
+            self.rows = discord.ui.TextInput(
+                default=str(DEFAULT_SCRAMBLE_SHAPE[0]),
+                required=True,
+                max_length=2,
+            )
+            self.columns = discord.ui.TextInput(
+                default=str(DEFAULT_SCRAMBLE_SHAPE[1]),
+                required=True,
+                max_length=2,
+            )
+            self.add_item(discord.ui.Label(text="Rows", component=self.rows))
+            self.add_item(discord.ui.Label(text="Columns", component=self.columns))
+        
         async def on_submit(self, interaction: discord.Interaction):
             token = current_interaction.set(interaction)
             await bot.discord.defer(ephemeral=False)
