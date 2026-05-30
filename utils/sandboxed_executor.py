@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import abc
 import asyncio
 import hashlib
@@ -8,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -142,11 +141,10 @@ class PythonWasiInstall:
 
 @dataclass
 class PythonLanguage(Language):
-    # Trusted cache dir. This is never mounted into WASI.
-    cache_root: Path = Path("./python-wasi")
-
-    # Writable/disposable runtime dir. This is what gets mounted.
-    runtime_root: Path = Path("./python-wasi-runtime")
+    # The release will be unpacked into this folder.
+    # Per-run runtime dirs are created underneath this directory as
+    # runtime-{time_ns}.
+    root: Path = Path("./python-wasi")
 
     python_version: str | None = None
 
@@ -160,26 +158,29 @@ class PythonLanguage(Language):
 
     async def _prepare(self, program: bytes) -> LanguageInvocation:
         cache_install = await asyncio.to_thread(self._ensure_python_wasi)
-        await asyncio.to_thread(self._prepare_runtime_tree, cache_install)
-
-        runtime_install = self._inspect_install(self.runtime_root)
-        if runtime_install is None:
-            raise SandboxSetupError("runtime CPython WASI tree is invalid")
+        runtime_root = self._new_runtime_root()
+        await asyncio.to_thread(
+            self._prepare_runtime_tree,
+            cache_install,
+            runtime_root,
+        )
 
         return LanguageInvocation(
-            wasm_path=runtime_install.python_wasm,
+            # The wasm executable lives in the trusted cache and is not mounted.
+            # Only the disposable runtime root is mounted as guest /.
+            wasm_path=cache_install.python_wasm,
             args=("-I", "-B"),
             stdin=program,
-            mounts=(Mount(runtime_install.root, "/"),),
-            watch_roots=(runtime_install.root,),
-            cleanup_roots=(runtime_install.root,),
+            mounts=(Mount(runtime_root, "/"),),
+            watch_roots=(runtime_root,),
+            cleanup_roots=(runtime_root,),
         )
 
     def _ensure_python_wasi(self) -> PythonWasiInstall:
         """
-        Ensure self.cache_root is the trusted extracted CPython WASI cache.
+        Ensure self.root is the trusted extracted CPython WASI cache.
 
-        After setup, self.cache_root should directly contain things like:
+        After setup, self.root should directly contain things like:
 
             ./python-wasi/
               python.wasm
@@ -188,21 +189,21 @@ class PythonLanguage(Language):
 
         This directory is not mounted into the sandbox.
         """
-        existing = self._inspect_install(self.cache_root)
+        existing = self._inspect_install(self.root)
         if existing is not None:
             return existing
 
-        self.cache_root.parent.mkdir(parents=True, exist_ok=True)
+        self.root.parent.mkdir(parents=True, exist_ok=True)
 
         releases = self._fetch_releases()
         asset = self._select_asset(releases)
 
-        zip_path = self.cache_root.with_suffix(".zip")
+        zip_path = self.root.with_suffix(".zip")
         self._download_asset(asset, zip_path)
         self._verify_asset_digest(asset, zip_path)
 
-        tmp_extract = self.cache_root.parent / f".extracting-{self.cache_root.name}"
-        tmp_old = self.cache_root.parent / f".old-{self.cache_root.name}"
+        tmp_extract = self.root.parent / f".extracting-{self.root.name}"
+        tmp_old = self.root.parent / f".old-{self.root.name}"
 
         self._remove_tree(tmp_extract)
         tmp_extract.mkdir(parents=True)
@@ -223,29 +224,55 @@ class PythonLanguage(Language):
 
             self._remove_tree(tmp_old)
 
-            if self.cache_root.exists():
-                self.cache_root.rename(tmp_old)
+            if self.root.exists():
+                self.root.rename(tmp_old)
 
-            extracted_root.rename(self.cache_root)
+            extracted_root.rename(self.root)
             self._remove_tree(tmp_old)
 
         except Exception:
-            if not self.cache_root.exists() and tmp_old.exists():
-                tmp_old.rename(self.cache_root)
+            if not self.root.exists() and tmp_old.exists():
+                tmp_old.rename(self.root)
             raise
 
         finally:
             self._remove_tree(tmp_extract)
             self._remove_tree(tmp_old)
 
-        install = self._inspect_install(self.cache_root)
+        install = self._inspect_install(self.root)
         if install is None:
             raise SandboxSetupError("failed to install CPython WASI")
 
         return install
 
-    def _prepare_runtime_tree(self, cache_install: PythonWasiInstall) -> None:
-        self._replace_dir(cache_install.root, self.runtime_root)
+    def _new_runtime_root(self) -> Path:
+        return self.root / f"runtime-{time.time_ns()}"
+
+    def _prepare_runtime_tree(
+        self,
+        cache_install: PythonWasiInstall,
+        runtime_root: Path,
+    ) -> None:
+        """Create a fresh per-run Python runtime tree.
+
+        Only the stdlib/runtime lib directory is copied into the mounted tree.
+        python.wasm stays in the trusted cache and is executed by host path, not
+        mounted into the guest filesystem.
+        """
+        src_lib = cache_install.root / "lib"
+        dst_lib = runtime_root / "lib"
+
+        if not src_lib.is_dir():
+            raise SandboxSetupError("CPython WASI cache is missing lib directory")
+
+        self._remove_tree(runtime_root)
+        runtime_root.mkdir(parents=True, exist_ok=False)
+
+        try:
+            shutil.copytree(src_lib, dst_lib, symlinks=True)
+        except Exception:
+            self._remove_tree(runtime_root)
+            raise
 
     def _fetch_releases(self) -> list[dict[str, Any]]:
         req = urllib.request.Request(
@@ -437,7 +464,7 @@ class JavascriptLanguage(Language):
     stdin instead of writing an input file into a mounted filesystem.
     """
 
-    cache_root: Path = Path("./javascript-wasi")
+    root: Path = Path("./javascript-wasi")
     branch: str = "mozilla-release"
     data_url: str = (
         "https://raw.githubusercontent.com/"
@@ -464,7 +491,7 @@ class JavascriptLanguage(Language):
         )
 
     def _ensure_javascript_wasi(self) -> JavascriptWasiInstall:
-        existing = self._inspect_install(self.cache_root)
+        existing = self._inspect_install(self.root)
 
         try:
             entries = self._fetch_data()
@@ -477,9 +504,9 @@ class JavascriptLanguage(Language):
         if existing is not None and self._install_matches_entry(existing, selected):
             return existing
 
-        self.cache_root.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.cache_root.parent / f".tmp-{self.cache_root.name}"
-        tmp_old = self.cache_root.parent / f".old-{self.cache_root.name}"
+        self.root.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.root.parent / f".tmp-{self.root.name}"
+        tmp_old = self.root.parent / f".old-{self.root.name}"
 
         self._remove_tree(tmp)
         tmp.mkdir(parents=True)
@@ -499,21 +526,21 @@ class JavascriptLanguage(Language):
                 raise SandboxSetupError("downloaded SpiderMonkey WASI cache is invalid")
 
             self._remove_tree(tmp_old)
-            if self.cache_root.exists():
-                self.cache_root.rename(tmp_old)
-            tmp.rename(self.cache_root)
+            if self.root.exists():
+                self.root.rename(tmp_old)
+            tmp.rename(self.root)
             self._remove_tree(tmp_old)
 
         except Exception:
-            if not self.cache_root.exists() and tmp_old.exists():
-                tmp_old.rename(self.cache_root)
+            if not self.root.exists() and tmp_old.exists():
+                tmp_old.rename(self.root)
             raise
 
         finally:
             self._remove_tree(tmp)
             self._remove_tree(tmp_old)
 
-        install = self._inspect_install(self.cache_root)
+        install = self._inspect_install(self.root)
         if install is None:
             raise SandboxSetupError("failed to install SpiderMonkey WASI")
 
@@ -644,12 +671,8 @@ class SandboxedExecutor:
     max_runtime_tree_bytes: int = 128 * 1024 * 1024
     runtime_tree_watch_interval: float = 0.05
 
-    def __post_init__(self) -> None:
-        self._lock = asyncio.Lock()
-
     async def execute(self, program: str, timeout: float = 60) -> str:
-        async with self._lock:
-            return await self._execute_locked(program, timeout)
+        return await self._execute_locked(program, timeout)
 
     @staticmethod
     def _wasmtime_timeout(timeout: float) -> str:

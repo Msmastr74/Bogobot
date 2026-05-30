@@ -397,11 +397,12 @@ async def setup(bot: BotCore):
 
     class AnnounceModal(discord.ui.Modal, title="Announcement Message Contents"):
         message = discord.ui.TextInput(
-            label="Message",
             style=discord.TextStyle.long,
             required=False,
             placeholder="Type a message..."
         )
+        label = discord.ui.Label(text="Message", component=message)
+
         def __init__(
             self,
             *,

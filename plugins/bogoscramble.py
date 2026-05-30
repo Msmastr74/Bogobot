@@ -848,17 +848,17 @@ async def setup(bot: BotCore):
             await send_bogo_error(interaction, e)
     class CustomBogoscrambleModal(discord.ui.Modal, title="Custom Bogoscramble"):
         rows = discord.ui.TextInput(
-            label="Rows",
             default=str(DEFAULT_SCRAMBLE_SHAPE[0]),
             required=True,
             max_length=2,
         )
+        rows_label = discord.ui.Label(text="Rows", component=rows)
         columns = discord.ui.TextInput(
-            label="Columns",
             default=str(DEFAULT_SCRAMBLE_SHAPE[1]),
             required=True,
             max_length=2,
         )
+        columns_label = discord.ui.Label(text="Columns", component=columns)
         def __init__(
             self,
             *,

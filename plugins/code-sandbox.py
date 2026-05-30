@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Awaitable, Callable
 
 import discord
@@ -5,80 +6,117 @@ import discord
 from bogobot_core import BotCore, current_interaction
 from utils.ai import AIParam, action
 from utils.discord import chunk_text
-from utils.sandboxed_executor import SandboxedExecutor, PythonLanguage, JavascriptLanguage
+from utils.sandboxed_executor import Language, SandboxedExecutor, PythonLanguage, JavascriptLanguage
 
 BLANK_CHAR = "\u200d"
 async def setup(bot: BotCore) -> None:
-    python_executor = SandboxedExecutor(
-        fuel=int(bot.config.get("code_sandbox_fuel", 25_000_000_000)),
-        language=PythonLanguage()
-    )
-    @bot.setup.command("python", description="Execute python code.", perm_requirement=0, defer=False)
-    @action(
-        "python",
-        "Execute python code in a sandboxed environment — output will only be shown to the user.",
-        params={
-            "code": AIParam("Code to execute.")
-        }
-    )
-    async def python(interaction: discord.Interaction, code: str | None = None):
-        if code is None:
-            await interaction.response.send_modal(ProgramInputModal(
-                lambda code: execute_code(code, python_executor), "Javascript Code"
-            ))
-            return
-        await execute_code(code, python_executor)
-    js_executor = SandboxedExecutor(
-        fuel=int(bot.config.get("code_sandbox_fuel", 25_000_000_000)),
-        language=JavascriptLanguage()
-    )
-    @bot.setup.command("javascript", description="Execute javascript code.", perm_requirement=0, defer=False)
-    @action(
-        "javascript",
-        "Execute javascript code in a sandboxed environment — output will only be shown to the user.",
-        params={
-            "code": AIParam("Code to execute.")
-        }
-    )
-    async def javascript(interaction: discord.Interaction, code: str | None = None):
-        if code is None:
-            await interaction.response.send_modal(ProgramInputModal(
-                lambda code: execute_code(code, js_executor), "Javascript Code"
-            ))
-            return
-        await execute_code(code, js_executor)
-    
+    fuel = int(bot.config.get("code_sandbox_fuel", 25_000_000_000))
+    languages = [
+        PythonLanguage(),
+        JavascriptLanguage()
+    ]
+    execution_lock = asyncio.Lock()
+    def setup_language(language: Language, fuel: int):
+        executor = SandboxedExecutor(
+            fuel=fuel,
+            language=language
+        )
+        @bot.setup.command(language.name, description=f"Execute {language.name} code.", perm_requirement=0, defer=False)
+        @action(
+            language.name,
+            f"Execute {language.name} code in a sandboxed environment — output will only be shown to the user.",
+            params={
+                "code": AIParam("Code to execute.")
+            }
+        )
+        async def command(interaction: discord.Interaction, code: str | None = None):
+            if code is None:
+                await interaction.response.send_modal(ProgramInputModal(
+                    bot,
+                    callback=lambda code: execute_code(code, executor),
+                    label=f"{language.name.capitalize()} ccde"
+                ))
+                return
+            await execute_code(code, executor)
+    for language in languages:
+        setup_language(language, fuel)
+
     async def execute_code(code: str, executor: SandboxedExecutor):
         await bot.discord.defer(ephemeral=False)
-        try:
-            result = await executor.execute(code)
-            chunks = chunk_text(result, 3900, max_chunks=3) or [""]
-            clen = 0
-            for chunk in chunks:
-              view = discord.ui.LayoutView(timeout=None)
-              view.add_item(discord.ui.TextDisplay(f"```ansi\n{chunk or BLANK_CHAR}\n```"))
-              clen += len(chunk)
-              await bot.discord.send(view=view, response=True, safety_filter=True)
-            if clen < len(result):
-              await bot.discord.send("`[TRUNCATED]`", response=True)
-        except Exception as e:
-            await bot.discord.send(f"{type(e).__name__}: {e}", response=True, safety_filter=True)
-    
-    class ProgramInputModal(discord.ui.Modal, title="Program"):
-        code = discord.ui.TextInput(
-            label="Code",
-            style=discord.TextStyle.paragraph,
-            required=True
-        )
-        def __init__(self, callback: Callable[[str], Awaitable[Any]], label: str) -> None:
-            super().__init__()
-            self.code.label = label
-            self.callback = callback
-        
-        async def on_submit(self, interaction: discord.Interaction):
-            token = current_interaction.set(interaction)
-            await bot.discord.defer(ephemeral=False)
+        async with execution_lock:
             try:
-                await self.callback(self.code.value)
-            finally:
-                current_interaction.reset(token)
+                result = await executor.execute(code)
+                chunks = chunk_text(result, 3900, max_chunks=3) or [""]
+                clen = 0
+                for chunk in chunks:
+                    view = discord.ui.LayoutView(timeout=None)
+                    view.add_item(discord.ui.TextDisplay(f"```ansi\n{chunk or BLANK_CHAR}\n```"))
+                    clen += len(chunk)
+                    await bot.discord.send(view=view, response=True, safety_filter=True)
+                if clen < len(result):
+                    await bot.discord.send("`[TRUNCATED]`", response=True)
+            except Exception as e:
+                await bot.discord.send(f"{type(e).__name__}: {e}", response=True, safety_filter=True)
+
+class ProgramInputModal(discord.ui.Modal, title="Program"):
+    code = discord.ui.TextInput(
+        style=discord.TextStyle.paragraph,
+        required=False,
+    )
+    label = discord.ui.Label(text="Code", component=code)
+
+    file_upload = discord.ui.FileUpload(
+        required=False,
+        min_values=0,
+        max_values=1,
+    )
+    label = discord.ui.Label(text="Program file", component=file_upload)
+
+    def __init__(
+        self,
+        bot: BotCore,
+        *,
+        callback: Callable[[str], Awaitable[Any]],
+        label: str | None
+    ) -> None:
+        super().__init__()
+        self.bot = bot
+        if label is not None:
+            self.label.text = label
+        self.callback = callback
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        token = current_interaction.set(interaction)
+        await self.bot.discord.defer(ephemeral=False)
+
+        try:
+            try:
+                code = await self._read_code()
+            except ValueError as exc:
+                await self.bot.discord.send(
+                    str(exc),
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            
+            if not code.strip():
+                await self.bot.discord.send(
+                    "Provide code in the text box or upload a source file.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+
+            await self.callback(code)
+
+        finally:
+            current_interaction.reset(token)
+
+    async def _read_code(self) -> str:
+        if self.file_upload.values:
+            attachment = self.file_upload.values[0]
+            data = await attachment.read()
+            return data.decode("utf-8", errors="ignore")
+
+        return self.code.value
