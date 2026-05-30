@@ -9,8 +9,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, overload
-
+from typing import Any
 
 class SandboxError(Exception):
     pass
@@ -61,8 +60,6 @@ class SandboxedExecutor:
         "https://api.github.com/repos/brettcannon/cpython-wasi-build/releases"
     )
 
-    manifest_name: str = ".tree-sha256"
-
     def __post_init__(self) -> None:
         self._lock = asyncio.Lock()
 
@@ -91,9 +88,7 @@ class SandboxedExecutor:
         # Ensure trusted cache exists.
         cache_install = await asyncio.to_thread(self._ensure_python_wasi)
 
-        # Ensure mounted runtime copy matches trusted cache.
-        await asyncio.to_thread(self._ensure_runtime_tree, cache_install)
-
+        await asyncio.to_thread(self._prepare_runtime_tree, cache_install)
         runtime_install = self._inspect_install(self.runtime_root)
         if runtime_install is None:
             raise SandboxSetupError("runtime CPython WASI tree is invalid")
@@ -184,7 +179,7 @@ class SandboxedExecutor:
                 self._kill(proc)
                 await proc.wait()
 
-            await asyncio.to_thread(self._repair_runtime_tree_if_modified, cache_install)
+            await asyncio.to_thread(self._remove_tree, self.runtime_root)
     
     def _tree_size_or_none(self, root: Path) -> int | None:
         """
@@ -204,7 +199,8 @@ class SandboxedExecutor:
                     path = base / name
                     try:
                         if path.is_symlink():
-                            total += path.lstat().st_size
+                            st = path.lstat()
+                            total += max(st.st_size, getattr(st, "st_blocks", 0) * 512)
                             if total > self.max_runtime_tree_bytes:
                                 return total
                     except OSError:
@@ -260,7 +256,6 @@ class SandboxedExecutor:
         """
         existing = self._inspect_install(self.cache_root)
         if existing is not None:
-            self._ensure_cache_manifest(existing.root)
             return existing
 
         self.cache_root.parent.mkdir(parents=True, exist_ok=True)
@@ -313,140 +308,11 @@ class SandboxedExecutor:
         if install is None:
             raise SandboxSetupError("failed to install CPython WASI")
 
-        self._ensure_cache_manifest(install.root)
         return install
 
-    def _ensure_runtime_tree(self, cache_install: PythonWasiInstall) -> None:
-        expected = self._ensure_cache_manifest(cache_install.root)
+    def _prepare_runtime_tree(self, cache_install: PythonWasiInstall) -> None:
+        self._replace_dir(cache_install.root, self.runtime_root)
 
-        if not self.runtime_root.exists():
-            self._replace_dir(cache_install.root, self.runtime_root)
-            return
-
-        actual = self._hash_tree(self.runtime_root, do_raise=False)
-        if actual != expected:
-            self._replace_dir(cache_install.root, self.runtime_root)
-
-    def _repair_runtime_tree_if_modified(self, cache_install: PythonWasiInstall) -> None:
-        expected = self._ensure_cache_manifest(cache_install.root)
-
-        if not self.runtime_root.exists():
-            self._replace_dir(cache_install.root, self.runtime_root)
-            return
-
-        actual = self._hash_tree(self.runtime_root, do_raise=False)
-        if actual != expected:
-            self._replace_dir(cache_install.root, self.runtime_root)
-
-    def _ensure_cache_manifest(self, cache_root: Path) -> str:
-        manifest = cache_root / self.manifest_name
-
-        if manifest.is_file():
-            value = manifest.read_text(encoding="utf-8").strip()
-            if re.fullmatch(r"[0-9a-fA-F]{64}", value):
-                return value.lower()
-
-        digest = self._hash_tree(cache_root)
-        manifest.write_text(digest + "\n", encoding="utf-8")
-        return digest
-
-    @overload
-    def _hash_tree(self, root: Path, *, do_raise: Literal[True] = True) -> str: ...
-    @overload
-    def _hash_tree(self, root: Path, *, do_raise: Literal[False]) -> str | None: ...
-  
-    def _hash_tree(self, root: Path, *, do_raise: bool = True) -> str | None:
-        """
-        Deterministic content hash of a directory tree.
-
-        If do_raise=True:
-            Raise SandboxSetupError on unreadable/unhashable paths.
-
-        If do_raise=False:
-            Return None on unreadable/unhashable paths, so callers can treat
-            the tree as "does not match" and replace it.
-
-        Ignores self.manifest_name so the cache can store its own hash inside
-        the tree without changing the tree hash.
-        """
-        h = hashlib.sha256()
-
-        def fail(message: str, exc: BaseException | None = None) -> None:
-            if do_raise:
-                if exc is None:
-                    raise SandboxSetupError(message)
-                raise SandboxSetupError(message) from exc
-            raise _HashTreeFailed
-
-        class _HashTreeFailed(Exception):
-            pass
-
-        try:
-            entries: list[Path] = []
-
-            def onerror(exc: OSError) -> None:
-                fail(f"failed to traverse {root}: {exc}", exc)
-
-            for dirpath, dirnames, filenames in os.walk(
-                root,
-                onerror=onerror,
-                followlinks=False,
-            ):
-                base = Path(dirpath)
-
-                for name in dirnames:
-                    entries.append(base / name)
-
-                for name in filenames:
-                    entries.append(base / name)
-
-            entries.sort(key=lambda p: p.relative_to(root).as_posix())
-
-            for path in entries:
-                rel = path.relative_to(root).as_posix()
-
-                if rel == self.manifest_name:
-                    continue
-
-                try:
-                    st = path.lstat()
-
-                    h.update(rel.encode("utf-8"))
-                    h.update(b"\0")
-                    h.update(str(st.st_mode & 0o7777).encode("ascii"))
-                    h.update(b"\0")
-
-                    if path.is_symlink():
-                        h.update(b"symlink\0")
-                        h.update(
-                            os.readlink(path).encode(
-                                "utf-8",
-                                errors="surrogateescape",
-                            )
-                        )
-
-                    elif path.is_file():
-                        h.update(b"file\0")
-                        with path.open("rb") as f:
-                            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                                h.update(chunk)
-
-                    elif path.is_dir():
-                        h.update(b"dir\0")
-
-                    else:
-                        fail(f"unsupported filesystem entry in sandbox tree: {path}")
-
-                    h.update(b"\0")
-
-                except OSError as exc:
-                    fail(f"failed to hash {path}: {exc}", exc)
-
-            return h.hexdigest()
-
-        except _HashTreeFailed:
-            return None
-    
     def _replace_dir(self, src: Path, dst: Path) -> None:
         """
         Replace dst with a copy of src.
