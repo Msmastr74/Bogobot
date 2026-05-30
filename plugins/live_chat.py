@@ -6,7 +6,7 @@ import discord.backoff
 from utils.monitoring import PersistentChannelMonitor
 
 from bogobot_core import BotCore
-from utils import groups
+from utils import groups, tasks
 import pytchat
 from pytchat.processors.default.processor import Chatdata
 import time
@@ -99,6 +99,10 @@ async def setup(bot: BotCore):
 
             return {"view": LiveChatView("")}
     
+    @tasks.loop(seconds=5)
+    async def update_chat_monitor():
+        await chat_monitor.tick()
+    
     chat_monitor = PersistentChannelMonitor(
         bot,
         storage_key="live_chat_monitor_messages",
@@ -120,3 +124,9 @@ async def setup(bot: BotCore):
             log.warning(f"Initial pytchat connection failed: {repr(e)}")
             schedule_retry()
         await chat_monitor.initialize()
+        update_chat_monitor.start()
+    
+    @bot.close_callback
+    async def close():
+        update_chat_monitor.cancel()
+        terminate_chat()
