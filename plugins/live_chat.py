@@ -11,6 +11,8 @@ import pytchat
 from pytchat.processors.default.processor import Chatdata
 import time
 
+TARGET_VIDEO_ID = "DgfiqGPmGWY"
+
 class LiveChatView(discord.ui.LayoutView):
     def __init__(self, body: str):
         super().__init__(timeout=None)
@@ -50,7 +52,7 @@ async def setup(bot: BotCore):
 
         terminate_chat()
 
-        chat = pytchat.create(video_id="DgfiqGPmGWY", hold_exception=False)
+        chat = pytchat.create(video_id=TARGET_VIDEO_ID, hold_exception=False)
 
         next_retry_at = 0.0
 

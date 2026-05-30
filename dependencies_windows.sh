@@ -12,7 +12,7 @@ winget install -e --id BytecodeAlliance.Wasmtime
 # Install Python libraries.
 # openai provides hosted or OpenAI-compatible AI action selection and replies.
 py -3 -m pip install --upgrade pip
-py -3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca pytchat
+py -3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 py -3 - <<'PY'
