@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import urllib.request
 import zipfile
 import inspect
@@ -111,7 +110,6 @@ class SandboxedExecutor:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
         )
 
         try:
@@ -560,6 +558,6 @@ class SandboxedExecutor:
             return
 
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            proc.kill()
         except ProcessLookupError:
             pass
