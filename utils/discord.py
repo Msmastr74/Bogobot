@@ -23,8 +23,10 @@ def chunk_text(text: str, max_len: int, *, max_chunks: int | None = None) -> lis
                 current_chunk = []
                 current_length = 0
 
-            split_pieces = split_text_to_character_limit(line, max_len)
+            split_pieces = split_text_to_character_limit(line, max_len, max_pieces=max_chunks-len(chunks))
             chunks.extend(split_pieces[:-1])
+            if max_chunks is not None and len(chunks) >= max_chunks:
+                break
             if split_pieces:
                 current_chunk = [split_pieces[-1]]
                 current_length = count_characters(split_pieces[-1])
