@@ -77,8 +77,8 @@ class StreamHandler:
             t0 = time.monotonic()
             try:
                 self._run_once()
-            except Exception as e:
-                self.logger.warning(f"Stream failed with error: {e}")
+            except Exception:
+                self.logger.warning("Stream failed with error", exc_info=True)
             lifetime = time.monotonic() - t0
             if lifetime < self.quick_fail_s:
                 self._sleep(backoff)
