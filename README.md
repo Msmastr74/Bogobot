@@ -1,6 +1,6 @@
 # Bogobot
 
-Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/DgfiqGPmGWY). The bot uses OCR and stream-derived timing to provide high-accuracy statistics directly from the stream.
+Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/7Y5eyyUNsYo). The bot uses OCR and stream-derived timing to provide high-accuracy statistics directly from the stream.
 
 ## Prerequisites
 

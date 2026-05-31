@@ -5,13 +5,11 @@ import discord.backoff
 
 from utils.monitoring import PersistentChannelMonitor
 
-from bogobot_core import BotCore
+from bogobot_core import BotCore, TARGET_VIDEO_ID
 from utils import groups, tasks
 import pytchat
 from pytchat.processors.default.processor import Chatdata
 import time
-
-TARGET_VIDEO_ID = "DgfiqGPmGWY"
 
 class LiveChatView(discord.ui.LayoutView):
     def __init__(self, body: str):

@@ -187,13 +187,14 @@ def calculate_next_time(schedule: AISchedule, start_from: datetime, *, max_years
 
         day_match = (d := schedule.get("day")) is None or current.day == d
         wkday_match = (w := schedule.get("weekday")) is None or current.weekday() == w
-        
+
         if not (day_match and wkday_match):
             try:
                 if schedule.get("month") == 2 and schedule.get("day") == 29:
-                    current = current.replace(year=get_next_leap_year(current.year + 1), month=2, day=29)
+                    current = current.replace(year=get_next_leap_year(current.year + 1), month=2, day=29, hour=0, minute=0, second=0)
                 else:
-                    current += timedelta(days=1)
+                    # Advance to next day and reset safely to midnight for a clean evaluation pass
+                    current = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0)
             except (OverflowError, ValueError):
                 return None
             continue
