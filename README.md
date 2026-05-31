@@ -1,11 +1,11 @@
 # Bogobot
 
-Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/7Y5eyyUNsYo). The bot uses OCR and stream-derived timing to provide high-accuracy statistics directly from the stream.
+Bogobot is a specialized Discord bot designed for monitoring the [24/7 Bogosort Livestream](https://www.youtube.com/live/7Y5eyyUNsYo). The bot now uses the Bogostream stats API by default, with OCR still available as a fallback pipeline for stream-derived statistics and sort-state tracking.
 
 ## Prerequisites
 
 Python 3.10+ is required. The dependency scripts install the usual system tools:
-libtesseract/Tesseract, FFmpeg, Streamlink, and the Python packages used by the bot.
+FFmpeg, Streamlink, optional libtesseract/Tesseract OCR support, and the Python packages used by the bot.
 Android/Termux is a supported environment.
 
 ## Installation
@@ -41,6 +41,7 @@ Go into `config.json` and provide the main credentials:
  * `ocr_enabled`: Optional Tesseract OCR startup toggle. Defaults to true only when `stats_source` is `ocr`.
  * `ocr_concurrency`: Optional number of persistent libtesseract worker threads. Defaults to `2`.
  * `tessdata_path`: Optional directory for bot-managed `eng_fast.traineddata`. Defaults to `tessdata`.
+ * `code_sandbox_fuel`: Optional WASI instruction fuel limit for `/python` and `/javascript`. Defaults to `25000000000`.
  * `milestone_initialize_format`: Optional message template for new milestones.
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
@@ -107,6 +108,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts, stops, or resends a persistent top leaderboard message.
  * /manage stats_monitor: Starts, stops, or resends a persistent stream-stats message.
+ * /manage live_chat: Starts, stops, or resends a persistent YouTube live-chat monitor.
  * /manage video_archive: Starts, stops, restarts, or shows status for visual stream archive recording.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /milestone_info: Shows recent milestone history and frame images.
@@ -116,10 +118,12 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
  * /avatar and /ping: Small Discord utility commands.
+ * /python and /javascript: Execute code in WASI-backed sandboxes, with modal input for longer programs or uploaded source files.
+ * /ai_activity: Schedule, trigger, list, or remove AI activity triggers for a channel.
  * /bogo and friends: Grouped roll, shuffle, choice, text bogo, name bogo, and small bogosort utilities, plus top-level /sort and random number helpers.
  * /cbogo: Runs the original collaborative community bogosort puzzle.
  * /bogotree: Advances or resets a collaborative random equalization puzzle.
- * /accounts: Manages account permission ranks.
+ * /accounts: Shows account info, manages permission ranks, lists users, and bans/unbans accounts.
 
 Bogobot also writes an append-only monitor archive when observed sort values are available.
 Each chunk starts with a JSON header line, then compact `dt,value;` records where `dt`

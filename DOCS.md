@@ -34,6 +34,7 @@ User-edited settings:
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.
 - `libtesseract_path`: Optional explicit path to the libtesseract shared library when auto-detection cannot find it.
+- `code_sandbox_fuel`: WASI instruction fuel limit for `/python` and `/javascript`. Defaults to `25000000000`.
 - `log_capacity`: Number of recent log records kept in memory for `/manage logs`. Defaults to 3000, minimum 100.
 - `milestone_initialize_format`: Optional Python `Template` string for first-time milestone messages.
 - `milestone_update_format`: Optional Python `Template` string for milestone update messages.
@@ -50,6 +51,8 @@ Bot-managed storage:
 - `monitor_messages`: Persistent monitor message IDs by Discord channel ID.
 - `leaderboard_monitor_messages`: Persistent leaderboard monitor message IDs by Discord channel ID.
 - `stats_monitor_messages`: Persistent stats monitor message IDs by Discord channel ID.
+- `live_chat_monitor_messages`: Persistent live-chat monitor message IDs by Discord channel ID.
+- `ai_schedules`: Scheduled AI activity triggers by Discord channel ID.
 - `milestones`: Latest confirmed value for each milestone name.
 
 Bogotree storage:
@@ -102,7 +105,7 @@ The `discord` subclass provides a simplified interface for interacting with the 
 New bot-authored UI should use static `discord.ui.LayoutView` payloads with `bot.discord.send(view=...)`. Embeds are still supported through Discord's native `embed=...` and `embeds=...` send/edit keyword arguments, but the old `send_embed(...)` and `message.edit_embed(...)` compatibility helpers have been removed.
 
 ## OCR Implementation
-Bogobot utilizes libtesseract OCR for visual data extraction.
+Bogobot uses the Bogostream stats API by default. libtesseract OCR is still available as a fallback by setting `stats_source` to `ocr`; Tesseract only starts when `ocr_enabled` is true, which defaults to true for OCR mode and false for API mode.
 - **Coordinates**: Stats are extracted from defined regions of a 720p frame.
 - **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and passed to persistent libtesseract API instances as raw grayscale image data.
 - **OCR model**: The bot ensures `eng_fast.traineddata` exists in `tessdata_path`, downloading it from `tessdata_fast` on first startup when missing. Each OCR worker initializes libtesseract with that tessdata directory and `eng_fast`.
@@ -112,9 +115,13 @@ Bogobot utilizes libtesseract OCR for visual data extraction.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
 
 ## Stream Stats Pipeline
-`plugins/stats.py` owns the live stream data pipeline. It registers an `@bot.new_frame_callback`, so every decoded stream frame flows through the same update path.
+`plugins/stats.py` owns the live stream data pipeline. Its default source is the Bogostream stats API at `https://bogo.swapjs.dev/api/stats`. Set `stats_source` to `ocr` to use the older frame/OCR pipeline.
 
-For each frame, `stats.py`:
+In API mode, `stats.py` polls `bogostream_stats_api_url` every `bogostream_stats_api_interval` seconds. The API response supplies lifetime engine/crowd totals, engine/crowd/combined rates, all-time best, the best snapshot in the latest tick, its source, active contributors, and the current record holder. `tick_best_arr` is converted into `bot.sort_values`; green/red section state is derived by checking whether each section value equals its 1-based index. When that snapshot changes, the plugin emits the existing `bot.new_value(...)` callback so monitor, archive, and stats-monitor integrations continue to use the same event path.
+
+In OCR mode, `stats.py` registers an `@bot.new_frame_callback`, so every decoded stream frame flows through the visual update path.
+
+For each frame in OCR mode, `stats.py`:
 
 - Records frame timing in debug logs.
 - Optionally writes `live_720p.png` when `save_live_frame` is true.
@@ -126,7 +133,7 @@ For each frame, `stats.py`:
 - Updates `bot.stats` and `bot._last_ocr_refresh`.
 - Feeds milestone candidates to `MilestoneTracker` when milestones are enabled.
 
-`bot.stats` is the current text cache for stream-wide values such as `shuffles`, `comparisons`, `best_run`, `shuffles_sec`, `average_best_shuffle`, and `uptime`. Commands like `/get_stats` read from this cache instead of OCRing on demand.
+`bot.stats` is the current text cache for stream-wide values. API mode fills fields such as `shuffles`, `engine_total`, `crowd_total`, `shuffles_sec`, `engine_rate`, `crowd_rate`, `best_run`, `tick_best`, `tick_best_source`, `active_contributors`, and `record_holder`. OCR mode fills fields such as `shuffles`, `comparisons`, `best_run`, `shuffles_sec`, `average_best_shuffle`, and `uptime`. Commands like `/get_stats` read from this cache instead of fetching or OCRing on demand.
 
 `stats.py` keeps this visual sort logic in one `SortSectionReader`, which crops the sort area once per frame and uses that crop for change detection, green/red section classification, and area-ranked value reading.
 
@@ -138,15 +145,15 @@ For each frame, `stats.py`:
 
 `bot.new_value(new_values, new_value)` publishes the latest calculated monitor event. For the stream monitor, `new_value` is currently the number of green sections in `sort_section_count`, calculated from the configured observed strip instead of OCRing tiny history cells. The event fires only when the sort-change detector says the bar chart actually changed, which lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
 
-`bot._last_ocr_refresh` is the UNIX timestamp of the latest successful OCR refresh. Display commands can use it to show when the current stats cache was last updated.
+`bot._last_ocr_refresh` is the UNIX timestamp of the latest successful stats-cache refresh. The name is historical; it is updated by both API and OCR modes.
 
 ### Stream Helpers
-`BotCore.get_stream_uptime()` returns a calculated static uptime string in `DD:HH:MM:SS` format. It is based on the known stream start timestamp, not on OCR, so `/get_stats` can show it beside the OCR-read stream uptime.
+`BotCore.get_stream_uptime()` returns a calculated static uptime string in `DD:HH:MM:SS` format. It is based on the known stream start timestamp, not on OCR or the API, so `/get_stats` can show a stable elapsed-time value even when the live source does not provide uptime.
 
 Persistent monitors should subscribe with `@bot.new_value_callback` and keep their own pending queue if they need to publish values on a periodic loop. This avoids shared mutable state and one-shot polling helpers.
 
 ## Stream Change Detection
-The monitor does not rely only on OCR to decide whether the sort changed. The bot also crops the bar chart area, reduces it to approximate red/green/other pixels, and compares that signature with the previous frame.
+In OCR mode, the monitor does not rely only on text OCR to decide whether the sort changed. The bot also crops the bar chart area, reduces it to approximate red/green/other pixels, and compares that signature with the previous frame.
 
 `sort_change_threshold` controls how much of that signature must change before a new sort-section count is published for monitor data. A higher value ignores small effects like confetti or compression noise.
 
@@ -217,7 +224,7 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
 - `@bot.connect_callback`: Runs on every Discord ready event, before the one-time connected guard. Use it for state that should refresh after reconnects.
 - `@bot.close_callback`: Runs during bot shutdown.
-- `@bot.new_frame_callback`: Runs for each received stream frame. `stats.py` uses this for OCR and milestone updates.
+- `@bot.new_frame_callback`: Runs for each received stream frame. In OCR mode, `stats.py` uses this for visual sort detection, OCR, and milestone updates.
 - `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives `new_values: list[tuple[bool, int]]`, `new_value: int`, and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
@@ -233,13 +240,17 @@ Current plugin responsibilities:
 - `bogotree.py`: collaborative random equalization puzzle.
 - `bogoscramble.py`: Bogoscramble message/media utilities.
 - `cbogo.py`: original collaborative community bogosort puzzle and leaderboard.
+- `code_sandbox.py`: `/python` and `/javascript` WASI sandbox commands.
 - `fun.py`: bot status bogoname loop and `/bogo name`.
 - `get_stats.py`: `/get_stats`, `/get_sort`, and `/manage stats_monitor`.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
+- `live_chat.py`: `/manage live_chat` YouTube live-chat monitor.
+- `live_chat_send.py`: optional private outbound chat integration. It is intentionally not part of the public command docs.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
 - `ai.py`: @mention and `/ai` dispatch, command execution, passive context request handling, and AI response history.
-- `stats.py`: stream frame OCR, stats cache updates, sort-change detection, and milestone value feeding.
+- `ai_activity.py`: scheduled or manual AI activity triggers.
+- `stats.py`: Bogostream API/OCR stats cache updates, sort-state events, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
 - `utils/accounts.py`: Account storage, permission checks, and account annotations.
@@ -254,6 +265,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage monitor start|stop|resend`: Creates, removes, or resends the persistent monitor message in the current channel. `resend` requires an existing accessible monitor message, sends the replacement first, then deletes the old message.
 - `/manage leaderboard_monitor start|stop|resend`: Creates, removes, or resends a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes. `resend` sends the replacement first, then deletes the old message.
 - `/manage stats_monitor start|stop|resend`: Creates, removes, or resends a persistent stream-stats monitor in the current channel. It uses the same data as `/get_stats` and updates when new stream stats are available.
+- `/manage live_chat start|stop|resend`: Creates, removes, or resends a persistent YouTube live-chat monitor in the current channel. It reads from the configured `TARGET_VIDEO_ID` through `pytchat` and retries with backoff.
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
@@ -268,6 +280,11 @@ Several management commands use an explicit action parameter instead of separate
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
 - `/get_sort`: Shows the latest observed sort state, including a frame image when available.
+- `/python [code]` and `/javascript [code]`: Execute code in WASI-backed sandboxes. If code is omitted, a modal supports longer input and one uploaded source file. Output is chunked and truncated to Discord-safe limits.
+- `/ai_activity schedule when purpose`: Schedules a one-off or recurring AI activity trigger in the current channel. `when` accepts relative times, Unix/Discord/ISO timestamps, or structured fields like `hour:12 minute:30`.
+- `/ai_activity trigger purpose`: Runs an AI activity trigger immediately in the current channel.
+- `/ai_activity list`: Lists scheduled AI activities for the current channel.
+- `/ai_activity remove id`: Removes a scheduled AI activity by ID.
 - `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available.
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
@@ -279,10 +296,11 @@ Several management commands use an explicit action parameter instead of separate
 
 Account commands live under `/accounts`:
 
-- `/accounts perm_info user`: Shows a user's current account rank.
 - `/accounts perm_edit promote|demote user`: Moves a user up or down by one rank.
 - `/accounts perm_edit set user level`: Sets a user to `basic`, `authorized`, `mod`, or `admin`.
 - `/accounts list_users [minimum_rank]`: Lists accounts, optionally filtered to users at or above a rank.
+- `/accounts ban_mgr ban|unban user`: Bans or unbans an account by setting its permission level below/above the banned state.
+- `/accounts info [user] [eph]`: Shows account information for a user, defaulting to the caller.
 
 ### Creating a Plugin
 Each plugin must include a `setup` function to register commands with the `BotCore` instance:
