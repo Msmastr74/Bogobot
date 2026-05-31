@@ -23,7 +23,8 @@ def chunk_text(text: str, max_len: int, *, max_chunks: int | None = None) -> lis
                 current_chunk = []
                 current_length = 0
 
-            split_pieces = split_text_to_character_limit(line, max_len, max_pieces=max_chunks-len(chunks))
+            max_pieces = None if max_chunks is None else max_chunks - len(chunks)
+            split_pieces = split_text_to_character_limit(line, max_len, max_pieces=max_pieces)
             chunks.extend(split_pieces[:-1])
             if max_chunks is not None and len(chunks) >= max_chunks:
                 break

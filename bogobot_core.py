@@ -113,14 +113,18 @@ class BotCore(discord.Client):
         self.logger = logging.getLogger("Bogobot")
         loglevel = logging.DEBUG if self.debug else logging.INFO
         self.logger.setLevel(loglevel)
-        self.ocr = LibTesseractOCR(
-            tessdata_path=self.config.get("tessdata_path", "tessdata"),
-            tessdata_fast_url=self.config.get("tessdata_fast_url", TESSDATA_FAST_URL),
-            save_debug=self.config.get("save_ocr_debug", False),
-            logger=self.logger.getChild("OCR"),
-            library_path=self.config.get("libtesseract_path"),
-            max_workers=max(1, int(self.config.get("ocr_concurrency", 2))),
-        )
+        stats_source = str(self.config.get("stats_source", "api")).lower()
+        ocr_enabled = bool(self.config.get("ocr_enabled", stats_source == "ocr"))
+        self.ocr: LibTesseractOCR | None = None
+        if ocr_enabled:
+            self.ocr = LibTesseractOCR(
+                tessdata_path=self.config.get("tessdata_path", "tessdata"),
+                tessdata_fast_url=self.config.get("tessdata_fast_url", TESSDATA_FAST_URL),
+                save_debug=self.config.get("save_ocr_debug", False),
+                logger=self.logger.getChild("OCR"),
+                library_path=self.config.get("libtesseract_path"),
+                max_workers=max(1, int(self.config.get("ocr_concurrency", 2))),
+            )
 
         self.stream_handler = StreamHandler(
             url=f"https://www.youtube.com/live/{TARGET_VIDEO_ID}",
@@ -630,7 +634,8 @@ class BotCore(discord.Client):
         self.logger.info("Shutting down bot...")
         await self.callbacks.execute_async('close')
         self.stream_handler.stop()
-        self.ocr.close()
+        if self.ocr is not None:
+            self.ocr.close()
         await self.edits.close()
         await self.notifications.close()
         await super().close()

@@ -35,6 +35,10 @@ Go into `config.json` and provide the main credentials:
  * `sort_change_threshold`: Optional monitor sensitivity for stream visual changes. Defaults to `0.1`.
  * `sort_section_count`: Optional number of sort sections used for monitor classification. Defaults to `25`.
  * `sort_area_left`, `sort_area_top`, `sort_observed_top`, `sort_area_right`, `sort_area_bottom`: Optional coordinates used to classify red/green sort sections and read sort values.
+ * `stats_source`: Optional stats source. Defaults to `api`; set to `ocr` to use OCR-driven stat and sort updates.
+ * `bogostream_stats_api_url`: Optional Bogostream stats API endpoint override.
+ * `bogostream_stats_api_interval`: Optional API poll interval in seconds. Defaults to `1`.
+ * `ocr_enabled`: Optional Tesseract OCR startup toggle. Defaults to true only when `stats_source` is `ocr`.
  * `ocr_concurrency`: Optional number of persistent libtesseract worker threads. Defaults to `2`.
  * `tessdata_path`: Optional directory for bot-managed `eng_fast.traineddata`. Defaults to `tessdata`.
  * `milestone_initialize_format`: Optional message template for new milestones.

@@ -26,6 +26,10 @@ User-edited settings:
 - `sort_area_top`: Top y-coordinate of the sort area. Defaults to 70.
 - `sort_area_right`: Right x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 1200.
 - `sort_area_bottom`: Bottom y-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 530.
+- `stats_source`: Stats update source. Defaults to `api`. Set to `ocr` to use OCR-driven stat/sort updates.
+- `bogostream_stats_api_url`: Bogostream stats API endpoint. Defaults to `https://bogo.swapjs.dev/api/stats`.
+- `bogostream_stats_api_interval`: Seconds between Bogostream stats API polls when `stats_source` is `api`. Defaults to 1.
+- `ocr_enabled`: Enables Tesseract OCR startup. Defaults to true only when `stats_source` is `ocr`.
 - `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 2.
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
 - `tessdata_fast_url`: Download URL for the fast English Tesseract model. Defaults to the upstream `tessdata_fast` English model.

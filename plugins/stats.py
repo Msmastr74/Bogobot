@@ -1,12 +1,17 @@
 import numpy as np
 import time
 from decimal import Decimal, InvalidOperation
+from typing import Any, Literal, TypedDict
 from PIL import Image
 
+import aiohttp
 from bogobot_core import BotCore
 from ocr import OcrCrop, OcrResult
 import asyncio
 import cv2
+
+BOGOSTREAM_STATS_API_URL = "https://bogo.swapjs.dev/api/stats"
+BOGOSTREAM_STATS_API_INTERVAL_SECONDS = 1.0
 
 STAT_SUFFIX_POWERS = {
     "": 0,
@@ -25,6 +30,25 @@ STAT_SUFFIX_POWERS = {
     "no": 30,
     "dc": 33,
 }
+
+
+class BogostreamRecordHolder(TypedDict):
+    nickname: str
+    value: int
+
+
+class BogostreamStats(TypedDict):
+    engine_total: int
+    crowd_total: int
+    engine_rate: int
+    crowd_rate: int
+    combined_rate: int
+    best: int
+    tick_best: int
+    tick_best_arr: list[int]
+    tick_best_source: Literal["crowd", "vps"]
+    active_contributors: int
+    record_holder: BogostreamRecordHolder | None
 
 
 def parse_number(value: str | None) -> Decimal | None:
@@ -53,11 +77,145 @@ def parse_number(value: str | None) -> Decimal | None:
 
 
 async def setup(bot: BotCore):
+    stats_source = str(bot.config.get("stats_source", "api")).lower()
+    api_enabled = stats_source in {"api", "event", "events"}
+    api_url = str(bot.config.get("bogostream_stats_api_url", BOGOSTREAM_STATS_API_URL))
+    api_interval = max(
+        0.25,
+        float(bot.config.get(
+            "bogostream_stats_api_interval",
+            BOGOSTREAM_STATS_API_INTERVAL_SECONDS,
+        )),
+    )
+    api_task: asyncio.Task[None] | None = None
+    last_api_sort_values: list[int] | None = None
+
+    def format_count(value: int | str) -> str:
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError):
+            return "Loading..."
+
+    def normalize_api_stats(raw: Any) -> BogostreamStats | None:
+        if not isinstance(raw, dict):
+            return None
+
+        try:
+            tick_best_arr_raw = raw["tick_best_arr"]
+            if not isinstance(tick_best_arr_raw, list):
+                return None
+
+            record_holder_raw = raw.get("record_holder")
+            record_holder: BogostreamRecordHolder | None = None
+            if isinstance(record_holder_raw, dict):
+                record_holder = {
+                    "nickname": str(record_holder_raw.get("nickname", "unknown")),
+                    "value": int(record_holder_raw.get("value", 0)),
+                }
+
+            source = str(raw.get("tick_best_source", "vps"))
+            return {
+                "engine_total": int(raw["engine_total"]),
+                "crowd_total": int(raw["crowd_total"]),
+                "engine_rate": int(raw["engine_rate"]),
+                "crowd_rate": int(raw["crowd_rate"]),
+                "combined_rate": int(raw["combined_rate"]),
+                "best": int(raw["best"]),
+                "tick_best": int(raw["tick_best"]),
+                "tick_best_arr": [int(value) for value in tick_best_arr_raw],
+                "tick_best_source": "crowd" if source == "crowd" else "vps",
+                "active_contributors": int(raw["active_contributors"]),
+                "record_holder": record_holder,
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def sections_from_sort_values(sort_values: list[int]) -> list[bool]:
+        return [
+            value == index + 1
+            for index, value in enumerate(sort_values[:bot.SORT_SECTION_COUNT])
+        ]
+
+    def apply_api_stats(data: BogostreamStats, timestamp: float) -> tuple[list[tuple[bool, int]], int] | None:
+        sort_values = data["tick_best_arr"][:bot.SORT_SECTION_COUNT]
+        if len(sort_values) < bot.SORT_SECTION_COUNT:
+            sort_values.extend([0] * (bot.SORT_SECTION_COUNT - len(sort_values)))
+
+        best_shuffle_sections = sections_from_sort_values(sort_values)
+        new_values = list(zip(best_shuffle_sections, sort_values, strict=False))
+        best_count = max(0, min(bot.SORT_SECTION_COUNT, int(data["tick_best"])))
+        combined_total = data["engine_total"] + data["crowd_total"]
+        record_holder = data["record_holder"]
+        record_holder_text = (
+            f"{record_holder['nickname']} ({record_holder['value']}/{bot.SORT_SECTION_COUNT})"
+            if record_holder is not None else
+            "engine"
+        )
+
+        bot.stats.update({
+            "shuffles": format_count(combined_total),
+            "engine_total": format_count(data["engine_total"]),
+            "crowd_total": format_count(data["crowd_total"]),
+            "comparisons": "N/A",
+            "best_run": f"{data['best']}/{bot.SORT_SECTION_COUNT}",
+            "tick_best": f"{data['tick_best']}/{bot.SORT_SECTION_COUNT}",
+            "tick_best_source": data["tick_best_source"],
+            "shuffles_sec": format_count(data["combined_rate"]),
+            "engine_rate": format_count(data["engine_rate"]),
+            "crowd_rate": format_count(data["crowd_rate"]),
+            "active_contributors": format_count(data["active_contributors"]),
+            "record_holder": record_holder_text,
+            "average_best_shuffle": "N/A",
+            "uptime": "N/A",
+        })
+        bot._last_ocr_refresh = timestamp
+        bot.best_shuffle_sections = best_shuffle_sections
+        bot.sort_values = sort_values
+        bot.new_values = new_values
+        return new_values, best_count
+
+    async def fetch_api_stats(session: aiohttp.ClientSession) -> BogostreamStats | None:
+        async with session.get(api_url) as response:
+            if response.status != 200:
+                bot.logger.warning(f"Bogostream stats API returned HTTP {response.status}")
+                return None
+            return normalize_api_stats(await response.json())
+
+    async def api_stats_loop() -> None:
+        nonlocal last_api_sort_values
+
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while True:
+                timestamp = time.time()
+                try:
+                    data = await fetch_api_stats(session)
+                    if data is not None:
+                        event = apply_api_stats(data, timestamp)
+                        if bot.milestones:
+                            await update_milestones(None, timestamp)
+                        sort_values = bot.sort_values
+                        if event is not None and sort_values != last_api_sort_values:
+                            last_api_sort_values = list(sort_values)
+                            new_values, best_count = event
+                            await bot.new_value(new_values, best_count, timestamp=timestamp)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    bot.logger.exception("Bogostream stats API update failed")
+
+                await asyncio.sleep(api_interval)
+
     async def update_ocr_data(img: Image.Image, *, sort_changed: bool = True) -> None:
+        ocr = bot.ocr
+        if ocr is None:
+            bot.logger.warning("OCR stats source is selected, but OCR is disabled. Set `ocr_enabled` to true to use OCR.")
+            return
+
         try:
             async def parse_crops(crops: list[OcrCrop]) -> list[OcrResult]:
                 async def parse_crop(crop: OcrCrop) -> OcrResult:
-                    return await bot.ocr.parse(
+                    return await ocr.parse(
                         img.crop(crop.coords),
                         crop.whitelist,
                         psm=7 if crop.psm is None else crop.psm,
@@ -92,7 +250,7 @@ async def setup(bot: BotCore):
         except Exception:
             bot.logger.exception("OCR processing error")
 
-    async def update_milestones(img: Image.Image, frame_received_at: float):
+    async def update_milestones(img: Image.Image | None, frame_received_at: float):
         if bot.milestones is None:
             return
 
@@ -186,6 +344,9 @@ async def setup(bot: BotCore):
         
         if bot.config.get("save_live_frame", False):
             img.save("live_720p.png", format="PNG")
+
+        if api_enabled:
+            return
         
         sort_changed_start = time.monotonic()
         (
@@ -220,6 +381,30 @@ async def setup(bot: BotCore):
             milestones_start = time.monotonic()
             await update_milestones(img, frame_received_at)
             bot.logger.debug(f"Milestones updated (dt={time.monotonic() - milestones_start:.2f}s)")
+
+    @bot.init_callback
+    async def start_api_stats_pipeline():
+        nonlocal api_task
+
+        if not api_enabled:
+            return
+
+        if api_task is not None and not api_task.done():
+            return
+
+        bot.logger.info(f"Using Bogostream stats API pipeline: {api_url}")
+        api_task = asyncio.create_task(api_stats_loop())
+
+    @bot.close_callback
+    async def stop_api_stats_pipeline():
+        if api_task is None:
+            return
+
+        api_task.cancel()
+        try:
+            await api_task
+        except asyncio.CancelledError:
+            pass
 
 class SortSectionReader:
     def __init__(self, bot: BotCore):

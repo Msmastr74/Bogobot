@@ -96,6 +96,18 @@ async def setup(bot: BotCore) -> None:
         average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
         uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = bot.get_stream_uptime()
+        api_fields: list[tuple[str, str]] = []
+        if "engine_total" in stats_list or "crowd_total" in stats_list:
+            api_fields = [
+                ("Engine Total", stats_list.get("engine_total", "Loading...")),
+                ("Crowd Total", stats_list.get("crowd_total", "Loading...")),
+                ("Engine Rate", stats_list.get("engine_rate", "Loading...")),
+                ("Crowd Rate", stats_list.get("crowd_rate", "Loading...")),
+                ("Tick Best", stats_list.get("tick_best", "Loading...")),
+                ("Tick Best Source", stats_list.get("tick_best_source", "Loading...")),
+                ("Active Contributors", stats_list.get("active_contributors", "Loading...")),
+                ("Record Holder", stats_list.get("record_holder", "Loading...")),
+            ]
         
         view = StatsView(
             title=title,
@@ -106,6 +118,7 @@ async def setup(bot: BotCore) -> None:
                 ("Shuffles Per Second", shuffles_sec),
                 ("Average Best Shuffle", average_best_shuffle),
                 ("Uptime [STREAM]", uptime),
+                *api_fields,
                 ("Elapsed Time [STATIC]", elapsed_time),
             ],
             updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
