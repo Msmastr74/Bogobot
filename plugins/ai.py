@@ -38,7 +38,7 @@ class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
 
 BotAction: TypeAlias = Callable[..., Coro[None]]
-MAX_ASSISTANT_CONTEXT_CHARS = 4000
+MAX_ASSISTANT_CONTEXT_CHARS = 4500
 MAX_REPLY_CHARS = 2000
 _ai_break_until: datetime.datetime | None = None
 _capture_add_message_by_id: dict[int, Callable[[discord.Message | None], None]] = {}
@@ -346,7 +346,66 @@ def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | No
     if bot.user is None or bot.user not in message.mentions:
         return None
 
-    text = " ".join(message.content.split())
+    parts: list[str] = []
+
+    # Message content
+    if message.content:
+        parts.append(message.content)
+
+    # Embeds
+    for embed in message.embeds:
+        if embed.title:
+            parts.append(embed.title)
+
+        if embed.description:
+            parts.append(embed.description)
+
+        if embed.author and embed.author.name:
+            parts.append(embed.author.name)
+
+        if embed.footer and embed.footer.text:
+            parts.append(embed.footer.text)
+
+        for field in embed.fields:
+            if field.name:
+                parts.append(field.name)
+            if field.value:
+                parts.append(field.value)
+
+    # Components / views
+    def read_component(component) -> None:
+        for attr in (
+            "label",
+            "custom_id",
+            "placeholder",
+            "text",
+            "content",
+            "description",
+            "title",
+        ):
+            value = getattr(component, attr, None)
+            if isinstance(value, str) and value:
+                parts.append(value)
+
+        # Select menu options
+        for option in getattr(component, "options", []) or []:
+            for attr in ("label", "value", "description"):
+                value = getattr(option, attr, None)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+
+        # Nested components / action rows / Components v2 containers
+        for child in (
+            getattr(component, "children", None)
+            or getattr(component, "components", None)
+            or []
+        ):
+            read_component(child)
+
+    for component in getattr(message, "components", []) or []:
+        read_component(component)
+
+    text = " ".join(" ".join(parts).split())
     return text or None
 
 
