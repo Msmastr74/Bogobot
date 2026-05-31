@@ -9,7 +9,6 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 # Install system binaries via WinGet
 Write-Host "Installing system binaries..." -ForegroundColor Cyan
-winget install -e --id Python.Python.3.12 --silent
 winget install -e --id UB-Mannheim.TesseractOCR --silent
 winget install -e --id Gyan.FFmpeg --silent
 winget install -e --id BytecodeAlliance.Wasmtime --silent
