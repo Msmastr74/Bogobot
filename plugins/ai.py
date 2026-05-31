@@ -662,7 +662,7 @@ async def setup(bot: 'BotCore'):
             return
         
         from plugins.live_chat_send import LIVE_CHAT_SUB
-        if bot.notifications.has_subscription(LIVE_CHAT_SUB, message.channel.id):
+        if await bot.notifications.has_subscription(LIVE_CHAT_SUB, message.channel.id):
             return
         
         if not ai_enabled(bot):
