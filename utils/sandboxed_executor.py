@@ -169,74 +169,124 @@ def chmod_tree_writable_posix(root: Path) -> None:
             except FileNotFoundError:
                 pass
 
-
 def chmod_tree_readonly_windows(root: Path) -> None:
     if root.is_symlink():
         return
+
+    user = _windows_acl_identity()
 
     if root.is_file():
         try:
             root.chmod(stat.S_IREAD)
         except FileNotFoundError:
             pass
-        _icacls(root, "/inheritance:r", "/grant:r", f"{_windows_acl_identity()}:R", "/C")
+
+        # File: read only, no execute.
+        _icacls(root, "/inheritance:r", "/grant:r", f"{user}:R", "/C")
         return
 
-    for dirpath, _, filenames in os.walk(root, followlinks=False):
+    dirs: list[Path] = []
+    files: list[Path] = []
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirp = Path(dirpath)
+        dirs.append(dirp)
+
         for name in filenames:
-            path = Path(dirpath) / name
+            path = dirp / name
             try:
                 if not path.is_symlink():
-                    path.chmod(stat.S_IREAD)
+                    files.append(path)
             except FileNotFoundError:
                 pass
 
-    _icacls(
-        root,
-        "/inheritance:r",
-        "/grant:r",
-        f"{_windows_acl_identity()}:(OI)(CI)RX",
-        "/T",
-        "/C",
-    )
+    # First: make files readonly before locking down ACLs.
+    for path in files:
+        try:
+            path.chmod(stat.S_IREAD)
+        except FileNotFoundError:
+            pass
+        except PermissionError:
+            # Already locked down/read-only enough; keep going.
+            pass
+
+    # Directories need RX so they can be traversed.
+    # Important: do NOT use (OI)(CI)RX here, because that gives files execute.
+    for dirp in dirs:
+        try:
+            _icacls(dirp, "/inheritance:r", "/grant:r", f"{user}:RX", "/C")
+        except FileNotFoundError:
+            pass
+
+    # Files get R only, not X.
+    for path in files:
+        try:
+            _icacls(path, "/inheritance:r", "/grant:r", f"{user}:R", "/C")
+        except FileNotFoundError:
+            pass
 
 
 def chmod_tree_writable_windows(root: Path) -> None:
     if root.is_symlink():
         return
 
+    user = _windows_acl_identity()
+
     if root.is_file():
-        _icacls(root, "/grant:r", f"{_windows_acl_identity()}:F", "/C")
+        # Restore access first, then chmod.
+        _icacls(root, "/grant:r", f"{user}:F", "/C")
+
         try:
             root.chmod(stat.S_IWRITE | stat.S_IREAD)
         except FileNotFoundError:
             pass
+
         return
 
-    _icacls(
-        root,
-        "/grant:r",
-        f"{_windows_acl_identity()}:(OI)(CI)F",
-        "/T",
-        "/C",
-    )
+    dirs: list[Path] = []
+    files: list[Path] = []
 
-    for dirpath, _, filenames in os.walk(root, followlinks=False):
-        base = Path(dirpath)
-
-        try:
-            base.chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
-        except FileNotFoundError:
-            pass
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirp = Path(dirpath)
+        dirs.append(dirp)
 
         for name in filenames:
-            path = base / name
+            path = dirp / name
             try:
                 if not path.is_symlink():
-                    path.chmod(stat.S_IWRITE | stat.S_IREAD)
+                    files.append(path)
             except FileNotFoundError:
                 pass
 
+    # Restore ACLs first so chmod won't fail.
+    for dirp in dirs:
+        try:
+            _icacls(dirp, "/grant:r", f"{user}:F", "/C")
+        except FileNotFoundError:
+            pass
+
+    for path in files:
+        try:
+            _icacls(path, "/grant:r", f"{user}:F", "/C")
+        except FileNotFoundError:
+            pass
+
+    # Then restore chmod bits.
+    for dirp in dirs:
+        try:
+            dirp.chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+        except FileNotFoundError:
+            pass
+        except PermissionError:
+            pass
+
+    for path in files:
+        try:
+            path.chmod(stat.S_IWRITE | stat.S_IREAD)
+        except FileNotFoundError:
+            pass
+        except PermissionError:
+            pass
 
 def _windows_acl_identity() -> str:
     username = os.environ.get("USERNAME")
