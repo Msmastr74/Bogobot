@@ -34,7 +34,7 @@ async def setup(bot: BotCore) -> None:
                 await interaction.response.send_modal(ProgramInputModal(
                     bot,
                     callback=lambda code: execute_code(code, executor),
-                    label_text=f"{language.name.capitalize()} ccde"
+                    label_text=f"{language.name.capitalize()} code"
                 ))
                 return
             await execute_code(code, executor)
