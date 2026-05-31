@@ -346,6 +346,9 @@ def mentioned_message_text(bot: 'BotCore', message: discord.Message) -> str | No
     if bot.user is None or bot.user not in message.mentions:
         return None
 
+    return read_text_from_message(message)
+
+def read_text_from_message(message: discord.Message) -> str | None:
     parts: list[str] = []
 
     # Message content
@@ -423,7 +426,7 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
     if resolved.author.id != bot.user.id:
         return None
 
-    text = " ".join(resolved.content.split())
+    text = read_text_from_message(message)
     if not text:
         return None
     return resolved, truncate_text_to_character_limit(text, MAX_ASSISTANT_CONTEXT_CHARS)
