@@ -426,7 +426,7 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
     if resolved.author.id != bot.user.id:
         return None
 
-    text = read_text_from_message(message)
+    text = read_text_from_message(resolved)
     if not text:
         return None
     return resolved, truncate_text_to_character_limit(text, MAX_ASSISTANT_CONTEXT_CHARS)
