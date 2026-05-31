@@ -107,6 +107,7 @@ class AIContext:
                 user=source.author,
                 message_id=source.id,
                 interaction=False,
+                interaction_data=source.interaction_metadata,
                 created_at=source.created_at,
             )
         if isinstance(source, discord.Interaction):
@@ -392,21 +393,42 @@ class AIContext:
         user: discord.User | discord.Member,
         message_id: int | None,
         interaction: bool,
+        interaction_data: discord.MessageInteractionMetadata | None = None,
         created_at: datetime,
     ) -> str:
         id_line = f"id: {message_id}\n" if message_id is not None else ""
         interaction_line = "interaction: true\n" if interaction else ""
+        interaction_text = f"from interaction: {self._format_interaction_metadata(interaction_data)}\n" if interaction_data is not None else ""
         timestamp = created_at.astimezone(timezone.utc).isoformat()
         content = content.strip()
         return (
             f"{open_system_tag('attached_metadata')}\n"
             f"{id_line}"
             f"{interaction_line}"
+            f"{interaction_text}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
             f"{close_system_tag('attached_metadata')}\n"
             f"{content}"
         )
+    
+    def _format_interaction_metadata(self, meta: discord.MessageInteractionMetadata):
+        all_data = {
+            "id": str(meta.id),
+            "type": meta.type.name,
+            "user": {
+                "id": str(meta.user.id),
+                "name": str(meta.user),
+                "display_name": meta.user.display_name
+            },
+            "target_user": {
+                "id": str(meta.target_user.id),
+                "name": str(meta.target_user),
+                "display_name": meta.target_user.display_name
+            } if meta.target_user is not None else None,
+            "target_message_id": str(meta.target_message_id) if meta.target_message_id is not None else None,
+        }
+        return json.dumps(all_data)
 
     def _history_connection(self) -> sqlite3.Connection:
         return sqlite3.connect(self.history_path)
