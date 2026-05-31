@@ -33,6 +33,7 @@ ContextT = TypeVar("ContextT")
 ActionT = TypeVar("ActionT")
 
 AIParamsTable: TypeAlias = dict[str, "AIParam"]
+MAX_NEW_TOKENS = 1024
 _MAX_CALLS = 4
 _CONTEXT_REQUEST_TOOL_NAME = "request_context"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
@@ -429,7 +430,7 @@ class AICore(Generic[ContextT, ActionT]):
                 tool_choice="auto",
                 parallel_tool_calls=True,
                 temperature=0.2,
-                max_tokens=1024,
+                max_tokens=MAX_NEW_TOKENS,
             )
         except Exception as exc:
             tool_error = self._tool_use_failed_message(exc)
@@ -486,6 +487,7 @@ class AICore(Generic[ContextT, ActionT]):
             "<instruction_guardrail>\n"
             f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
             "</instruction_guardrail>\n"
+            f"<token_budget>{MAX_NEW_TOKENS}</token_budget>"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
