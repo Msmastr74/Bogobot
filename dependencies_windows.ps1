@@ -1,3 +1,6 @@
+# Install Python beforehand using the modern Python Manager
+# On ARM64, You must install AMD64 python to support Libtesseract DLL
+
 # Stop executing if any command fails (equivalent to 'set -e')
 $ErrorActionPreference = "Stop"
 
