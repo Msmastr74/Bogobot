@@ -159,18 +159,25 @@ async def setup(bot: BotCore) -> None:
 
     @bot.new_frame_callback
     def on_new_frame(frame: Image.Image):
-        nonlocal last_frame, last_value
+        nonlocal last_frame
         last_frame = frame
+    
+    async def sort_payload() -> tuple[SortView | None, discord.File | None]:
+        nonlocal last_value
+
+        frame = last_frame
+        if frame is None:
+            return None, None
+
         sort_changed, best_shuffle_sections, sort_values, new_values = sort_reader.analyze(frame)
-        if sort_changed:
+        if sort_changed or last_value is None:
             last_value = (
                 new_values,
                 sum(best_shuffle_sections),
                 datetime.datetime.now().timestamp(),
                 frame,
             )
-    
-    async def sort_payload() -> tuple[SortView | None, discord.File | None]:
+
         if last_value is None:
             return None, None
 
