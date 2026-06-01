@@ -1,3 +1,7 @@
+import inspect
+import types
+from typing import Any, Union, get_args, get_origin
+
 import discord
 from discord import app_commands
 
@@ -80,28 +84,26 @@ class CommandSignatureBox(discord.ui.LayoutView):
             discord.ui.TextDisplay(self._description(command)),
         ))
 
-    def _display_name(
-        self,
-        command: app_commands.Command | app_commands.ContextMenu,
-    ) -> str:
-        if isinstance(command, app_commands.Command):
-            return f"/{command.qualified_name}"
-        return command.name
-
     def _signature(
         self,
         command: app_commands.Command | app_commands.ContextMenu,
     ) -> str:
         if isinstance(command, app_commands.ContextMenu):
-            return command.name
+            return self._context_menu_signature(command)
 
         parts = [f"/{command.qualified_name}"]
+        callback_parameters = self._callback_parameter_map(command)
         for parameter in command.parameters:
-            optional = "" if parameter.required else "?"
-            parts.append(
-                f"{parameter.display_name}: {self._parameter_type(parameter)}{optional}"
-            )
+            callback_parameter = callback_parameters.get(parameter.name)
+            parts.append(self._parameter_signature(parameter.display_name, callback_parameter))
         return " ".join(parts)
+
+    def _context_menu_signature(self, command: app_commands.ContextMenu) -> str:
+        parameters = [
+            self._parameter_signature(parameter.name, parameter)
+            for parameter in self._callback_parameters(command)
+        ]
+        return " ".join([command.name, *parameters])
 
     def _description(
         self,
@@ -111,31 +113,65 @@ class CommandSignatureBox(discord.ui.LayoutView):
             return "Context menu command."
         return command.description
 
-    def _parameter_type(self, parameter: app_commands.commands.Parameter) -> str:
-        if parameter.choices:
-            choices = " | ".join(str(choice.name) for choice in parameter.choices)
-            return choices
-        match parameter.type:
-            case discord.AppCommandOptionType.string:
-                return "str"
-            case discord.AppCommandOptionType.integer:
-                return "int"
-            case discord.AppCommandOptionType.boolean:
-                return "bool"
-            case discord.AppCommandOptionType.number:
-                return "float"
-            case discord.AppCommandOptionType.user:
-                return "user"
-            case discord.AppCommandOptionType.channel:
-                return "channel"
-            case discord.AppCommandOptionType.role:
-                return "role"
-            case discord.AppCommandOptionType.mentionable:
-                return "mentionable"
-            case discord.AppCommandOptionType.attachment:
-                return "attachment"
-            case _:
-                return parameter.type.name
+    def _callback_parameter_map(
+        self,
+        command: app_commands.Command,
+    ) -> dict[str, inspect.Parameter]:
+        return {
+            parameter.name: parameter
+            for parameter in self._callback_parameters(command)
+        }
+
+    def _callback_parameters(
+        self,
+        command: app_commands.Command | app_commands.ContextMenu,
+    ) -> list[inspect.Parameter]:
+        signature = inspect.signature(command.callback)
+        parameters = list(signature.parameters.values())
+        return [
+            parameter
+            for parameter in parameters
+            if parameter.name != "interaction"
+        ]
+
+    def _parameter_signature(
+        self,
+        name: str,
+        parameter: inspect.Parameter | None,
+    ) -> str:
+        if parameter is None:
+            return f"{name}: unknown"
+
+        signature = f"{name}: {self._annotation_text(parameter.annotation)}"
+        if parameter.default is not inspect.Signature.empty:
+            signature = f"{signature} = {parameter.default!r}"
+        return signature
+
+    def _annotation_text(self, annotation: object) -> str:
+        if annotation is inspect.Signature.empty:
+            return "unknown"
+        if isinstance(annotation, app_commands.Transformer):
+            annotation = inspect.signature(annotation.transform).return_annotation
+
+        origin = get_origin(annotation)
+        if origin in (Union, types.UnionType):
+            return " | ".join(
+                self._annotation_text(argument)
+                for argument in get_args(annotation)
+            )
+        if annotation is None or annotation is types.NoneType:
+            return "None"
+        if isinstance(annotation, str):
+            return annotation
+
+        return self._stringify_type(annotation)
+
+    def _stringify_type(self, annotation: Any) -> str:
+        if getattr(annotation, "_name", None):
+            return annotation._name
+        if get_origin(annotation) is not None or hasattr(annotation, "__args__"):
+            return str(annotation).replace("typing.", "")
+        return getattr(annotation, "__name__", str(annotation))
 
 
 def normalize_command_name(name: str) -> str:
