@@ -100,7 +100,7 @@ May 26 00:51:57.280 INFO     Bogobot         Automatic account creation finished
 ## Features
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
- * /get_sort: Retrieves the latest observed sort state and frame image when stream data is available.
+ * /get_sort: Retrieves the sort state from the latest cached video frame, intentionally matching the delayed YouTube view rather than the fresher API state.
  * @mention AI and /ai: Bogobot can chat, call registered command actions, and queue passive context requests. See `AI.md`.
  * /archive: Shows archived monitor values.
  * /archive_frame: Shows a visual archive frame by epoch or Discord timestamp.
@@ -111,7 +111,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage live_chat: Starts, stops, or resends a persistent YouTube live-chat monitor.
  * /manage video_archive: Starts, stops, restarts, or shows status for visual stream archive recording.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
- * /milestone_info: Shows recent milestone history and frame images.
+ * /milestone_info: Shows recent milestone history; OCR/manual entries may include frame images, while API-mode milestones usually do not.
  * /manage announce: Sends a simple bot-authored announcement.
  * /manage message: Deletes, pins, edits, replies to, or reacts to a message by ID.
  * /manage state: Stops or restarts the bot process.

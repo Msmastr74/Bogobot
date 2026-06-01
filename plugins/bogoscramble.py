@@ -14,6 +14,7 @@ from PIL import Image, ImageSequence
 
 from typing import Optional, overload
 from bogobot_core import current_interaction
+from utils.ai import AIParam, action
 from utils.logger_pipe import log_subprocess_pipe
 from utils.type import Coro
 from bogobot_core import BotCore
@@ -912,6 +913,15 @@ async def setup(bot: BotCore):
         description="Bogoscramble text and attachments",
         perm_requirement=0,
         defer=False
+    )
+    @action(
+        "bogoscramble",
+        "Bogoscramble text.",
+        params={
+            "text": AIParam("Text to scramble."),
+            "rows": AIParam("Optional number of scramble rows, from 1 to 30.", type=int | None, required=False),
+            "columns": AIParam("Optional number of scramble columns, from 1 to 30.", type=int | None, required=False),
+        },
     )
     async def bogoscramble(
         interaction: discord.Interaction,

@@ -139,10 +139,10 @@ async def setup(bot: BotCore):
     )
     @action(
         "leaderboard",
-        "Show the leaderboard.",
+        "Show a leaderboard rank range.",
         params={
-            "a": AIParam("A leaderboard boundary from 1 to 100.", int),
-            "b": AIParam("A leaderboard boundary from 1 to 100.", int)
+            "a": AIParam("One rank boundary from 1 to 100.", int),
+            "b": AIParam("The other rank boundary from 1 to 100.", int)
         }
     )
     async def leaderboard(interaction: discord.Interaction, a: int, b: int):

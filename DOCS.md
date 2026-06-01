@@ -21,10 +21,10 @@ User-edited settings:
 - `save_live_frame`: Enable writing the latest received stream frame to `live_720p.png`. Defaults to false.
 - `sort_change_threshold`: How much the sort visualization must change before the monitor treats it as a new frame. Defaults to 0.1.
 - `sort_section_count`: Number of sort sections to classify for the monitor value. Defaults to 25.
-- `sort_area_left`: Left x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 80.
+- `sort_area_left`: Left x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 46.
 - `sort_observed_top`: Top y-coordinate of the horizontal strip used for sort-section classification. Defaults to 515.
 - `sort_area_top`: Top y-coordinate of the sort area. Defaults to 70.
-- `sort_area_right`: Right x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 1200.
+- `sort_area_right`: Right x-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 985.
 - `sort_area_bottom`: Bottom y-coordinate of the sort area and horizontal strip used for sort-section classification. Defaults to 530.
 - `stats_source`: Stats update source. Defaults to `api`. Set to `ocr` to use OCR-driven stat/sort updates.
 - `bogostream_stats_api_url`: Bogostream stats API endpoint. Defaults to `https://bogo.swapjs.dev/api/stats`.
@@ -109,7 +109,7 @@ Bogobot uses the Bogostream stats API by default. libtesseract OCR is still avai
 - **Coordinates**: Stats are extracted from defined regions of a 720p frame.
 - **Processing**: Frames are cropped with Pillow (PIL), pre-processed with OpenCV, and passed to persistent libtesseract API instances as raw grayscale image data.
 - **OCR model**: The bot ensures `eng_fast.traineddata` exists in `tessdata_path`, downloading it from `tessdata_fast` on first startup when missing. Each OCR worker initializes libtesseract with that tessdata directory and `eng_fast`.
-- **Whitelist**: A strict digit-only whitelist is enforced to prevent formatting errors from phantom characters or background noise.
+- **Whitelist**: Stat-specific whitelists are enforced to prevent formatting errors from phantom characters or background noise. Large-number stat crops allow suffixes such as `K`, `M`, `B`, `T`, `Q`, and `Qi`.
 - **OCR calls**: Each crop is sent directly to an OCR worker with its own whitelist and page segmentation mode. There is no subprocess startup or TIFF/PNG piping.
 - **Parallelism**: `ocr_concurrency` controls how many OCR workers are started. Workers run in threads, and each thread keeps its own initialized libtesseract API instance.
 - **Debug frame**: If `save_live_frame` is true, `live_720p.png` is written on each received frame. It is useful for checking crop coordinates and stream state, but it is disabled by default to avoid constant disk writes on small systems such as Android/Termux.
@@ -117,7 +117,7 @@ Bogobot uses the Bogostream stats API by default. libtesseract OCR is still avai
 ## Stream Stats Pipeline
 `plugins/stats.py` owns the live stream data pipeline. Its default source is the Bogostream stats API at `https://bogo.swapjs.dev/api/stats`. Set `stats_source` to `ocr` to use the older frame/OCR pipeline.
 
-In API mode, `stats.py` polls `bogostream_stats_api_url` every `bogostream_stats_api_interval` seconds. The API response supplies lifetime engine/crowd totals, engine/crowd/combined rates, all-time best, the best snapshot in the latest tick, its source, active contributors, and the current record holder. `tick_best_arr` is converted into `bot.sort_values`; green/red section state is derived by checking whether each section value equals its 1-based index. When that snapshot changes, the plugin emits the existing `bot.new_value(...)` callback so monitor, archive, and stats-monitor integrations continue to use the same event path.
+In API mode, `stats.py` polls `bogostream_stats_api_url` every `bogostream_stats_api_interval` seconds. The API response supplies lifetime engine/crowd totals, engine/crowd/combined rates, all-time best, the best snapshot in the latest tick, its source, active contributors, and the current record holder. The plugin accepts both the original flat response shape and the newer nested shape with `engine`, `crowd`, and `combined_tick` objects. The tick-best array is converted into `bot.sort_values`; green/red section state is derived by checking whether each section value equals its 1-based index. When that snapshot changes, the plugin emits the existing `bot.new_value(...)` callback so monitor, archive, and stats-monitor integrations continue to use the same event path.
 
 In OCR mode, `stats.py` registers an `@bot.new_frame_callback`, so every decoded stream frame flows through the visual update path.
 
@@ -135,15 +135,15 @@ For each frame in OCR mode, `stats.py`:
 
 `bot.stats` is the current text cache for stream-wide values. API mode fills fields such as `shuffles`, `engine_total`, `crowd_total`, `shuffles_sec`, `engine_rate`, `crowd_rate`, `best_run`, `tick_best`, `tick_best_source`, `active_contributors`, and `record_holder`. OCR mode fills fields such as `shuffles`, `comparisons`, `best_run`, `shuffles_sec`, `average_best_shuffle`, and `uptime`. Commands like `/get_stats` read from this cache instead of fetching or OCRing on demand.
 
-`stats.py` keeps this visual sort logic in one `SortSectionReader`, which crops the sort area once per frame and uses that crop for change detection, green/red section classification, and area-ranked value reading.
+`stats.py` keeps the visual sort reader in one `SortSectionReader`. OCR mode uses it for stream events. `/get_sort` also uses this reader lazily from `get_stats.py` against the latest cached video frame, so `/get_sort` shows what the delayed YouTube video currently displays instead of the fresher API state.
 
 `bot.best_shuffle_sections` is the latest per-section green/red classification as `list[bool]`. `sum(bot.best_shuffle_sections)` is the scalar best-shuffle count used by existing monitor/archive displays.
 
-`bot.sort_values` is the latest area-read sort permutation as `list[int]`. `stats.py` crops `bot.SORT_AREA_COORDS`, masks the red/green sort blocks, cleans the mask with OpenCV morphology, measures the largest solid component in each configured section, and ranks those areas into values. An unreadable section is represented as `0`.
+`bot.sort_values` is the latest API/OCR event sort permutation as `list[int]`. In OCR mode, `stats.py` crops `bot.SORT_AREA_COORDS`, masks the red/green sort blocks, cleans the mask with OpenCV morphology, measures the largest solid component in each configured section, and ranks those areas into values. An unreadable section is represented as `0`.
 
 `bot.new_values` combines those two caches as `list[tuple[bool, int]]`, where each tuple is `(is_green, sort_value)` for the same section.
 
-`bot.new_value(new_values, new_value)` publishes the latest calculated monitor event. For the stream monitor, `new_value` is currently the number of green sections in `sort_section_count`, calculated from the configured observed strip instead of OCRing tiny history cells. The event fires only when the sort-change detector says the bar chart actually changed, which lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
+`bot.new_value(new_values, new_value)` publishes the latest calculated monitor event. In API mode it is emitted from changed API tick snapshots. In OCR mode, `new_value` is the number of green sections in `sort_section_count`, calculated from the configured observed strip instead of OCRing tiny history cells. OCR events fire only when the sort-change detector says the bar chart actually changed, which lets `/manage monitor` ignore repeated stale frames from the stream and publish actual state transitions.
 
 `bot._last_ocr_refresh` is the UNIX timestamp of the latest successful stats-cache refresh. The name is historical; it is updated by both API and OCR modes.
 
@@ -179,7 +179,9 @@ Periodic monitors should own their own `utils.tasks.loop` and call `monitor.tick
 The stream monitor updates only after the sort-change test reports a real visual change. Repeated stale stream frames are ignored for monitor history, which keeps the monitor closer to actual state transitions than to the currently displayed stream frame.
 
 ## Milestones
-`MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. Values are confirmed using a rolling window, so noisy OCR does not immediately publish a milestone.
+`MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. API-provided values are treated as authoritative and publish the latest value immediately. OCR-provided values still use a rolling stability window, so noisy OCR does not immediately publish a milestone.
+
+Milestone history can include frame images when updates come from OCR or manually supplied images. API-mode milestone updates do not attach images because the API state is fresher than the delayed YouTube video frame, so an automatic frame would be misleading.
 
 Milestones are stored by display name:
 
@@ -245,7 +247,6 @@ Current plugin responsibilities:
 - `get_stats.py`: `/get_stats`, `/get_sort`, and `/manage stats_monitor`.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `live_chat.py`: `/manage live_chat` YouTube live-chat monitor.
-- `live_chat_send.py`: optional private outbound chat integration. It is intentionally not part of the public command docs.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
 - `ai.py`: @mention and `/ai` dispatch, command execution, passive context request handling, and AI response history.
@@ -279,13 +280,13 @@ Several management commands use an explicit action parameter instead of separate
 - `/archive_frame time`: Extracts a visual archive frame. `time` accepts epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
-- `/get_sort`: Shows the latest observed sort state, including a frame image when available.
+- `/get_sort`: Shows the latest color-extracted sort state from the currently cached video frame, including that frame image when available. This intentionally follows the delayed YouTube video instead of the fresher API state.
 - `/python [code]` and `/javascript [code]`: Execute code in WASI-backed sandboxes. If code is omitted, a modal supports longer input and one uploaded source file. Output is chunked and truncated to Discord-safe limits.
 - `/ai_activity schedule when purpose`: Schedules a one-off or recurring AI activity trigger in the current channel. `when` accepts relative times, Unix/Discord/ISO timestamps, or structured fields like `hour:12 minute:30`.
 - `/ai_activity trigger purpose`: Runs an AI activity trigger immediately in the current channel.
 - `/ai_activity list`: Lists scheduled AI activities for the current channel.
 - `/ai_activity remove id`: Removes a scheduled AI activity by ID.
-- `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available.
+- `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available. API-mode history usually has no images.
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.

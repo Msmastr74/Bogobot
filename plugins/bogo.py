@@ -401,7 +401,7 @@ async def setup(bot: BotCore):
         "bogo sort",
         "Bogosort a tiny list.",
         params={
-            "item_count": AIParam(type=int),
+            "item_count": AIParam("Number of items to sort, from 1 to 8.", type=int),
         },
     )
     async def bogosort(interaction: discord.Interaction, item_count: Literal[1, 2, 3, 4, 5, 6, 7, 8]):

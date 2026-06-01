@@ -3,6 +3,7 @@
 Bogobot can use an OpenAI-compatible chat API to respond to mentions, power `/ai`, and choose Discord commands from registered AI actions.
 
 The AI system is optional. It is configured with the top-level `ai` object in `config.json` or `local_config.json`.
+Responses currently use a fixed 1024-token generation budget.
 
 ## Configuration
 
@@ -236,6 +237,7 @@ Supported context request types:
 ## AI Actions
 
 Plugins register AI-callable actions with `@utils.ai.action(...)`.
+The decorator is normally stacked with a slash command decorator so the same coroutine can be invoked by Discord users or by the AI command runner.
 
 ```python
 from utils.ai import AIParam, action
@@ -249,6 +251,16 @@ async def ping(interaction: discord.Interaction, user: discord.User | discord.Me
     ...
 ```
 
-Action metadata such as `perm_requirement` is passed as decorator keyword arguments. Command parameters are declared with `AIParam`; unsupported or invalid model arguments are rejected before the command runs.
+The first argument is the AI action name. It can contain spaces, such as `"bogo roll"`; the OpenAI tool name is generated automatically by lowercasing and replacing non-word characters with underscores. If two actions would produce the same tool name, Bogobot adds a numeric suffix.
+
+`command_name` defaults to the action name and is used for telemetry/error context. Set it when the AI action name should differ from the Discord command name. Action metadata such as `perm_requirement` is passed as decorator keyword arguments.
+
+Command parameters are declared with `AIParam`. Supported parameter types are:
+
+- `str`, `int`, `float`, `bool`, and `object`.
+- `Literal["a", "b"]` with string choices, exposed as an enum.
+- `discord.User`, `discord.Member`, or a union of those with `None`.
+
+`AIParam(required=False, default=...)` makes an argument optional in the tool schema. Unknown arguments, missing required arguments, invalid enum choices, and values that cannot be coerced are rejected before the command runs. Discord user parameters accept a user ID or mention and resolve only from visible guild/message/client cache context.
 
 Registered actions are exposed to the model as OpenAI-compatible tools. A tool call runs the matching Discord command through the normal command runner. Plain model text becomes a conversational Discord reply.

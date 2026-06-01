@@ -861,9 +861,9 @@ async def setup(bot: BotCore):
     )
     @action(
         "archive",
-        "View monitor archive. Use @time or provide epoch seconds or ms.",
+        "View the monitor archive, optionally filtered by correct-section value.",
         params={
-            "value": AIParam(type=int | None, required=False),
+            "value": AIParam("Only show archive entries with this correct-section value.", type=int | None, required=False),
         },
     )
     async def archive(
@@ -902,9 +902,9 @@ async def setup(bot: BotCore):
     )
     @action(
         "archive_frame",
-        "Show a visual archive frame by epoch timestamp.",
+        "Show a visual archive frame by epoch seconds, epoch milliseconds, or Discord timestamp.",
         params={
-            "time": AIParam(type=str),
+            "time": AIParam("Epoch seconds, epoch milliseconds, <t:...>, or <t:...:*>.", type=str),
         },
     )
     async def archive_frame(

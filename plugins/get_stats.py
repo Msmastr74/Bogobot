@@ -201,7 +201,7 @@ async def setup(bot: BotCore) -> None:
     @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False, perm_requirement=0)
     @action(
         "get_sort",
-        "Show the current sort state.",
+        "Show the latest color-extracted sort state from the cached video frame.",
     )
     async def get_sort(interaction: discord.Interaction):
         view, file = await sort_payload()
