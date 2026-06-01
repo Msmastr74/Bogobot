@@ -1,4 +1,5 @@
 import inspect
+import re
 import types
 from typing import Any, Union, get_args, get_origin
 
@@ -6,6 +7,7 @@ import discord
 from discord import app_commands
 
 from bogobot_core import BotCore
+from utils.ai import AIParam, action
 from utils.discord import count_characters
 
 
@@ -18,6 +20,7 @@ BOGOBOT_DESCRIPTION = (
 )
 MAX_COMMAND_TEXT_CHARACTERS = 3900
 MAX_COMMAND_CHOICES = 25
+COMMAND_NAME_CHARACTER_RE = re.compile(r"[^A-Za-z]+")
 
 
 class HelpBox(discord.ui.LayoutView):
@@ -175,7 +178,7 @@ class CommandSignatureBox(discord.ui.LayoutView):
 
 
 def normalize_command_name(name: str) -> str:
-    return " ".join(name.strip().removeprefix("/").split()).casefold()
+    return COMMAND_NAME_CHARACTER_RE.sub("", name)
 
 
 def all_help_commands(
@@ -240,6 +243,19 @@ async def setup(bot: BotCore):
         perm_requirement=0,
         defer=False,
         eph=True,
+    )
+    @action(
+        "help",
+        "Show bot information or help for one command.",
+        params={
+            "command": AIParam(
+                "Optional command name normalized to A-Za-z only, such as help, ping, "
+                "bogochoice, or manage monitor.",
+                type=str | None,
+                required=False,
+                default=None,
+            ),
+        },
     )
     async def help(interaction: discord.Interaction, command: str | None = None):
         commands, context_menus = all_help_commands(bot)
