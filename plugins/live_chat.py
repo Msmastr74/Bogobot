@@ -1,5 +1,5 @@
 from collections import deque
-from typing import TypedDict
+from typing import Protocol, TypedDict
 
 import discord
 import discord.backoff
@@ -23,9 +23,52 @@ class LiveChatView(discord.ui.LayoutView):
 class LiveChatPayload(TypedDict):
     view: LiveChatView
 
+class EmojiBlock(TypedDict):
+    id: str
+    txt: str
+    url: str
+
+class ChatAuthorProtocol(Protocol):
+    name: str
+    channelId: str
+    channelUrl: str
+    imageUrl: str
+    badgeUrl: str
+    type: str
+    isVerified: bool
+    isChatOwner: bool
+    isChatSponsor: bool
+    isChatModerator: bool
+
+class ChatItemProtocol(Protocol):
+    id: str
+    type: str
+    timestamp: int
+    elapsedTime: str
+    datetime: str
+    message: str
+    messageEx: list[str | EmojiBlock]
+    amountValue: float
+    amountString: str
+    currency: str
+    bgColor: int
+    author: ChatAuthorProtocol
+
+def format_chat_item(c: ChatItemProtocol) -> str:
+    discord_time = f"<t:{c.timestamp}:t>"
+    role_tag = ""
+    if c.author.isChatOwner:
+        role_tag = "👑 "
+    elif c.author.isChatModerator:
+        role_tag = "🛡️ "
+    elif c.author.isChatSponsor:
+        role_tag = "⭐ "
+    if c.type == "superChat":
+        return f"{discord_time} 💰 **{role_tag}{c.author.name}** sent {c.amountString}: *{c.message}*"
+    return f"{discord_time} **{role_tag}{c.author.name}**: {c.message}"
 
 chat = None
-chat_buffer = deque(maxlen=20)
+chat_buffer: deque[ChatItemProtocol] = deque(maxlen=20)
 backoff = discord.backoff.ExponentialBackoff(base=2)
 next_retry_at = 0.0
 async def setup(bot: BotCore):
@@ -87,7 +130,7 @@ async def setup(bot: BotCore):
 
             chat_buffer.extend(chat_data.items)
             for msg in chat_buffer:
-                messages.append(f"{msg.author.name}: {msg.message}")
+                messages.append(format_chat_item(msg))
 
             return  {
                 "view": LiveChatView("\n".join(messages))
