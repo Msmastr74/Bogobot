@@ -992,7 +992,6 @@ class SandboxedExecutor:
                     except asyncio.CancelledError:
                         pass
 
-            await proc.wait()
             return output_bytes.decode("utf-8", errors="replace")
 
         except (SandboxOutputLimitError, SandboxFilesystemLimitError):
@@ -1002,7 +1001,6 @@ class SandboxedExecutor:
         finally:
             if proc.returncode is None:
                 self._kill(proc)
-                await proc.wait()
 
             await self.language.cleanup(invocation)
 
