@@ -101,6 +101,7 @@ May 26 00:51:57.280 INFO     Bogobot         Automatic account creation finished
 Bogobot implements several slash commands for stream management and data retrieval:
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
  * /get_sort: Retrieves the sort state from the latest cached video frame, intentionally matching the delayed YouTube view rather than the fresher API state.
+ * /streamboard: Shows Bogostream contributor rankings, or a contributor profile by nickname.
  * @mention AI and /ai: Bogobot can chat, call registered command actions, and queue passive context requests. See `AI.md`.
  * /archive: Shows archived monitor values.
  * /archive_frame: Shows a visual archive frame by epoch or Discord timestamp.

@@ -29,6 +29,8 @@ User-edited settings:
 - `stats_source`: Stats update source. Defaults to `api`. Set to `ocr` to use OCR-driven stat/sort updates.
 - `bogostream_stats_api_url`: Bogostream stats API endpoint. Defaults to `https://bogo.swapjs.dev/api/stats`.
 - `bogostream_stats_api_interval`: Seconds between Bogostream stats API polls when `stats_source` is `api`. Defaults to 1.
+- `bogostream_leaderboard_api_url`: Bogostream contributor leaderboard API endpoint for `/streamboard`. Defaults to `https://bogo.swapjs.dev/api/leaderboard`.
+- `bogostream_contributor_api_url`: Bogostream contributor profile API endpoint for `/streamboard user:...`. Defaults to `https://bogo.swapjs.dev/api/contributor`.
 - `ocr_enabled`: Enables Tesseract OCR startup. Defaults to true only when `stats_source` is `ocr`.
 - `ocr_concurrency`: Number of OCR worker threads. Each worker owns one persistent libtesseract API instance. Defaults to 2.
 - `tessdata_path`: Local directory for bot-managed Tesseract language data. Defaults to `tessdata`.
