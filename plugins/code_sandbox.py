@@ -73,11 +73,14 @@ async def setup(bot: BotCore) -> None:
                     if index == 0:
                         view.add_item(discord.ui.File(f"attachment://{source_filename(executor.language)}"))
                     clen += len(chunk)
+                    kwargs: dict[str, Any] = {
+                        'file': source_file(executor.language, code)
+                    } if index == 0 else {}
                     await bot.discord.send(
                         view=view,
                         response=True,
                         safety_filter=True,
-                        file=source_file(executor.language, code) if index == 0 else None,
+                        **kwargs
                     )
                 if clen < len(result):
                     await bot.discord.send("`[TRUNCATED]`", response=True)
