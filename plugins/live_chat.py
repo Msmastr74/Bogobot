@@ -1,3 +1,4 @@
+from collections import deque
 from typing import TypedDict
 
 import discord
@@ -24,6 +25,7 @@ class LiveChatPayload(TypedDict):
 
 
 chat = None
+chat_buffer = deque(maxlen=20)
 backoff = discord.backoff.ExponentialBackoff(base=2)
 next_retry_at = 0.0
 async def setup(bot: BotCore):
@@ -83,7 +85,8 @@ async def setup(bot: BotCore):
             assert isinstance(chat_data, Chatdata)
             messages = []
 
-            for msg in chat_data.items:
+            chat_buffer.extend(chat_data.items)
+            for msg in chat_buffer:
                 messages.append(f"{msg.author.name}: {msg.message}")
 
             return  {
