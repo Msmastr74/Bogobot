@@ -179,7 +179,10 @@ async def setup(bot: BotCore):
             if response.status != 200:
                 bot.logger.warning(f"Bogostream stats API returned HTTP {response.status}")
                 return None
-            return normalize_api_stats(await response.json())
+            data = normalize_api_stats(await response.json())
+            if data is None:
+                bot.logger.warning("Bogostream stats API returned an unexpected payload shape")
+            return data
 
     async def api_stats_loop() -> None:
         nonlocal last_api_sort_values

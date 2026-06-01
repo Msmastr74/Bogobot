@@ -85,6 +85,10 @@ class StatsPayload(TypedDict):
 async def setup(bot: BotCore) -> None:
     manage = groups.manage(bot)
     
+    def using_api_stats() -> bool:
+        stats_source = str(bot.config.get("stats_source", "api")).lower()
+        return stats_source in {"api", "event", "events"}
+
     def stats_payload(title="Bogostream Statistics Monitor") -> StatsPayload:
         stats_list = bot.stats
 
@@ -97,7 +101,7 @@ async def setup(bot: BotCore) -> None:
         uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = bot.get_stream_uptime()
         api_fields: list[tuple[str, str]] = []
-        if "engine_total" in stats_list or "crowd_total" in stats_list:
+        if using_api_stats() or "engine_total" in stats_list or "crowd_total" in stats_list:
             api_fields = [
                 ("Engine Total", stats_list.get("engine_total", "Loading...")),
                 ("Crowd Total", stats_list.get("crowd_total", "Loading...")),
@@ -109,9 +113,15 @@ async def setup(bot: BotCore) -> None:
                 ("Record Holder", stats_list.get("record_holder", "Loading...")),
             ]
         
+        updated_at = (
+            datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
+            if bot._last_ocr_refresh > 0 else
+            None
+        )
         view = StatsView(
             title=title,
             fields=[
+                ("Source", "Bogostream API" if using_api_stats() else "OCR"),
                 ("Shuffles", shuffles),
                 ("Comparisons", comparisons),
                 ("Best Run", best_run),
@@ -121,7 +131,7 @@ async def setup(bot: BotCore) -> None:
                 *api_fields,
                 ("Elapsed Time [STATIC]", elapsed_time),
             ],
-            updated_at = datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
+            updated_at=updated_at,
         )
         return { 'view': view }
     
