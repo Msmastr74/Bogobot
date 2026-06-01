@@ -218,16 +218,28 @@ class VideoArchiver:
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-y",
-            "-ss", f"{relative_seconds:.3f}",
-            "-i", str(video_path),
-            "-frames:v", "1",
-            "-q:v", str(max(1, int(quality))),
-        ]
+        if video_path.suffix.lower() == ".ts":
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", str(video_path),
+                "-ss", f"{relative_seconds:.3f}",
+                "-frames:v", "1",
+                "-q:v", str(max(1, int(quality))),
+            ]
+        else:
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-ss", f"{relative_seconds:.3f}",
+                "-i", str(video_path),
+                "-frames:v", "1",
+                "-q:v", str(max(1, int(quality))),
+            ]
         if output_path.suffix.lower() in {".jpg", ".jpeg"}:
             command.extend(["-pix_fmt", "yuvj420p"])
         command.append(str(output_path))
