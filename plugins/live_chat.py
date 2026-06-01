@@ -83,7 +83,7 @@ async def setup(bot: BotCore):
             assert isinstance(chat_data, Chatdata)
             messages = []
 
-            for msg in chat_data.sync_items():
+            for msg in chat_data.items:
                 messages.append(f"{msg.author.name}: {msg.message}")
 
             return  {
