@@ -10,6 +10,7 @@ from utils.ai import action
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups
+from plugins.stats import SortSectionReader
 
 class StatsView(discord.ui.LayoutView):
     def __init__(
@@ -150,18 +151,24 @@ async def setup(bot: BotCore) -> None:
     last_value: tuple[
         list[tuple[bool, int]], int, float, Image.Image | None
     ] | None = None
+    sort_reader = SortSectionReader(bot)
+
     @bot.new_value_callback
     async def on_new_value(sort_state: list[tuple[bool, int]], correct_count: int, timestamp: float):
-        nonlocal last_value
-        last_value = (
-            sort_state, correct_count, timestamp, last_frame
-        )
         await stats_monitor.tick()
 
     @bot.new_frame_callback
     def on_new_frame(frame: Image.Image):
-        nonlocal last_frame
+        nonlocal last_frame, last_value
         last_frame = frame
+        sort_changed, best_shuffle_sections, sort_values, new_values = sort_reader.analyze(frame)
+        if sort_changed:
+            last_value = (
+                new_values,
+                sum(best_shuffle_sections),
+                datetime.datetime.now().timestamp(),
+                frame,
+            )
     
     async def sort_payload() -> tuple[SortView | None, discord.File | None]:
         if last_value is None:

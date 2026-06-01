@@ -80,17 +80,17 @@ class BotCore(discord.Client):
         self.tree.on_error = self.on_tree_error
         
         self.SORT_AREA_COORDS = (
-            int(self.config.get("sort_area_left", 80)),
+            int(self.config.get("sort_area_left", 46)),
             int(self.config.get("sort_area_top", 70)),
-            int(self.config.get("sort_area_right", 1200)),
+            int(self.config.get("sort_area_right", 985)),
             int(self.config.get("sort_area_bottom", 530)),
         )
         self.SORT_CHANGE_THRESHOLD: float = self.config.get("sort_change_threshold", 0.1)
         self.SORT_SECTION_COUNT: int = max(1, int(self.config.get("sort_section_count", 25)))
         self.SORT_OBSERVED_STRIP_COORDS = (
-            int(self.config.get("sort_area_left", 80)),
+            int(self.config.get("sort_area_left", 46)),
             int(self.config.get("sort_observed_top", 515)),
-            int(self.config.get("sort_area_right", 1200)),
+            int(self.config.get("sort_area_right", 985)),
             int(self.config.get("sort_area_bottom", 530)),
         )
 
