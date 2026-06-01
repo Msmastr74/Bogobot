@@ -207,7 +207,7 @@ class StreamboardView(discord.ui.LayoutView):
         suffix = "/s" if value_key == "rate" else ""
         badges = format_badges(row.get("badges", []))
         devices = row.get("devices")
-        devices_text = f" | Devices: `{devices}`" if devices is not None else ""
+        devices_text = f" | Threads: `{devices}`" if devices is not None else ""
         return (
             f"{index}. **{nickname}** - `{value}{suffix}`"
             f"{devices_text}\n-# {badges}"
