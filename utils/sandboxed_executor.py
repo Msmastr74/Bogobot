@@ -903,7 +903,7 @@ class SandboxedExecutor:
 
     max_output_bytes: int = 256 * 1024
 
-    async def execute(self, program: str, timeout: float = 60) -> str:
+    async def execute(self, program: str, timeout: float = 10) -> str:
         return await self._execute_locked(program, timeout)
 
     @staticmethod
