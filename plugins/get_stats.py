@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 from typing import Any, Iterable, TypedDict, cast
 
 import aiohttp
@@ -408,6 +409,7 @@ async def setup(bot: BotCore) -> None:
             )
 
     last_frame: Image.Image | None = None
+    last_frame_ts: float = 0
     last_value: tuple[
         list[tuple[bool, int]], int, float, Image.Image | None
     ] | None = None
@@ -419,8 +421,9 @@ async def setup(bot: BotCore) -> None:
 
     @bot.new_frame_callback
     def on_new_frame(frame: Image.Image):
-        nonlocal last_frame
+        nonlocal last_frame, last_frame_ts
         last_frame = frame
+        last_frame_ts = time.time()
     
     async def sort_payload() -> tuple[SortView | None, discord.File | None]:
         nonlocal last_value
@@ -434,7 +437,7 @@ async def setup(bot: BotCore) -> None:
             last_value = (
                 new_values,
                 sum(best_shuffle_sections),
-                datetime.datetime.now().timestamp(),
+                last_frame_ts,
                 frame,
             )
 
