@@ -16,11 +16,15 @@ SOURCE_EXTENSIONS = {
 }
 
 
-def source_file(language: Language, code: str) -> discord.File:
+def source_filename(language: Language) -> str:
     extension = SOURCE_EXTENSIONS.get(language.name, "txt")
+    return f"program.{extension}"
+
+
+def source_file(language: Language, code: str) -> discord.File:
     return discord.File(
         io.BytesIO(code.encode("utf-8")),
-        filename=f"program.{extension}",
+        filename=source_filename(language),
     )
 
 
@@ -66,6 +70,8 @@ async def setup(bot: BotCore) -> None:
                 for index, chunk in enumerate(chunks):
                     view = discord.ui.LayoutView(timeout=None)
                     view.add_item(discord.ui.TextDisplay(f"```ansi\n{chunk or BLANK_CHAR}\n```"))
+                    if index == 0:
+                        view.add_item(discord.ui.File(f"attachment://{source_filename(executor.language)}"))
                     clen += len(chunk)
                     await bot.discord.send(
                         view=view,
