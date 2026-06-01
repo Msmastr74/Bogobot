@@ -217,6 +217,7 @@ class VideoArchiver:
                 microsecond=0,
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
+        relative_seconds = self._frame_pts_at_or_before(video_path, relative_seconds) or relative_seconds
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if video_path.suffix.lower() == ".ts":
             command = [
@@ -253,6 +254,43 @@ class VideoArchiver:
             self.logger.warning(f"Could not extract video archive frame: {stderr}")
             return False
         return output_path.exists()
+
+    def _frame_pts_at_or_before(self, video_path: Path, relative_seconds: float) -> float | None:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "frame=pts_time",
+                "-of", "csv=p=0",
+                str(video_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            return None
+
+        frame_pts: list[float] = []
+        for line in result.stdout.decode(errors="replace").splitlines():
+            value = line.strip().rstrip(",")
+            if not value:
+                continue
+            try:
+                frame_pts.append(float(value))
+            except ValueError:
+                continue
+        if not frame_pts:
+            return None
+
+        first_pts = frame_pts[0]
+        selected = frame_pts[0]
+        for pts in frame_pts:
+            normalized_pts = pts - first_pts
+            if normalized_pts > relative_seconds:
+                break
+            selected = pts
+        return max(0.0, selected - first_pts)
 
     def _offer_sentinel(self) -> None:
         with contextlib.suppress(queue.Full):
@@ -317,12 +355,14 @@ class VideoArchiver:
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
+            "-use_wallclock_as_timestamps", "1",
             "-f", "rawvideo",
             "-pix_fmt", "rgb24",
             "-s", f"{self.width}x{self.height}",
-            "-r", str(self.fps),
             "-i", "pipe:0",
             "-an",
+            "-vf", "setpts=PTS-STARTPTS",
+            "-vsync", "vfr",
             "-pix_fmt", "yuv420p",
             "-c:v", "libx265",
             "-preset", self.preset,
