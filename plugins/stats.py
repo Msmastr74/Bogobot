@@ -1,7 +1,7 @@
 import numpy as np
 import time
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 from PIL import Image
 
 import aiohttp
@@ -46,9 +46,10 @@ class BogostreamStats(TypedDict):
     best: int
     tick_best: int
     tick_best_arr: list[int]
-    tick_best_source: Literal["crowd", "vps"]
+    tick_best_source: str
     active_contributors: int
     record_holder: BogostreamRecordHolder | None
+    uptime_s: int | None
 
 
 def parse_number(value: str | None) -> Decimal | None:
@@ -76,6 +77,14 @@ def parse_number(value: str | None) -> Decimal | None:
     return number * (Decimal(10) ** STAT_SUFFIX_POWERS[suffix])
 
 
+def format_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
+
+
 async def setup(bot: BotCore):
     stats_source = str(bot.config.get("stats_source", "api")).lower()
     api_enabled = stats_source in {"api", "event", "events"}
@@ -100,7 +109,47 @@ async def setup(bot: BotCore):
         if not isinstance(raw, dict):
             return None
 
+        def source_text(value: object) -> str:
+            text = str(value or "vps")
+            return "vps" if text == "engine" else text
+
         try:
+            engine = raw.get("engine")
+            crowd = raw.get("crowd")
+            combined_tick = raw.get("combined_tick")
+
+            if (
+                isinstance(engine, dict)
+                and isinstance(crowd, dict)
+                and isinstance(combined_tick, dict)
+            ):
+                tick_best_arr_raw = combined_tick["best_arr"]
+                if not isinstance(tick_best_arr_raw, list):
+                    return None
+
+                record_holder_raw = raw.get("record_holder")
+                record_holder: BogostreamRecordHolder | None = None
+                if isinstance(record_holder_raw, dict):
+                    record_holder = {
+                        "nickname": str(record_holder_raw.get("nickname", "unknown")),
+                        "value": int(record_holder_raw.get("value", 0)),
+                    }
+
+                return {
+                    "engine_total": int(engine["total"]),
+                    "crowd_total": int(crowd["total_shuffles"]),
+                    "engine_rate": round(float(engine["rate"])),
+                    "crowd_rate": round(float(crowd["rate"])),
+                    "combined_rate": round(float(raw["combined_rate"])),
+                    "best": int(raw.get("record", engine.get("best", 0))),
+                    "tick_best": int(combined_tick["best"]),
+                    "tick_best_arr": [int(value) for value in tick_best_arr_raw],
+                    "tick_best_source": source_text(combined_tick.get("source")),
+                    "active_contributors": int(crowd.get("active", 0)),
+                    "record_holder": record_holder,
+                    "uptime_s": int(engine["uptime_s"]) if "uptime_s" in engine else None,
+                }
+
             tick_best_arr_raw = raw["tick_best_arr"]
             if not isinstance(tick_best_arr_raw, list):
                 return None
@@ -123,9 +172,10 @@ async def setup(bot: BotCore):
                 "best": int(raw["best"]),
                 "tick_best": int(raw["tick_best"]),
                 "tick_best_arr": [int(value) for value in tick_best_arr_raw],
-                "tick_best_source": "crowd" if source == "crowd" else "vps",
+                "tick_best_source": source_text(source),
                 "active_contributors": int(raw["active_contributors"]),
                 "record_holder": record_holder,
+                "uptime_s": None,
             }
         except (KeyError, TypeError, ValueError):
             return None
@@ -151,6 +201,7 @@ async def setup(bot: BotCore):
             if record_holder is not None else
             "engine"
         )
+        uptime = data["uptime_s"]
 
         bot.stats.update({
             "shuffles": format_count(combined_total),
@@ -166,7 +217,7 @@ async def setup(bot: BotCore):
             "active_contributors": format_count(data["active_contributors"]),
             "record_holder": record_holder_text,
             "average_best_shuffle": "N/A",
-            "uptime": "N/A",
+            "uptime": format_duration(uptime) if uptime is not None else "N/A",
         })
         bot._last_ocr_refresh = timestamp
         bot.best_shuffle_sections = best_shuffle_sections
