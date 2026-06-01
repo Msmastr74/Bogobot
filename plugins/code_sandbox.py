@@ -1,4 +1,5 @@
 import asyncio
+import io
 from typing import Any, Awaitable, Callable
 
 import discord
@@ -9,6 +10,20 @@ from utils.discord import chunk_text
 from utils.sandboxed_executor import Language, SandboxedExecutor, PythonLanguage, JavascriptLanguage
 
 BLANK_CHAR = "\u200d"
+SOURCE_EXTENSIONS = {
+    "javascript": "js",
+    "python": "py",
+}
+
+
+def source_file(language: Language, code: str) -> discord.File:
+    extension = SOURCE_EXTENSIONS.get(language.name, "txt")
+    return discord.File(
+        io.BytesIO(code.encode("utf-8")),
+        filename=f"program.{extension}",
+    )
+
+
 async def setup(bot: BotCore) -> None:
     fuel = int(bot.config.get("code_sandbox_fuel", 25_000_000_000))
     languages = [
@@ -48,15 +63,25 @@ async def setup(bot: BotCore) -> None:
                 result = await executor.execute(code)
                 chunks = chunk_text(result, 3900, max_chunks=3) or [""]
                 clen = 0
-                for chunk in chunks:
+                for index, chunk in enumerate(chunks):
                     view = discord.ui.LayoutView(timeout=None)
                     view.add_item(discord.ui.TextDisplay(f"```ansi\n{chunk or BLANK_CHAR}\n```"))
                     clen += len(chunk)
-                    await bot.discord.send(view=view, response=True, safety_filter=True)
+                    await bot.discord.send(
+                        view=view,
+                        response=True,
+                        safety_filter=True,
+                        file=source_file(executor.language, code) if index == 0 else None,
+                    )
                 if clen < len(result):
                     await bot.discord.send("`[TRUNCATED]`", response=True)
             except Exception as e:
-                await bot.discord.send(f"{type(e).__name__}: {e}", response=True, safety_filter=True)
+                await bot.discord.send(
+                    f"{type(e).__name__}: {e}",
+                    response=True,
+                    safety_filter=True,
+                    file=source_file(executor.language, code),
+                )
 
 class ProgramInputModal(discord.ui.Modal, title="Program"):
     def __init__(
