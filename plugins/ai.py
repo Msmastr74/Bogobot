@@ -723,7 +723,7 @@ async def setup(bot: 'BotCore'):
         if message.author.bot or bot.user is None:
             return
         
-        from plugins.live_chat_send import LIVE_CHAT_SUB
+        from plugins._relay import LIVE_CHAT_SUB # type: ignore
         if await bot.notifications.has_subscription(LIVE_CHAT_SUB, message.channel.id):
             return
         

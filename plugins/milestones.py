@@ -210,6 +210,10 @@ class MilestoneTracker:
         """
         Returns the stable value from the recent update window.
 
+        API-provided stats are treated as authoritative, so API mode returns
+        the latest value immediately. OCR mode keeps the rolling stability
+        filter because OCR can be noisy.
+
         Until there are exactly MILESTONE_WINDOW_SIZE collected updates, this
         returns None.
 
@@ -218,6 +222,12 @@ class MilestoneTracker:
         """
 
         history = self.history[milestone_name]
+
+        stats_source = str(self.bot.config.get("stats_source", "api")).lower()
+        if stats_source in {"api", "event", "events"}:
+            if not history:
+                return None
+            return history[-1][0]
 
         if len(history) < MILESTONE_WINDOW_SIZE:
             return None
