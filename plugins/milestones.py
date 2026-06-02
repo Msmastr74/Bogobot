@@ -16,8 +16,8 @@ from discord import app_commands
 MILESTONE_USAGE_TYPE = "milestones"
 MILESTONE_WINDOW_SIZE = 40
 MILESTONE_STABLE_RATIO = 0.6
-MILESTONE_NOTIFY_LIMIT = 5
-MILESTONE_NOTIFY_WINDOW_SECONDS = 10 * 60
+MILESTONE_NOTIFY_LIMIT = 15
+MILESTONE_NOTIFY_WINDOW_SECONDS = 5 * 60
 MILESTONE_RATELIMIT_MESSAGE = "Rate limit exceeded! Notify the owner or use `/manage milestones ratelimit_reset`."
 DEFAULT_MILESTONE_INITIALIZE_FORMAT = "$milestone_name initialized to `$new_value`."
 DEFAULT_MILESTONE_UPDATE_FORMAT = "$milestone_name updated from `$old_value` to `$new_value`."
