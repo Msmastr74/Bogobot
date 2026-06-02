@@ -55,7 +55,7 @@ class ChatItemProtocol(Protocol):
     author: ChatAuthorProtocol
 
 def format_chat_item(c: ChatItemProtocol) -> str:
-    discord_time = f"<t:{c.timestamp}:t>"
+    discord_time = f"<t:{c.timestamp // 1000}:t>"
     role_tag = ""
     if c.author.isChatOwner:
         role_tag = "👑 "
