@@ -101,7 +101,6 @@ async def setup(bot: BotCore):
         )),
     )
     api_task: asyncio.Task[None] | None = None
-    last_api_sort_values: list[int] | None = None
 
     def format_count(value: int | str) -> str:
         try:
@@ -252,8 +251,6 @@ async def setup(bot: BotCore):
             return data
 
     async def api_stats_loop() -> None:
-        nonlocal last_api_sort_values
-
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             while True:
@@ -264,9 +261,7 @@ async def setup(bot: BotCore):
                         event = apply_api_stats(data, timestamp)
                         if bot.milestones:
                             await update_milestones(None, timestamp)
-                        sort_values = bot.sort_values
-                        if event is not None and sort_values != last_api_sort_values:
-                            last_api_sort_values = list(sort_values)
+                        if event is not None:
                             new_values, best_count = event
                             await bot.new_value(new_values, best_count, timestamp=timestamp)
                 except asyncio.CancelledError:
