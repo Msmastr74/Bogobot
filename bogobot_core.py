@@ -21,7 +21,7 @@ from utils.ai import ai
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
-TARGET_VIDEO_ID = "7Y5eyyUNsYo"
+TARGET_VIDEO_ID = "DwbZpZxGEA0"
 CONSOLE_LOG_FORMAT = '%(asctime_f)s %(levelname_f)s %(name_f)s %(message)s'
 LOG_DATE_FORMAT = '%b %d %H:%M:%S'
 
