@@ -276,12 +276,16 @@ async def setup(bot: BotCore) -> None:
             api_fields = [
                 ("Engine Total", stats_list.get("engine_total", "Loading...")),
                 ("Crowd Total", stats_list.get("crowd_total", "Loading...")),
+                ("Combined Total", stats_list.get("combined_total", "Loading...")),
                 ("Engine Rate", stats_list.get("engine_rate", "Loading...")),
                 ("Crowd Rate", stats_list.get("crowd_rate", "Loading...")),
+                ("Best At", stats_list.get("best_at", "Loading...")),
                 ("Tick Best", stats_list.get("tick_best", "Loading...")),
                 ("Tick Best Source", stats_list.get("tick_best_source", "Loading...")),
                 ("Active Contributors", stats_list.get("active_contributors", "Loading...")),
                 ("Record Holder", stats_list.get("record_holder", "Loading...")),
+                ("Contributions Open", stats_list.get("contributions_open", "Loading...")),
+                ("Solve Confirmed", stats_list.get("solve_confirmed", "Loading...")),
             ]
         
         updated_at = (

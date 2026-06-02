@@ -40,16 +40,20 @@ class BogostreamRecordHolder(TypedDict):
 class BogostreamStats(TypedDict):
     engine_total: int
     crowd_total: int
+    combined_total: int
     engine_rate: int
     crowd_rate: int
     combined_rate: int
     best: int
+    best_at: int | None
     tick_best: int
     tick_best_arr: list[int]
     tick_best_source: str
     active_contributors: int
     record_holder: BogostreamRecordHolder | None
     uptime_s: int | None
+    contributions_open: bool | None
+    solve_confirmed: bool | None
 
 
 def parse_number(value: str | None) -> Decimal | None:
@@ -138,16 +142,20 @@ async def setup(bot: BotCore):
                 return {
                     "engine_total": int(engine["total"]),
                     "crowd_total": int(crowd["total_shuffles"]),
+                    "combined_total": int(raw.get("combined_total", int(engine["total"]) + int(crowd["total_shuffles"]))),
                     "engine_rate": round(float(engine["rate"])),
                     "crowd_rate": round(float(crowd["rate"])),
                     "combined_rate": round(float(raw["combined_rate"])),
                     "best": int(raw.get("record", engine.get("best", 0))),
+                    "best_at": int(engine["best_at"]) if "best_at" in engine else None,
                     "tick_best": int(combined_tick["best"]),
                     "tick_best_arr": [int(value) for value in tick_best_arr_raw],
                     "tick_best_source": source_text(combined_tick.get("source")),
                     "active_contributors": int(crowd.get("active", 0)),
                     "record_holder": record_holder,
                     "uptime_s": int(engine["uptime_s"]) if "uptime_s" in engine else None,
+                    "contributions_open": bool(raw["contributions_open"]) if "contributions_open" in raw else None,
+                    "solve_confirmed": bool(raw["solve_confirmed"]) if "solve_confirmed" in raw else None,
                 }
 
             tick_best_arr_raw = raw["tick_best_arr"]
@@ -166,16 +174,20 @@ async def setup(bot: BotCore):
             return {
                 "engine_total": int(raw["engine_total"]),
                 "crowd_total": int(raw["crowd_total"]),
+                "combined_total": int(raw.get("combined_total", int(raw["engine_total"]) + int(raw["crowd_total"]))),
                 "engine_rate": int(raw["engine_rate"]),
                 "crowd_rate": int(raw["crowd_rate"]),
                 "combined_rate": int(raw["combined_rate"]),
                 "best": int(raw["best"]),
+                "best_at": int(raw["best_at"]) if "best_at" in raw else None,
                 "tick_best": int(raw["tick_best"]),
                 "tick_best_arr": [int(value) for value in tick_best_arr_raw],
                 "tick_best_source": source_text(source),
                 "active_contributors": int(raw["active_contributors"]),
                 "record_holder": record_holder,
                 "uptime_s": None,
+                "contributions_open": bool(raw["contributions_open"]) if "contributions_open" in raw else None,
+                "solve_confirmed": bool(raw["solve_confirmed"]) if "solve_confirmed" in raw else None,
             }
         except (KeyError, TypeError, ValueError):
             return None
@@ -194,7 +206,7 @@ async def setup(bot: BotCore):
         best_shuffle_sections = sections_from_sort_values(sort_values)
         new_values = list(zip(best_shuffle_sections, sort_values, strict=False))
         best_count = max(0, min(bot.SORT_SECTION_COUNT, int(data["tick_best"])))
-        combined_total = data["engine_total"] + data["crowd_total"]
+        combined_total = data["combined_total"]
         record_holder = data["record_holder"]
         record_holder_text = (
             f"{record_holder['nickname']} ({record_holder['value']}/{bot.SORT_SECTION_COUNT})"
@@ -207,8 +219,10 @@ async def setup(bot: BotCore):
             "shuffles": format_count(combined_total),
             "engine_total": format_count(data["engine_total"]),
             "crowd_total": format_count(data["crowd_total"]),
+            "combined_total": format_count(combined_total),
             "comparisons": "N/A",
             "best_run": f"{data['best']}/{bot.SORT_SECTION_COUNT}",
+            "best_at": format_count(data["best_at"]) if data["best_at"] is not None else "N/A",
             "tick_best": f"{data['tick_best']}/{bot.SORT_SECTION_COUNT}",
             "tick_best_source": data["tick_best_source"],
             "shuffles_sec": format_count(data["combined_rate"]),
@@ -216,6 +230,8 @@ async def setup(bot: BotCore):
             "crowd_rate": format_count(data["crowd_rate"]),
             "active_contributors": format_count(data["active_contributors"]),
             "record_holder": record_holder_text,
+            "contributions_open": "Yes" if data["contributions_open"] else "No" if data["contributions_open"] is False else "Unknown",
+            "solve_confirmed": "Yes" if data["solve_confirmed"] else "No" if data["solve_confirmed"] is False else "Unknown",
             "average_best_shuffle": "N/A",
             "uptime": format_duration(uptime) if uptime is not None else "N/A",
         })
