@@ -218,25 +218,8 @@ class VideoArchiver:
                 microsecond=0,
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
-        frame = self._frame_at_or_before(video_path, relative_seconds)
-        if frame is not None:
-            frame_index, frame_pts = frame
-            relative_seconds = frame_pts
-        else:
-            frame_index = None
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if video_path.suffix.lower() == ".ts" and frame_index is not None:
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-y",
-                "-i", str(video_path),
-                "-vf", f"select=eq(n\\,{frame_index})",
-                "-frames:v", "1",
-                "-q:v", str(max(1, int(quality))),
-            ]
-        elif video_path.suffix.lower() == ".ts":
+        if video_path.suffix.lower() == ".ts":
             command = [
                 "ffmpeg",
                 "-hide_banner",
