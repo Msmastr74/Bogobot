@@ -218,6 +218,9 @@ class VideoArchiver:
                 microsecond=0,
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
+        frame_pts = self._frame_pts_at_or_after(video_path, relative_seconds)
+        if frame_pts is not None:
+            relative_seconds = frame_pts
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if video_path.suffix.lower() == ".ts":
             command = [
@@ -254,6 +257,28 @@ class VideoArchiver:
             self.logger.warning(f"Could not extract video archive frame: {stderr}")
             return False
         return output_path.exists()
+
+    def _frame_pts_at_or_after(self, video_path: Path, relative_seconds: float) -> float | None:
+        frame_pts = self._read_frame_pts(video_path)
+        if not frame_pts:
+            return None
+
+        segment_base = 0.0
+        segment_first_pts = frame_pts[0][1]
+        previous_pts = segment_first_pts
+        previous_timeline_pts = 0.0
+        last_timeline_pts = 0.0
+        for _, pts in frame_pts:
+            if pts < previous_pts:
+                segment_base = previous_timeline_pts
+                segment_first_pts = pts
+            timeline_pts = segment_base + max(0.0, pts - segment_first_pts)
+            if timeline_pts >= relative_seconds:
+                return timeline_pts
+            previous_pts = pts
+            previous_timeline_pts = timeline_pts
+            last_timeline_pts = timeline_pts
+        return last_timeline_pts
 
     def _frame_at_or_before(self, video_path: Path, relative_seconds: float) -> tuple[int, float] | None:
         frame_pts = self._read_frame_pts(video_path)
