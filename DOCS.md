@@ -86,15 +86,15 @@ Archive configuration:
     "height": 360,
     "fps": 1,
     "crf": 36,
-    "preset": "superfast",
+    "preset": "fast",
     "tune": "animation",
-    "keyint": 10,
+    "keyint": 30,
     "final_format": "mkv"
   }
 }
 ```
 
-The compact monitor archive uses `path`, `flush_interval`, and `chunk_event_limit`. The visual archive records to daily appendable MPEG-TS `.ts` working files in `video.dir` when `video.enabled` is true or `/manage video_archive start` is used. `/manage video_archive start` and `restart` persist `video.enabled: true`; `stop` persists `false`, so recording state survives bot restarts. `video.crf` controls HEVC quality/size; higher values are smaller and lower quality. `36` is an aggressive archive default, not a required value. `video.tune` is passed to FFmpeg's `libx265 -tune` option, with `animation` as the default because the stream is mostly flat-color UI. Set it to `null` or an empty string to omit `-tune`. Current-day `.ts` files stay appendable across stops and restarts. When a recording rolls to a new day or an old `.ts` file is found on startup, the bot remuxes finished `.ts` files to `video.final_format` (`mkv`, `mp4`, or `ts`). The bot still accepts older top-level `archive_*` and `archive_video_*` keys as fallbacks.
+The compact monitor archive uses `path`, `flush_interval`, and `chunk_event_limit`. The visual archive records to daily appendable MPEG-TS `.ts` working files in `video.dir` when `video.enabled` is true or `/manage video_archive start` is used. `/manage video_archive start` and `restart` persist `video.enabled: true`; `stop` persists `false`, so recording state survives bot restarts. `video.crf` controls HEVC quality/size; higher values are smaller and lower quality. `36` is an aggressive archive default, not a required value. `video.preset` defaults to `fast` for better compression without changing CRF quality, and `video.keyint` defaults to `30` to reduce keyframe overhead while keeping archive frame lookup practical. `video.tune` is passed to FFmpeg's `libx265 -tune` option, with `animation` as the default because the stream is mostly flat-color UI. Set it to `null` or an empty string to omit `-tune`. Current-day `.ts` files stay appendable across stops and restarts. When a recording rolls to a new day or an old `.ts` file is found on startup, the bot remuxes finished `.ts` files to `video.final_format` (`mkv`, `mp4`, or `ts`). The bot still accepts older top-level `archive_*` and `archive_video_*` keys as fallbacks.
 
 ## Discord Subclass
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.

@@ -123,9 +123,9 @@ async def setup(bot: BotCore):
         height=int(video_setting("height", 360)),
         fps=float(video_setting("fps", bot.config.get("fps", 1))),
         crf=int(video_setting("crf", 22)),
-        preset=str(video_setting("preset", "superfast")),
+        preset=str(video_setting("preset", "fast")),
         tune=video_setting("tune", "animation"),
-        keyint=int(video_setting("keyint", 10)),
+        keyint=int(video_setting("keyint", 30)),
         final_format=str(video_setting("final_format", "mkv")),
         logger=bot.logger.getChild("VideoArchive"),
     )
