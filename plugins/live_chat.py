@@ -8,9 +8,13 @@ from utils.monitoring import PersistentChannelMonitor
 
 from bogobot_core import BotCore, TARGET_VIDEO_ID
 from utils import groups, tasks
+from utils.discord import count_characters, split_text_to_character_limit
 import pytchat
 from pytchat.processors.default.processor import Chatdata
 import time
+
+MAX_ITEMS = 30
+MAX_LENGTH = 3900
 
 class LiveChatView(discord.ui.LayoutView):
     def __init__(self, body: str):
@@ -68,9 +72,23 @@ def format_chat_item(c: ChatItemProtocol) -> str:
     return f"{discord_time} **{c.author.name}{role_tag}** {c.message}"
 
 chat = None
-chat_buffer: deque[ChatItemProtocol] = deque(maxlen=20)
+chat_buffer: deque[ChatItemProtocol] = deque(maxlen=MAX_ITEMS)
 backoff = discord.backoff.ExponentialBackoff(base=2)
 next_retry_at = 0.0
+
+def format_chat_buffer() -> str:
+    messages = [format_chat_item(msg) for msg in chat_buffer]
+    while messages:
+        body = "\n".join(messages)
+        if count_characters(body) <= MAX_LENGTH:
+            return body
+        messages.pop(0)
+    if not chat_buffer:
+        return ""
+    message = format_chat_item(chat_buffer[-1])
+    pieces = split_text_to_character_limit(message, MAX_LENGTH, max_pieces=1)
+    return pieces[0] if pieces else ""
+
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
     log = bot.logger.getChild("LiveChatMonitor")
@@ -126,14 +144,11 @@ async def setup(bot: BotCore):
 
             chat_data = chat.get()
             assert isinstance(chat_data, Chatdata)
-            messages = []
 
             chat_buffer.extend(chat_data.items)
-            for msg in chat_buffer:
-                messages.append(format_chat_item(msg))
 
             return  {
-                "view": LiveChatView("\n".join(messages))
+                "view": LiveChatView(format_chat_buffer())
             }
 
         except Exception as e:
