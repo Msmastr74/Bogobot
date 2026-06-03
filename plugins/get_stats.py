@@ -105,7 +105,7 @@ class StatsView(discord.ui.LayoutView):
                 field_container.add_item(discord.ui.TextDisplay(f"### {group_title}"))
             field_container.add_item(
                 discord.ui.TextDisplay("\n".join(
-                    f"**{header}**\n{content}"
+                    f"{header}: `{content}`"
                     for header, content in fields
                 ))
             )
