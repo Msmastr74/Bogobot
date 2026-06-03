@@ -85,13 +85,14 @@ class AccountView(discord.ui.LayoutView):
         container.add_item(discord.ui.Section(
             discord.ui.TextDisplay(f"### {user.mention}"),
             discord.ui.TextDisplay('\n'.join(basic_info)),
-            discord.ui.TextDisplay(''.join([
-                format_user_usage(user_usage(user.id, None), False) + "\n",
-                self._format_data("Bogotree", bogotree_data),
-                self._format_data("Cbogo", cbogo_data),
-            ])),
             accessory=discord.ui.Thumbnail(user.display_avatar.url)
         ))
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(format_user_usage(user_usage(user.id, None), False)))
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(self._format_data("Bogotree", bogotree_data)))
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(self._format_data("Cbogo", cbogo_data)))
         self.add_item(container)
     
     def _format_data(self, title: str, data: Mapping[str, Any]):

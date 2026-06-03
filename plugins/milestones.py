@@ -37,20 +37,20 @@ class MilestoneMessageView(discord.ui.LayoutView):
         # this view into the global interaction listener cache entirely.
         super().__init__(timeout=None)
 
-        self.add_item(discord.ui.TextDisplay(f"## {title}"))
-        self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(body or "\u200b"),
-            accent_colour=discord.Color.gold(),
-        ))
-
+        container = discord.ui.Container()
+        container.add_item(discord.ui.TextDisplay(f"## {title}"))
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(body or "-# No content"))
         if gallery_items:
+            container.add_item(discord.ui.Separator())
             gallery = discord.ui.MediaGallery()
             for filename, description in gallery_items[:10]:
                 gallery.add_item(
                     media=f"attachment://{filename}",
                     description=description[:256],
                 )
-            self.add_item(gallery)
+            container.add_item(gallery)
+        self.add_item(container)
 
 
 def milestone_image_file_factory(img: Image.Image, filename: str) -> Callable[[], discord.File]:

@@ -18,6 +18,7 @@ from plugins.stats import SortSectionReader, format_duration
 BOGOSTREAM_LEADERBOARD_API_URL = "https://bogo.swapjs.dev/api/leaderboard"
 BOGOSTREAM_CONTRIBUTOR_API_URL = "https://bogo.swapjs.dev/api/contributor"
 STREAMBOARD_LIMIT = 10
+StatsFieldGroup = tuple[str | None, Iterable[tuple[str, str]]]
 
 
 class StreamBadge(TypedDict, total=False):
@@ -88,15 +89,25 @@ class StatsView(discord.ui.LayoutView):
         self,
         *,
         title = "Bogostream Statistics",
-        fields: Iterable[tuple[str, str]],
+        groups: Iterable[StatsFieldGroup],
         updated_at: datetime.datetime | None = None
     ):
         super().__init__(timeout=None)
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
         field_container = discord.ui.Container()
-        for header, content in fields:
+        for index, (group_title, fields) in enumerate(groups):
+            fields = list(fields)
+            if not fields:
+                continue
+            if index and len(field_container.children) > 0:
+                field_container.add_item(discord.ui.Separator())
+            if group_title is not None:
+                field_container.add_item(discord.ui.TextDisplay(f"### {group_title}"))
             field_container.add_item(
-                discord.ui.TextDisplay(f"**{header}**\n{content}")
+                discord.ui.TextDisplay("\n".join(
+                    f"**{header}**\n{content}"
+                    for header, content in fields
+                ))
             )
         self.add_item(field_container)
         
@@ -162,14 +173,12 @@ class StreamboardView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(discord.ui.TextDisplay("## Bogostream Leaderboard"))
         self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay("### Total"),
-            discord.ui.TextDisplay(self._leaderboard_text(total, value_key="total")),
-            accent_colour=discord.Colour.gold(),
-        ))
-        self.add_item(discord.ui.Container(
             discord.ui.TextDisplay("### Current"),
             discord.ui.TextDisplay(self._leaderboard_text(current, value_key="rate")),
-            accent_colour=discord.Colour.green(),
+        ))
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("### Total"),
+            discord.ui.TextDisplay(self._leaderboard_text(total, value_key="total")),
         ))
 
         updated_at = datetime_from_epoch_ms(max(
@@ -221,7 +230,6 @@ class StreamContributorView(discord.ui.LayoutView):
         self.add_item(discord.ui.TextDisplay(f"## {nickname}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(self._body(contributor)),
-            accent_colour=discord.Colour.blurple(),
         ))
 
         created_at = datetime_from_epoch_ms(contributor.get("created_at"))
@@ -271,17 +279,23 @@ async def setup(bot: BotCore) -> None:
         average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
         uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = bot.get_stream_uptime()
-        api_fields: list[tuple[str, str]] = []
+        api_total_fields: list[tuple[str, str]] = []
+        api_tick_fields: list[tuple[str, str]] = []
+        api_contributor_fields: list[tuple[str, str]] = []
         if using_api_stats() or "engine_total" in stats_list or "crowd_total" in stats_list:
-            api_fields = [
+            api_total_fields = [
                 ("Engine Total", stats_list.get("engine_total", "Loading...")),
                 ("Crowd Total", stats_list.get("crowd_total", "Loading...")),
                 ("Combined Total", stats_list.get("combined_total", "Loading...")),
                 ("Engine Rate", stats_list.get("engine_rate", "Loading...")),
                 ("Crowd Rate", stats_list.get("crowd_rate", "Loading...")),
+            ]
+            api_tick_fields = [
                 ("Best At", stats_list.get("best_at", "Loading...")),
                 ("Tick Best", stats_list.get("tick_best", "Loading...")),
                 ("Tick Best Source", stats_list.get("tick_best_source", "Loading...")),
+            ]
+            api_contributor_fields = [
                 ("Active Contributors", stats_list.get("active_contributors", "Loading...")),
                 ("Record Holder", stats_list.get("record_holder", "Loading...")),
                 ("Contributions Open", stats_list.get("contributions_open", "Loading...")),
@@ -295,16 +309,24 @@ async def setup(bot: BotCore) -> None:
         )
         view = StatsView(
             title=title,
-            fields=[
-                ("Source", "Bogostream API" if using_api_stats() else "OCR"),
-                ("Shuffles", shuffles),
-                ("Comparisons", comparisons),
-                ("Best Run", best_run),
-                ("Shuffles Per Second", shuffles_sec),
-                ("Average Best Shuffle", average_best_shuffle),
-                ("Uptime [STREAM]", uptime),
-                *api_fields,
-                ("Elapsed Time [STATIC]", elapsed_time),
+            groups=[
+                (None, [
+                    ("Source", "Bogostream API" if using_api_stats() else "OCR"),
+                ]),
+                ("Stream", [
+                    ("Shuffles", shuffles),
+                    ("Comparisons", comparisons),
+                    ("Best Run", best_run),
+                    ("Shuffles Per Second", shuffles_sec),
+                    ("Average Best Shuffle", average_best_shuffle),
+                ]),
+                ("Bogostream API", api_total_fields),
+                ("Recent Best", api_tick_fields),
+                ("Contributors", api_contributor_fields),
+                ("Timing", [
+                    ("Uptime [STREAM]", uptime),
+                    ("Elapsed Time [STATIC]", elapsed_time),
+                ]),
             ],
             updated_at=updated_at,
         )

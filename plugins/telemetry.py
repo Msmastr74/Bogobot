@@ -58,7 +58,6 @@ class UsageView(discord.ui.LayoutView):
         self.add_item(discord.ui.TextDisplay(f"### {title}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(body or "\u200d"),
-            accent_colour=discord.Color.blurple(),
         ))
 
 total_by_user: Counter[int] = Counter()

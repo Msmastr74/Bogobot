@@ -21,7 +21,7 @@ class LiveChatView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(discord.ui.TextDisplay("## Live Chat"))
         self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(body or "\u200d")
+            discord.ui.TextDisplay(body or "-# No messages yet")
         ))
 
 class LiveChatPayload(TypedDict):
@@ -94,7 +94,7 @@ async def setup(bot: BotCore):
     log = bot.logger.getChild("LiveChatMonitor")
 
     def initial_payload() -> LiveChatPayload:
-        return {"view": LiveChatView("")}
+        return {"view": LiveChatView(format_chat_buffer())}
 
     def terminate_chat() -> None:
         global chat
@@ -135,7 +135,7 @@ async def setup(bot: BotCore):
 
         # Non-blocking retry delay
         if now < next_retry_at:
-            return {"view": LiveChatView("")}
+            return {"view": LiveChatView(format_chat_buffer())}
 
         try:
             if chat is None or not chat.is_alive():
@@ -157,7 +157,7 @@ async def setup(bot: BotCore):
             terminate_chat()
             schedule_retry()
 
-            return {"view": LiveChatView("")}
+            return {"view": LiveChatView(format_chat_buffer())}
     
     @tasks.loop(seconds=5)
     async def update_chat_monitor():
