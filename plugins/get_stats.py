@@ -1,11 +1,12 @@
 import asyncio
 import io
 import time
-from typing import Any, Iterable, TypedDict, cast
+from typing import Any, Iterable, TypedDict
 
 import aiohttp
 import discord
 import datetime
+from pydantic import ValidationError
 
 from bogobot_core import BotCore
 from PIL import Image
@@ -14,47 +15,18 @@ from utils.ai import AIParam, action
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups
 from plugins.stats import SortSectionReader, format_duration
-from utils.schemas import cached_stats_display, stats_display_rows
+from utils.schemas import (
+    CachedStatsDisplay,
+    StatValue,
+    StreamContributor,
+    StreamboardEntry,
+    StreamboardLeaderboard,
+)
 
 BOGOSTREAM_LEADERBOARD_API_URL = "https://bogo.swapjs.dev/api/leaderboard"
 BOGOSTREAM_CONTRIBUTOR_API_URL = "https://bogo.swapjs.dev/api/contributor"
 STREAMBOARD_LIMIT = 10
 StatsFieldGroup = tuple[str | None, Iterable[tuple[str, str]]]
-
-
-class StreamBadge(TypedDict, total=False):
-    id: str
-    name: str
-    rarity: str
-    held: bool
-    edition: int | None
-    value: int | None
-
-
-class StreamboardEntry(TypedDict, total=False):
-    nickname: str
-    total: int
-    rate: int
-    devices: int
-    badges: list[StreamBadge]
-
-
-class StreamboardLeaderboard(TypedDict, total=False):
-    top: list[StreamboardEntry]
-    count: int
-    sum_all: int
-    view: str
-    updated_at: int
-
-
-class StreamContributor(TypedDict, total=False):
-    nickname: str
-    total: int
-    all_time_best: int
-    active_ms: int
-    max_session_ms: int
-    badges: list[StreamBadge]
-    created_at: int
 
 
 def format_count(value: Any) -> str:
@@ -63,27 +35,6 @@ def format_count(value: Any) -> str:
     except (TypeError, ValueError):
         return "Unknown"
 
-
-def datetime_from_epoch_ms(value: Any) -> datetime.datetime | None:
-    try:
-        return datetime.datetime.fromtimestamp(int(value) / 1000)
-    except (TypeError, ValueError, OSError):
-        return None
-
-
-def format_badges(badges: list[StreamBadge], *, held_only: bool = False) -> str:
-    if held_only:
-        badges = [
-            badge
-            for badge in badges
-            if badge.get("held")
-        ]
-    if not badges:
-        return "None"
-    return ", ".join(
-        badge.get("name") or badge.get("id") or "unknown"
-        for badge in badges
-    )
 
 class StatsView(discord.ui.LayoutView):
     def __init__(
@@ -182,10 +133,11 @@ class StreamboardView(discord.ui.LayoutView):
             discord.ui.TextDisplay(self._leaderboard_text(total, value_key="total")),
         ))
 
-        updated_at = datetime_from_epoch_ms(max(
-            int(total.get("updated_at", 0)),
-            int(current.get("updated_at", 0)),
-        ))
+        updated_at = max(
+            total.updated_datetime(),
+            current.updated_datetime(),
+            key=lambda value: value.timestamp() if value is not None else 0,
+        )
         if updated_at is not None:
             self.add_item(discord.ui.TextDisplay(
                 f"-# Updated at <t:{int(round(updated_at.timestamp()))}:T>"
@@ -197,7 +149,7 @@ class StreamboardView(discord.ui.LayoutView):
         *,
         value_key: str,
     ) -> str:
-        rows = leaderboard.get("top", [])
+        rows = leaderboard.top
         if not rows:
             return "No contributors found."
 
@@ -205,18 +157,18 @@ class StreamboardView(discord.ui.LayoutView):
             self._row(index, row, value_key=value_key)
             for index, row in enumerate(rows, start=1)
         ]
-        sum_all = leaderboard.get("sum_all")
+        sum_all = leaderboard.sum_all
         if sum_all is not None:
             label = "Total" if value_key == "total" else "Combined rate"
             lines.append(f"\n{label}: `{format_count(sum_all)}`")
         return "\n".join(lines)
 
     def _row(self, index: int, row: StreamboardEntry, *, value_key: str) -> str:
-        nickname = row.get("nickname", "unknown")
-        value = format_count(row.get(value_key, 0))
+        nickname = row.nickname
+        value = format_count(getattr(row, value_key))
         suffix = "/s" if value_key == "rate" else ""
-        badges = format_badges(row.get("badges", []))
-        devices = row.get("devices")
+        badges = row.badges_text()
+        devices = row.devices
         devices_text = f" | Threads: `{devices}`" if devices is not None else ""
         return (
             f"{index}. **{nickname}** - `{value}{suffix}`"
@@ -227,27 +179,26 @@ class StreamboardView(discord.ui.LayoutView):
 class StreamContributorView(discord.ui.LayoutView):
     def __init__(self, contributor: StreamContributor) -> None:
         super().__init__(timeout=None)
-        nickname = contributor.get("nickname", "unknown")
-        self.add_item(discord.ui.TextDisplay(f"## {nickname}"))
+        self.add_item(discord.ui.TextDisplay(f"## {contributor.nickname}"))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(self._body(contributor)),
         ))
 
-        created_at = datetime_from_epoch_ms(contributor.get("created_at"))
+        created_at = contributor.created_datetime()
         if created_at is not None:
             self.add_item(discord.ui.TextDisplay(
                 f"-# Contributor since <t:{int(round(created_at.timestamp()))}:R>"
             ))
 
     def _body(self, contributor: StreamContributor) -> str:
-        active_seconds = int(contributor.get("active_ms", 0)) // 1000
-        max_session_seconds = int(contributor.get("max_session_ms", 0)) // 1000
+        active_seconds = contributor.active_ms // 1000
+        max_session_seconds = contributor.max_session_ms // 1000
         return "\n".join([
-            f"Total: `{format_count(contributor.get('total', 0))}`",
-            f"All-time best: `{contributor.get('all_time_best', 0)}`",
+            f"Total: `{format_count(contributor.total)}`",
+            f"All-time best: `{contributor.all_time_best}`",
             f"Active time: `{format_duration(active_seconds)}`",
             f"Longest session: `{format_duration(max_session_seconds)}`",
-            f"Badges: {format_badges(contributor.get('badges', []), held_only=True)}",
+            f"Badges: {contributor.badges_text(held_only=True)}",
         ])
 
 
@@ -269,6 +220,18 @@ async def setup(bot: BotCore) -> None:
         stats_source = str(bot.config.get("stats_source", "api")).lower()
         return stats_source in {"api", "event", "events"}
 
+    def cached_stats_display(
+        stats: dict[str, StatValue],
+        *,
+        source: str,
+        elapsed_time: str,
+    ) -> CachedStatsDisplay:
+        return CachedStatsDisplay.model_validate({
+            **stats,
+            "source": source,
+            "elapsed_time": elapsed_time,
+        })
+
     def stats_payload(title="Bogostream Statistics Monitor") -> StatsPayload:
         stats_list = bot.stats
 
@@ -286,7 +249,7 @@ async def setup(bot: BotCore) -> None:
         )
         view = StatsView(
             title=title,
-            groups=stats_display_rows(display_model),
+            groups=display_model.groups(),
             updated_at=updated_at,
         )
         return { 'view': view }
@@ -326,9 +289,13 @@ async def setup(bot: BotCore) -> None:
                 "limit": STREAMBOARD_LIMIT,
             },
         )
-        if not isinstance(data, dict) or not isinstance(data.get("top"), list):
+        if data is None:
             return None
-        return cast(StreamboardLeaderboard, data)
+        try:
+            return StreamboardLeaderboard.model_validate(data)
+        except ValidationError:
+            bot.logger.warning("Bogostream leaderboard API returned an unexpected payload shape")
+            return None
 
     async def fetch_contributor(
         session: aiohttp.ClientSession,
@@ -339,9 +306,13 @@ async def setup(bot: BotCore) -> None:
             contributor_url,
             params={"nickname": nickname},
         )
-        if not isinstance(data, dict) or not isinstance(data.get("nickname"), str):
+        if data is None:
             return None
-        return cast(StreamContributor, data)
+        try:
+            return StreamContributor.model_validate(data)
+        except ValidationError:
+            bot.logger.warning("Bogostream contributor API returned an unexpected payload shape")
+            return None
 
     @bot.setup.command(
         name="streamboard",

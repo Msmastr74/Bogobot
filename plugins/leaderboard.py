@@ -3,23 +3,14 @@ from typing import TypedDict
 
 import aiohttp
 import discord
+from pydantic import ValidationError
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups, tasks
 from utils.ai import AIParam, action
+from utils.schemas import SortoffsLeaderboard, SortoffsPlayer
 
 from bogobot_core import BotCore
-
-class Player(TypedDict, total=False):
-    pos: int
-    name: str
-    elo: int
-    peak_elo: int
-    rank: str
-    games_played: int
-    win_rate: int
-    current_streak: int
-    max_win_streak: int
 
 LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
 LEADERBOARD_LIMIT = 25
@@ -31,7 +22,7 @@ class LeaderboardView(discord.ui.LayoutView):
         *,
         title: str,
         subtitle: str,
-        rows: list[Player],
+        rows: list[SortoffsPlayer],
         updated_at: int | None = None,
         limit: int = LEADERBOARD_LIMIT,
         bot: BotCore
@@ -52,7 +43,7 @@ class LeaderboardView(discord.ui.LayoutView):
             footer = f"{footer} - Updated <t:{updated_at}:R>"
         self.add_item(discord.ui.TextDisplay(f"-# {footer}"))
 
-    def _body(self, rows: list[Player], *, limit: int) -> str:
+    def _body(self, rows: list[SortoffsPlayer], *, limit: int) -> str:
         if not rows:
             return "No leaderboard data available."
 
@@ -61,18 +52,11 @@ class LeaderboardView(discord.ui.LayoutView):
             for player in rows[:limit]
         )
 
-    def _row(self, player: Player) -> str:
-        pos = player.get("pos", "?")
-        rank = "grandchampion" if pos == 1 else player.get("rank", "")
+    def _row(self, player: SortoffsPlayer) -> str:
+        pos = player.pos
+        rank = "grandchampion" if pos == 1 else player.rank
         rank_emoji = self.bot.discord.get_emoji(rank)
-        name = player.get("name", "Unknown")
-        elo = player.get("elo", 0)
-        win_rate = player.get("win_rate", 0)
-
-        try:
-            streak = int(player.get("current_streak", "0"))
-        except (TypeError, ValueError):
-            streak = 0
+        streak = player.current_streak
 
         streak_text = ""
         if streak > 0:
@@ -81,8 +65,8 @@ class LeaderboardView(discord.ui.LayoutView):
             streak_text = f" | ❄️ {abs(streak)}"
 
         return (
-            f"{pos}. {rank_emoji} **{name}** - "
-            f"ELO: {elo} | Win Rate: {win_rate}%{streak_text}"
+            f"{pos}. {rank_emoji} **{player.name}** - "
+            f"ELO: {player.elo} | Win Rate: {player.win_rate}%{streak_text}"
         )
 
 class LeaderboardPayload(TypedDict):
@@ -91,22 +75,24 @@ class LeaderboardPayload(TypedDict):
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
 
-    async def fetch_leaderboard() -> list[Player]:
+    async def fetch_leaderboard() -> list[SortoffsPlayer]:
         try:
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(LEADERBOARD_URL) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        rows = data.get("rows", [])
-                        return rows if isinstance(rows, list) else []
+                        try:
+                            return SortoffsLeaderboard.model_validate(await resp.json()).rows
+                        except ValidationError:
+                            bot.logger.warning("Leaderboard API returned an unexpected payload shape")
+                            return []
                     bot.logger.warning(f"Leaderboard fetch failed with HTTP {resp.status}")
         except Exception as e:
             bot.logger.warning(f"Error fetching leaderboard: {e}")
         return []
     
     def leaderboard_payload(
-        rows: list[Player],
+        rows: list[SortoffsPlayer],
         *,
         title: str = "Leaderboard",
         subtitle: str = "Top players ranked by ELO",
