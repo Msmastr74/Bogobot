@@ -158,6 +158,7 @@ class VideoArchiver:
         if self.final_format == "ts" or ts_path.suffix != ".ts" or not ts_path.exists():
             return ts_path if ts_path.exists() else None
 
+        self.repair_recording_timestamps(ts_path)
         final_path = ts_path.with_suffix(f".{self.final_format}")
         tmp_path = ts_path.with_name(f"{ts_path.stem}.tmp.{self.final_format}")
         start_timestamp = self._read_start_timestamp(ts_path.stem)
@@ -217,9 +218,25 @@ class VideoArchiver:
                 microsecond=0,
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
-        relative_seconds = self._frame_pts_at_or_before(video_path, relative_seconds) or relative_seconds
+        frame = self._frame_at_or_before(video_path, relative_seconds)
+        if frame is not None:
+            frame_index, frame_pts = frame
+            relative_seconds = frame_pts
+        else:
+            frame_index = None
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if video_path.suffix.lower() == ".ts":
+        if video_path.suffix.lower() == ".ts" and frame_index is not None:
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", str(video_path),
+                "-vf", f"select=eq(n\\,{frame_index})",
+                "-frames:v", "1",
+                "-q:v", str(max(1, int(quality))),
+            ]
+        elif video_path.suffix.lower() == ".ts":
             command = [
                 "ffmpeg",
                 "-hide_banner",
@@ -255,7 +272,91 @@ class VideoArchiver:
             return False
         return output_path.exists()
 
-    def _frame_pts_at_or_before(self, video_path: Path, relative_seconds: float) -> float | None:
+    def _frame_at_or_before(self, video_path: Path, relative_seconds: float) -> tuple[int, float] | None:
+        frame_pts = self._read_frame_pts(video_path)
+        if not frame_pts:
+            return None
+
+        segment_base = 0.0
+        segment_first_pts = frame_pts[0][1]
+        previous_pts = segment_first_pts
+        previous_timeline_pts = 0.0
+        selected_index = frame_pts[0][0]
+        selected_timeline_pts = 0.0
+        for index, pts in frame_pts:
+            if pts < previous_pts:
+                segment_base = previous_timeline_pts
+                segment_first_pts = pts
+            timeline_pts = segment_base + max(0.0, pts - segment_first_pts)
+            if timeline_pts > relative_seconds:
+                break
+            selected_index = index
+            selected_timeline_pts = timeline_pts
+            previous_pts = pts
+            previous_timeline_pts = timeline_pts
+        return selected_index, selected_timeline_pts
+
+    def repair_recording_timestamps(self, ts_path: Path) -> bool:
+        if ts_path.suffix != ".ts" or not ts_path.exists():
+            return False
+        frame_pts = self._read_frame_pts(ts_path)
+        if not self._has_pts_reset(frame_pts):
+            return False
+
+        tmp_path = ts_path.with_name(f"{ts_path.stem}.repairing.ts")
+        # Keep each original in-segment frame delta, but collapse timestamp resets.
+        setpts = (
+            "settb=AVTB,"
+            "setpts=if(isnan(PREV_INPTS)\\,0\\,"
+            "if(lt(PTS\\,PREV_INPTS)\\,PREV_OUTPTS\\,PREV_OUTPTS+PTS-PREV_INPTS))"
+        )
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-i", str(ts_path),
+            "-an",
+            "-vf", setpts,
+            "-fps_mode", "passthrough",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx265",
+            "-preset", self.preset,
+            "-crf", str(self.crf),
+        ]
+        if self.tune is not None:
+            command.extend(["-tune", self.tune])
+        command.extend([
+            "-x265-params", f"keyint={self.keyint}:min-keyint={self.keyint}",
+            "-muxpreload", "0",
+            "-muxdelay", "0",
+            "-f", "mpegts",
+            str(tmp_path),
+        ])
+        result = subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="replace").strip()
+            self.logger.warning(f"Could not repair video archive timestamps {ts_path}: {stderr}")
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            return False
+
+        repaired_pts = self._read_frame_pts(tmp_path)
+        if not repaired_pts or self._has_pts_reset(repaired_pts):
+            self.logger.warning(f"Repaired video archive still has invalid timestamps: {ts_path}")
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            return False
+
+        tmp_path.replace(ts_path)
+        self.logger.info(f"Repaired video archive timestamps in {ts_path}")
+        return True
+
+    def _read_frame_pts(self, video_path: Path) -> list[tuple[int, float]]:
         result = subprocess.run(
             [
                 "ffprobe",
@@ -269,28 +370,26 @@ class VideoArchiver:
             stderr=subprocess.DEVNULL,
         )
         if result.returncode != 0:
-            return None
+            return []
 
-        frame_pts: list[float] = []
+        frame_pts: list[tuple[int, float]] = []
         for line in result.stdout.decode(errors="replace").splitlines():
             value = line.strip().rstrip(",")
             if not value:
                 continue
             try:
-                frame_pts.append(float(value))
+                frame_pts.append((len(frame_pts), float(value)))
             except ValueError:
                 continue
-        if not frame_pts:
-            return None
+        return frame_pts
 
-        first_pts = frame_pts[0]
-        selected = frame_pts[0]
-        for pts in frame_pts:
-            normalized_pts = pts - first_pts
-            if normalized_pts > relative_seconds:
-                break
-            selected = pts
-        return max(0.0, selected - first_pts)
+    def _has_pts_reset(self, frame_pts: list[tuple[int, float]]) -> bool:
+        previous_pts: float | None = None
+        for _, pts in frame_pts:
+            if previous_pts is not None and pts < previous_pts:
+                return True
+            previous_pts = pts
+        return False
 
     def _offer_sentinel(self) -> None:
         with contextlib.suppress(queue.Full):
@@ -327,13 +426,13 @@ class VideoArchiver:
             if stopped_path is not None and stopped_path.stem != day:
                 self.finalize_recording(stopped_path)
             self.finalize_old_recordings()
-            self._start_process(day)
+            self._ensure_start_timestamp(day, frame.timestamp)
+            self._start_process(day, frame.timestamp)
 
         process = self._process
         if process is None or process.stdin is None:
             raise RuntimeError("Video archive ffmpeg process is not writable")
 
-        self._ensure_start_timestamp(day, frame.timestamp)
         image = frame.image
         if image.mode != "RGB":
             image = image.convert("RGB")
@@ -346,10 +445,15 @@ class VideoArchiver:
             self._recorded_frames += 1
             self._last_frame_at = frame.timestamp
 
-    def _start_process(self, day: str) -> None:
+    def _start_process(self, day: str, timestamp: float) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         output_path = self.directory / f"{day}.ts"
+        self.repair_recording_timestamps(output_path)
         output_file = output_path.open("ab")
+        start_timestamp = self._read_start_timestamp(day)
+        if start_timestamp is None:
+            start_timestamp = timestamp
+        timestamp_offset = max(0.0, timestamp - start_timestamp)
 
         ffmpeg_cmd = [
             "ffmpeg",
@@ -361,7 +465,7 @@ class VideoArchiver:
             "-s", f"{self.width}x{self.height}",
             "-i", "pipe:0",
             "-an",
-            "-vf", "setpts=PTS-STARTPTS",
+            "-vf", f"setpts=PTS-STARTPTS+{timestamp_offset:.6f}/TB",
             "-vsync", "vfr",
             "-pix_fmt", "yuv420p",
             "-c:v", "libx265",
@@ -372,6 +476,8 @@ class VideoArchiver:
             ffmpeg_cmd.extend(["-tune", self.tune])
         ffmpeg_cmd.extend([
             "-x265-params", f"keyint={self.keyint}:min-keyint={self.keyint}",
+            "-muxpreload", "0",
+            "-muxdelay", "0",
             "-f", "mpegts",
             "pipe:1",
         ])
