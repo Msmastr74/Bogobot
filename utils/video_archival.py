@@ -218,18 +218,56 @@ class VideoArchiver:
                 microsecond=0,
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
-        frame_pts = self._frame_pts_at_or_after(video_path, relative_seconds)
-        if frame_pts is not None:
-            relative_seconds = frame_pts
+        frame_pts = self._read_frame_pts(video_path)
+        if not frame_pts:
+            return False
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        candidates = self._frame_pts_candidates_at_or_after(frame_pts, relative_seconds)
+        if not candidates:
+            return False
+        errors: list[str] = []
+        for candidate_seconds in candidates:
+            with contextlib.suppress(OSError):
+                output_path.unlink()
+            command = self._extract_frame_command(
+                video_path,
+                output_path,
+                candidate_seconds,
+                quality,
+            )
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            if result.returncode == 0 and output_path.exists():
+                return True
+            stderr = result.stderr.decode(errors="replace").strip()
+            if stderr:
+                errors.append(stderr)
+
+        if errors:
+            self.logger.warning(f"Could not extract video archive frame: {errors[-1]}")
+        else:
+            self.logger.warning("Could not extract video archive frame: no frame was written")
+        return False
+
+    def _extract_frame_command(
+        self,
+        video_path: Path,
+        output_path: Path,
+        relative_seconds: float,
+        quality: int,
+    ) -> list[str]:
         if video_path.suffix.lower() == ".ts":
             command = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel", "error",
                 "-y",
-                "-i", str(video_path),
                 "-ss", f"{relative_seconds:.3f}",
+                "-i", str(video_path),
                 "-frames:v", "1",
                 "-q:v", str(max(1, int(quality))),
             ]
@@ -247,38 +285,38 @@ class VideoArchiver:
         if output_path.suffix.lower() in {".jpg", ".jpeg"}:
             command.extend(["-pix_fmt", "yuvj420p"])
         command.append(str(output_path))
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="replace").strip()
-            self.logger.warning(f"Could not extract video archive frame: {stderr}")
-            return False
-        return output_path.exists()
+        return command
 
-    def _frame_pts_at_or_after(self, video_path: Path, relative_seconds: float) -> float | None:
-        frame_pts = self._read_frame_pts(video_path)
-        if not frame_pts:
-            return None
+    def _frame_pts_candidates_at_or_after(
+        self,
+        frame_pts: list[tuple[int, float]],
+        relative_seconds: float,
+    ) -> list[float]:
+        timeline_pts = self._frame_timeline_pts(frame_pts)
+        if not timeline_pts:
+            return []
+        selected_index = len(timeline_pts) - 1
+        for index, pts in enumerate(timeline_pts):
+            if pts >= relative_seconds:
+                selected_index = index
+                break
+        return list(reversed(timeline_pts[max(0, selected_index - self.keyint):selected_index + 1]))
 
+    def _frame_timeline_pts(self, frame_pts: list[tuple[int, float]]) -> list[float]:
         segment_base = 0.0
         segment_first_pts = frame_pts[0][1]
         previous_pts = segment_first_pts
         previous_timeline_pts = 0.0
-        last_timeline_pts = 0.0
+        timeline_pts: list[float] = []
         for _, pts in frame_pts:
             if pts < previous_pts:
                 segment_base = previous_timeline_pts
                 segment_first_pts = pts
-            timeline_pts = segment_base + max(0.0, pts - segment_first_pts)
-            if timeline_pts >= relative_seconds:
-                return timeline_pts
+            timeline_pt = segment_base + max(0.0, pts - segment_first_pts)
             previous_pts = pts
-            previous_timeline_pts = timeline_pts
-            last_timeline_pts = timeline_pts
-        return last_timeline_pts
+            previous_timeline_pts = timeline_pt
+            timeline_pts.append(timeline_pt)
+        return timeline_pts
 
     def _frame_at_or_before(self, video_path: Path, relative_seconds: float) -> tuple[int, float] | None:
         frame_pts = self._read_frame_pts(video_path)
