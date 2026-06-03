@@ -431,6 +431,33 @@ async def setup(bot: "BotCore"):
         )
 
 
+    @manage.command(name="loglevel", description="Temporarily set the runtime log level", perm_requirement=3)
+    async def loglevel(interaction: discord.Interaction, level: LogLevel | None = None):
+        current_level = logging.getLevelName(bot.logger.getEffectiveLevel())
+        root_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
+        if level is None:
+            await bot.discord.send(
+                f"Runtime log level is `{current_level}`. Root log level is `{root_level}`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        previous_level = logging.getLevelName(bot.logger.getEffectiveLevel())
+        levelno = log_level_mapping[level]
+        logging.getLogger().setLevel(max(levelno, logging.INFO))
+        bot.logger.setLevel(levelno)
+        bot.logger.warning(
+            f"{interaction.user} ({interaction.user.id}) changed runtime log level "
+            f"from {previous_level} to {level}."
+        )
+        await bot.discord.send(
+            f"Runtime log level changed from `{previous_level}` to `{level}`.",
+            response=True,
+            ephemeral=True,
+        )
+
+
     @manage.command(name="message", description="Manage a message", perm_requirement=3)
     async def message(
         interaction: discord.Interaction,

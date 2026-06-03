@@ -238,7 +238,7 @@ Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.act
 Current plugin responsibilities:
 
 - `accounts.py`: `/accounts` permission commands.
-- `admin.py`: `/manage state`, `/manage logs`, and `/manage message`.
+- `admin.py`: `/manage state`, `/manage logs`, `/manage loglevel`, and `/manage message`.
 - `archival.py`: compact append-only archive for observed monitor values and `/archive`.
 - `bogo.py`: random utility commands and small bogosort toys under `/bogo`, plus top-level `/sort` and random helpers.
 - `bogotree.py`: collaborative random equalization puzzle.
@@ -260,7 +260,7 @@ Current plugin responsibilities:
 - `utils/transformers.py`: Slash-command transformers such as `ColourTransformer` and `IntTransformer`.
 
 ## Admin Commands
-The admin plugin adds `/manage state` and `/manage logs`.
+The admin plugin adds `/manage state`, `/manage logs`, `/manage loglevel`, and `/manage message`.
 
 ## Management Commands
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
@@ -276,6 +276,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage message delete|react|unreact|pin|unpin|edit|reply message_id [channel_id] [emoji] [content]`: Deletes, reacts to, removes a reaction from, pins, unpins, edits, or replies to a message using a partial message reference. `channel_id` defaults to the current channel. `emoji` is required for `react` and `unreact`; `content` is required for `edit` and `reply`. `delete` is restricted to messages sent by the bot.
 - `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
 - `/manage logs`: Shows recent in-memory bot logs.
+- `/manage loglevel [level]`: Shows the current runtime log levels when `level` is omitted, or temporarily sets the Bogobot logger to `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, or `FATAL`. The root logger is capped at `INFO` minimum to avoid dependency debug noise.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
 - `/manage video_archive start|stop|restart|status`: Starts, stops, restarts, or inspects visual stream archive recording. Video archive files are daily appendable MPEG-TS files in `archive.video.dir`.
 - `/archive`: Shows archived monitor values with a public paginated view.
