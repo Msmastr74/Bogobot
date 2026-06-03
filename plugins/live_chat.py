@@ -65,7 +65,7 @@ def format_chat_item(c: ChatItemProtocol) -> str:
         role_tag = " ⭐"
     if c.type == "superChat":
         return f"{discord_time} 💰 **{c.author.name}{role_tag}** sent {c.amountString}: *{c.message}*"
-    return f"{discord_time} **{c.author.name}{role_tag}**: {c.message}"
+    return f"{discord_time} **{c.author.name}{role_tag}** {c.message}"
 
 chat = None
 chat_buffer: deque[ChatItemProtocol] = deque(maxlen=20)
