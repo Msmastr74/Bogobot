@@ -58,14 +58,14 @@ def format_chat_item(c: ChatItemProtocol) -> str:
     discord_time = f"<t:{c.timestamp // 1000}:t>"
     role_tag = ""
     if c.author.isChatOwner:
-        role_tag = "👑 "
+        role_tag = " 👑"
     elif c.author.isChatModerator:
-        role_tag = "🛡️ "
+        role_tag = " 🛡️"
     elif c.author.isChatSponsor:
-        role_tag = "⭐ "
+        role_tag = " ⭐"
     if c.type == "superChat":
-        return f"{discord_time} 💰 **{role_tag}{c.author.name}** sent {c.amountString}: *{c.message}*"
-    return f"{discord_time} **{role_tag}{c.author.name}**: {c.message}"
+        return f"{discord_time} 💰 **{c.author.name}{role_tag}** sent {c.amountString}: *{c.message}*"
+    return f"{discord_time} **{c.author.name}{role_tag}**: {c.message}"
 
 chat = None
 chat_buffer: deque[ChatItemProtocol] = deque(maxlen=20)
