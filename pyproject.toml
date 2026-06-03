@@ -18,4 +18,5 @@ dependencies = [
     "google-auth>=2.53.0",
     "google-auth-oauthlib>=1.4.0",
     "google-auth-httplib2>=0.4.0",
+    "pydantic>=2.13.0",
 ]

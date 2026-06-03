@@ -19,7 +19,7 @@ curl https://wasmtime.dev/install.sh -sSf | bash
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # streamlink: Livestream data extraction
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+python3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pydantic
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'

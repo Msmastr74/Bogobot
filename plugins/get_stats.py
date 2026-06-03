@@ -14,6 +14,7 @@ from utils.ai import AIParam, action
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups
 from plugins.stats import SortSectionReader, format_duration
+from utils.schemas import cached_stats_display, stats_display_rows
 
 BOGOSTREAM_LEADERBOARD_API_URL = "https://bogo.swapjs.dev/api/leaderboard"
 BOGOSTREAM_CONTRIBUTOR_API_URL = "https://bogo.swapjs.dev/api/contributor"
@@ -271,36 +272,12 @@ async def setup(bot: BotCore) -> None:
     def stats_payload(title="Bogostream Statistics Monitor") -> StatsPayload:
         stats_list = bot.stats
 
-        # Use .get() to prevent future KeyErrors if the cache is empty
-        shuffles = stats_list.get("shuffles", "Loading...")
-        comparisons = stats_list.get("comparisons", "Loading...")
-        best_run = stats_list.get("best_run", "Loading...")
-        shuffles_sec = stats_list.get("shuffles_sec", "Loading...")
-        average_best_shuffle = stats_list.get("average_best_shuffle", "Loading...")
-        uptime = stats_list.get("uptime", "Loading...")
         elapsed_time = bot.get_stream_uptime()
-        api_total_fields: list[tuple[str, str]] = []
-        api_tick_fields: list[tuple[str, str]] = []
-        api_contributor_fields: list[tuple[str, str]] = []
-        if using_api_stats() or "engine_total" in stats_list or "crowd_total" in stats_list:
-            api_total_fields = [
-                ("Engine Total", stats_list.get("engine_total", "Loading...")),
-                ("Crowd Total", stats_list.get("crowd_total", "Loading...")),
-                ("Combined Total", stats_list.get("combined_total", "Loading...")),
-                ("Engine Rate", stats_list.get("engine_rate", "Loading...")),
-                ("Crowd Rate", stats_list.get("crowd_rate", "Loading...")),
-            ]
-            api_tick_fields = [
-                ("Best At", stats_list.get("best_at", "Loading...")),
-                ("Tick Best", stats_list.get("tick_best", "Loading...")),
-                ("Tick Best Source", stats_list.get("tick_best_source", "Loading...")),
-            ]
-            api_contributor_fields = [
-                ("Active Contributors", stats_list.get("active_contributors", "Loading...")),
-                ("Record Holder", stats_list.get("record_holder", "Loading...")),
-                ("Contributions Open", stats_list.get("contributions_open", "Loading...")),
-                ("Solve Confirmed", stats_list.get("solve_confirmed", "Loading...")),
-            ]
+        display_model = cached_stats_display(
+            stats_list,
+            source="Bogostream API" if using_api_stats() else "OCR",
+            elapsed_time=elapsed_time,
+        )
         
         updated_at = (
             datetime.datetime.fromtimestamp(bot._last_ocr_refresh)
@@ -309,25 +286,7 @@ async def setup(bot: BotCore) -> None:
         )
         view = StatsView(
             title=title,
-            groups=[
-                (None, [
-                    ("Source", "Bogostream API" if using_api_stats() else "OCR"),
-                ]),
-                ("Stream", [
-                    ("Shuffles", shuffles),
-                    ("Comparisons", comparisons),
-                    ("Best Run", best_run),
-                    ("Shuffles Per Second", shuffles_sec),
-                    ("Average Best Shuffle", average_best_shuffle),
-                ]),
-                ("Bogostream API", api_total_fields),
-                ("Recent Best", api_tick_fields),
-                ("Contributors", api_contributor_fields),
-                ("Timing", [
-                    ("Uptime [STREAM]", uptime),
-                    ("Elapsed Time [STATIC]", elapsed_time),
-                ]),
-            ],
+            groups=stats_display_rows(display_model),
             updated_at=updated_at,
         )
         return { 'view': view }

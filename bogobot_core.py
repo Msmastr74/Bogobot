@@ -103,7 +103,7 @@ class BotCore(discord.Client):
             "uptime": OcrCrop(1150, 10, 1260, 30, whitelist="0123456789dhm ")
         }
         self.THRESHOLD = 165
-        self.stats: dict[str, str] = {}
+        self.stats: dict[str, str | int | float] = {}
         self.best_shuffle_sections: list[bool] = []
         self.sort_values: list[int] = []
         self.new_values: list[tuple[bool, int]] = []

@@ -1,7 +1,6 @@
 import numpy as np
 import time
 from decimal import Decimal, InvalidOperation
-from typing import Any, TypedDict
 from PIL import Image
 
 import aiohttp
@@ -9,6 +8,8 @@ from bogobot_core import BotCore
 from ocr import OcrCrop, OcrResult
 import asyncio
 import cv2
+from pydantic import ValidationError
+from utils.schemas import BogostreamApiStats
 
 BOGOSTREAM_STATS_API_URL = "https://bogo.swapjs.dev/api/stats"
 BOGOSTREAM_STATS_API_INTERVAL_SECONDS = 1.0
@@ -32,32 +33,18 @@ STAT_SUFFIX_POWERS = {
 }
 
 
-class BogostreamRecordHolder(TypedDict):
-    nickname: str
-    value: int
+def parse_number(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
 
+    if isinstance(value, int | float | Decimal):
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation:
+            return None
+        return number if number.is_finite() else None
 
-class BogostreamStats(TypedDict):
-    engine_total: int
-    crowd_total: int
-    combined_total: int
-    engine_rate: int
-    crowd_rate: int
-    combined_rate: int
-    best: int
-    best_at: int | None
-    tick_best: int
-    tick_best_arr: list[int]
-    tick_best_source: str
-    active_contributors: int
-    record_holder: BogostreamRecordHolder | None
-    uptime_s: int | None
-    contributions_open: bool | None
-    solve_confirmed: bool | None
-
-
-def parse_number(value: str | None) -> Decimal | None:
-    if not value:
+    if not isinstance(value, str):
         return None
 
     compact = value.strip().replace(",", "").replace(" ", "")
@@ -102,153 +89,40 @@ async def setup(bot: BotCore):
     )
     api_task: asyncio.Task[None] | None = None
 
-    def format_count(value: int | str) -> str:
-        try:
-            return f"{int(value):,}"
-        except (TypeError, ValueError):
-            return "Loading..."
-
-    def normalize_api_stats(raw: Any) -> BogostreamStats | None:
-        if not isinstance(raw, dict):
-            return None
-
-        def source_text(value: object) -> str:
-            text = str(value or "vps")
-            return "vps" if text == "engine" else text
-
-        try:
-            engine = raw.get("engine")
-            crowd = raw.get("crowd")
-            combined_tick = raw.get("combined_tick")
-
-            if (
-                isinstance(engine, dict)
-                and isinstance(crowd, dict)
-                and isinstance(combined_tick, dict)
-            ):
-                tick_best_arr_raw = combined_tick["best_arr"]
-                if not isinstance(tick_best_arr_raw, list):
-                    return None
-
-                record_holder_raw = raw.get("record_holder")
-                record_holder: BogostreamRecordHolder | None = None
-                if isinstance(record_holder_raw, dict):
-                    record_holder = {
-                        "nickname": str(record_holder_raw.get("nickname", "unknown")),
-                        "value": int(record_holder_raw.get("value", 0)),
-                    }
-
-                return {
-                    "engine_total": int(engine["total"]),
-                    "crowd_total": int(crowd["total_shuffles"]),
-                    "combined_total": int(raw.get("combined_total", int(engine["total"]) + int(crowd["total_shuffles"]))),
-                    "engine_rate": round(float(engine["rate"])),
-                    "crowd_rate": round(float(crowd["rate"])),
-                    "combined_rate": round(float(raw["combined_rate"])),
-                    "best": int(raw.get("record", engine.get("best", 0))),
-                    "best_at": int(engine["best_at"]) if "best_at" in engine else None,
-                    "tick_best": int(combined_tick["best"]),
-                    "tick_best_arr": [int(value) for value in tick_best_arr_raw],
-                    "tick_best_source": source_text(combined_tick.get("source")),
-                    "active_contributors": int(crowd.get("active", 0)),
-                    "record_holder": record_holder,
-                    "uptime_s": int(engine["uptime_s"]) if "uptime_s" in engine else None,
-                    "contributions_open": bool(raw["contributions_open"]) if "contributions_open" in raw else None,
-                    "solve_confirmed": bool(raw["solve_confirmed"]) if "solve_confirmed" in raw else None,
-                }
-
-            tick_best_arr_raw = raw["tick_best_arr"]
-            if not isinstance(tick_best_arr_raw, list):
-                return None
-
-            record_holder_raw = raw.get("record_holder")
-            record_holder: BogostreamRecordHolder | None = None
-            if isinstance(record_holder_raw, dict):
-                record_holder = {
-                    "nickname": str(record_holder_raw.get("nickname", "unknown")),
-                    "value": int(record_holder_raw.get("value", 0)),
-                }
-
-            source = str(raw.get("tick_best_source", "vps"))
-            return {
-                "engine_total": int(raw["engine_total"]),
-                "crowd_total": int(raw["crowd_total"]),
-                "combined_total": int(raw.get("combined_total", int(raw["engine_total"]) + int(raw["crowd_total"]))),
-                "engine_rate": int(raw["engine_rate"]),
-                "crowd_rate": int(raw["crowd_rate"]),
-                "combined_rate": int(raw["combined_rate"]),
-                "best": int(raw["best"]),
-                "best_at": int(raw["best_at"]) if "best_at" in raw else None,
-                "tick_best": int(raw["tick_best"]),
-                "tick_best_arr": [int(value) for value in tick_best_arr_raw],
-                "tick_best_source": source_text(source),
-                "active_contributors": int(raw["active_contributors"]),
-                "record_holder": record_holder,
-                "uptime_s": None,
-                "contributions_open": bool(raw["contributions_open"]) if "contributions_open" in raw else None,
-                "solve_confirmed": bool(raw["solve_confirmed"]) if "solve_confirmed" in raw else None,
-            }
-        except (KeyError, TypeError, ValueError):
-            return None
-
     def sections_from_sort_values(sort_values: list[int]) -> list[bool]:
         return [
             value == index + 1
             for index, value in enumerate(sort_values[:bot.SORT_SECTION_COUNT])
         ]
 
-    def apply_api_stats(data: BogostreamStats, timestamp: float) -> tuple[list[tuple[bool, int]], int] | None:
-        sort_values = data["tick_best_arr"][:bot.SORT_SECTION_COUNT]
+    def apply_api_stats(data: BogostreamApiStats, timestamp: float) -> tuple[list[tuple[bool, int]], int] | None:
+        sort_values = data.tick_best_arr[:bot.SORT_SECTION_COUNT]
         if len(sort_values) < bot.SORT_SECTION_COUNT:
             sort_values.extend([0] * (bot.SORT_SECTION_COUNT - len(sort_values)))
 
         best_shuffle_sections = sections_from_sort_values(sort_values)
         new_values = list(zip(best_shuffle_sections, sort_values, strict=False))
-        best_count = max(0, min(bot.SORT_SECTION_COUNT, int(data["tick_best"])))
-        combined_total = data["combined_total"]
-        record_holder = data["record_holder"]
-        record_holder_text = (
-            f"{record_holder['nickname']} ({record_holder['value']}/{bot.SORT_SECTION_COUNT})"
-            if record_holder is not None else
-            "engine"
-        )
-        uptime = data["uptime_s"]
-
-        bot.stats.update({
-            "shuffles": format_count(combined_total),
-            "engine_total": format_count(data["engine_total"]),
-            "crowd_total": format_count(data["crowd_total"]),
-            "combined_total": format_count(combined_total),
-            "comparisons": "N/A",
-            "best_run": f"{data['best']}/{bot.SORT_SECTION_COUNT}",
-            "best_at": format_count(data["best_at"]) if data["best_at"] is not None else "N/A",
-            "tick_best": f"{data['tick_best']}/{bot.SORT_SECTION_COUNT}",
-            "tick_best_source": data["tick_best_source"],
-            "shuffles_sec": format_count(data["combined_rate"]),
-            "engine_rate": format_count(data["engine_rate"]),
-            "crowd_rate": format_count(data["crowd_rate"]),
-            "active_contributors": format_count(data["active_contributors"]),
-            "record_holder": record_holder_text,
-            "contributions_open": "Yes" if data["contributions_open"] else "No" if data["contributions_open"] is False else "Unknown",
-            "solve_confirmed": "Yes" if data["solve_confirmed"] else "No" if data["solve_confirmed"] is False else "Unknown",
-            "average_best_shuffle": "N/A",
-            "uptime": format_duration(uptime) if uptime is not None else "N/A",
-        })
+        best_count = max(0, min(bot.SORT_SECTION_COUNT, int(data.recent_best.tick_best)))
+        bot.stats.update(data.stats_cache())
         bot._last_ocr_refresh = timestamp
         bot.best_shuffle_sections = best_shuffle_sections
         bot.sort_values = sort_values
         bot.new_values = new_values
         return new_values, best_count
 
-    async def fetch_api_stats(session: aiohttp.ClientSession) -> BogostreamStats | None:
+    async def fetch_api_stats(session: aiohttp.ClientSession) -> BogostreamApiStats | None:
         async with session.get(api_url) as response:
             if response.status != 200:
                 bot.logger.warning(f"Bogostream stats API returned HTTP {response.status}")
                 return None
-            data = normalize_api_stats(await response.json())
-            if data is None:
+            try:
+                return BogostreamApiStats.model_validate(
+                    await response.json(),
+                    context={"section_count": bot.SORT_SECTION_COUNT},
+                )
+            except ValidationError:
                 bot.logger.warning("Bogostream stats API returned an unexpected payload shape")
-            return data
+                return None
 
     async def api_stats_loop() -> None:
         timeout = aiohttp.ClientTimeout(total=10)
@@ -323,7 +197,7 @@ async def setup(bot: BotCore):
         stats = bot.stats
         best_run = stats.get("best_run")
         if best_run:
-            await bot.milestones.update("Best run", best_run, timestamp=frame_timestamp, img=img)
+            await bot.milestones.update("Best run", str(best_run), timestamp=frame_timestamp, img=img)
 
         for milestone_name, stat_name in (
             ("Shuffles", "shuffles"),
@@ -375,7 +249,7 @@ async def setup(bot: BotCore):
 
         return await bot.milestones.update(milestone_name, milestone_value, timestamp=timestamp, img=img)
 
-    def round_stat_down_to_power(value: str | None) -> str | None:
+    def round_stat_down_to_power(value: object) -> str | None:
         number = parse_number(value)
         if number is None:
             return None
@@ -387,7 +261,7 @@ async def setup(bot: BotCore):
         power = 10 ** (len(str(number)) - 1)
         return f"{number // power * power:,}"
 
-    def round_stat_down_to_int(value: str | None) -> str | None:
+    def round_stat_down_to_int(value: object) -> str | None:
         number = parse_number(value)
         if number is None:
             return None

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCallUnion
 
 import discord
+from pydantic import TypeAdapter, ValidationError
 import plugins.ai as ai_plugin
 from utils.ai_context import (
     AIContext,
@@ -33,6 +34,8 @@ ContextT = TypeVar("ContextT")
 ActionT = TypeVar("ActionT")
 
 AIParamsTable: TypeAlias = dict[str, "AIParam"]
+AIParamType: TypeAlias = object
+AI_ALLOWED_PARAM_TYPES: tuple[object, ...] = (str, int, float, bool, object, None, type(None))
 MAX_NEW_TOKENS = 1024
 _MAX_CALLS = 4
 _CONTEXT_REQUEST_TOOL_NAME = "request_context"
@@ -54,6 +57,10 @@ class AIParam:
     type: object = str
     required: bool = True
     default: Any = None
+
+    @property
+    def adapter(self) -> TypeAdapter[Any]:
+        return TypeAdapter(cast(Any, self.type))
 
 
 @dataclass(frozen=True, slots=True)
@@ -763,7 +770,7 @@ class AICore(Generic[ContextT, ActionT]):
         for name, param in action.params.items():
             raw_value = raw_args.get(name, _MISSING)
             value = self._coerce_value(
-                param.type,
+                param,
                 raw_value,
                 message=message,
                 interaction=interaction,
@@ -780,12 +787,13 @@ class AICore(Generic[ContextT, ActionT]):
 
     def _coerce_value(
         self,
-        annotation: object,
+        param: AIParam,
         value: Any,
         *,
         message: discord.Message | None,
         interaction: discord.Interaction | None,
     ) -> Any:
+        annotation = param.type
         target = self._non_none_type(annotation)
         if value is _MISSING or value is None:
             return _MISSING
@@ -796,38 +804,20 @@ class AICore(Generic[ContextT, ActionT]):
                 message=message,
                 interaction=interaction,
             )
-
-        choices = self._literal_choices(annotation)
-        if choices is not None:
-            return value if isinstance(value, str) and value in choices else _MISSING
-
-        if target is int:
-            if isinstance(value, int) and not isinstance(value, bool):
-                return value
-            if isinstance(value, str) and re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)", value.strip()):
-                return int(value.replace(",", ""))
-            return _MISSING
-        if target is float:
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return float(value)
-            if isinstance(value, str):
-                try:
-                    return float(value.strip().replace(",", ""))
-                except ValueError:
-                    return _MISSING
-            return _MISSING
-        if target is bool:
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str) and value.casefold() in ("true", "false"):
-                return value.casefold() == "true"
-            return _MISSING
         if target in (str, object):
             string = strip_discord_reference_annotations(str(value))
             string = strip_context_tag_namespaces(string)
             string = string.strip()
             return string if self._discord_string_valid(string) else _MISSING
-        return value
+
+        prepared = value
+        if target in (int, float) and isinstance(value, str):
+            prepared = value.strip().replace(",", "")
+
+        try:
+            return param.adapter.validate_python(prepared)
+        except ValidationError:
+            return _MISSING
 
     def _coerce_discord_user(
         self,
@@ -859,8 +849,11 @@ class AICore(Generic[ContextT, ActionT]):
             return interaction.user
 
         source = message if message is not None else interaction
-        state = getattr(source, "_state", None)
-        cached_user = getattr(state, "get_user", lambda _user_id: None)(user_id)
+        if source is None:
+            return _MISSING
+
+        state = source._state
+        cached_user = state.get_user(user_id)
         if cached_user is not None and annotation is not discord.Member:
             return cached_user
         return _MISSING
@@ -910,7 +903,7 @@ class AICore(Generic[ContextT, ActionT]):
     def _supported_param_type(self, annotation: object) -> bool:
         non_none = self._non_none_type(annotation)
         return (
-            non_none in (str, int, float, bool, object, None, type(None)) or
+            non_none in AI_ALLOWED_PARAM_TYPES or
             self._literal_choices(non_none) is not None or
             self._is_discord_user_type(non_none)
         )
