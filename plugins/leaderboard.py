@@ -31,17 +31,18 @@ class LeaderboardView(discord.ui.LayoutView):
         
         self.bot = bot
 
-        self.add_item(discord.ui.Container(
+        c = discord.ui.Container(
             discord.ui.TextDisplay(f"## {title}"),
             discord.ui.TextDisplay(subtitle),
             discord.ui.Separator(),
             discord.ui.TextDisplay(self._body(rows, limit=limit))
-        ))
+        )
 
         footer = "Data from swapjs.dev"
         if updated_at is not None:
             footer = f"{footer} - Updated <t:{updated_at}:R>"
-        self.add_item(discord.ui.TextDisplay(f"-# {footer}"))
+        c.add_item(discord.ui.TextDisplay(f"-# {footer}"))
+        self.add_item(c)
 
     def _body(self, rows: list[SortoffsPlayer], *, limit: int) -> str:
         if not rows:

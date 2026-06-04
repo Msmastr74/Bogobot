@@ -63,6 +63,7 @@ class StatsView(discord.ui.LayoutView):
                 ))
             )
         if updated_at is not None:
+            c.add_item(discord.ui.Separator())
             c.add_item(discord.ui.TextDisplay(
                 f"-# Updated at <t:{int(updated_at.timestamp())}:T>"
             ))
@@ -108,12 +109,13 @@ class SortView(discord.ui.LayoutView):
                     )
                 )
             )
-        self.add_item(container)
-
         if timestamp is not None:
-            self.add_item(discord.ui.TextDisplay(
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(
                 f"-# Updated at <t:{int(timestamp.timestamp())}:T>"
             ))
+        self.add_item(container)
+
 
 
 class StreamboardView(discord.ui.LayoutView):
