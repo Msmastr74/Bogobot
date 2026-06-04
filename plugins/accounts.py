@@ -48,9 +48,11 @@ class AccountListView(discord.ui.LayoutView):
             return remaining >= 0
         title_text = f"## {title}"
         count_remaining(title_text)
-        self.add_item(discord.ui.TextDisplay(title_text))
-        
-        accounts_container = discord.ui.Container()
+
+        accounts_container = discord.ui.Container(
+            discord.ui.TextDisplay(title_text),
+            discord.ui.Separator()
+        )
         found_account = False
         text = ""
         for uid, account in accounts:

@@ -95,8 +95,9 @@ class UsageView(discord.ui.LayoutView):
         body: str,
     ):
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay(f"### {title}"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"### {title}"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(body or "\u200d"),
         ))
 

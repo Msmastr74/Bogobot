@@ -93,9 +93,14 @@ class BogotreeView(discord.ui.LayoutView):
         if state.solved and not best_improved:
             accent_colour = discord.Color.green()
 
-        self.add_item(discord.ui.TextDisplay(f"## {title} {tree_emoji(height(x))}"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## {title} {tree_emoji(height(x))}"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay("\n".join(body_lines)),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# Used at <t:{int(time.time())}:S>"
+            ),
             accent_colour=accent_colour,
         ))
         if show_info:

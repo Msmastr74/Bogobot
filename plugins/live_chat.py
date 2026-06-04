@@ -19,8 +19,9 @@ MAX_LENGTH = 3900
 class LiveChatView(discord.ui.LayoutView):
     def __init__(self, body: str):
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay("## Live Chat"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("## Live Chat"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(body or "-# No messages yet")
         ))
 

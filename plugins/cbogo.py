@@ -89,9 +89,14 @@ class CbogoView(discord.ui.LayoutView):
         if state.solved and not best_improved:
             accent_colour = discord.Color.light_grey()
 
-        self.add_item(discord.ui.TextDisplay(f"## {title}"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## {title}"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay("\n".join(body_lines)),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# Used at <t:{int(time.time())}:S>"
+            ),
             accent_colour=accent_colour,
         ))
         if show_info:
@@ -99,11 +104,6 @@ class CbogoView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(CBOGO_INFO),
                 accent_colour=discord.Colour(BOGOGREEN)
             ))
-        self.add_item(
-            discord.ui.TextDisplay(
-                f"-# Used at <t:{int(time.time())}:S>"
-            )
-        )
 
 class CbogoLeaderboard(discord.ui.LayoutView):
     def __init__(

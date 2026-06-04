@@ -31,11 +31,11 @@ class LeaderboardView(discord.ui.LayoutView):
         
         self.bot = bot
 
-        self.add_item(discord.ui.TextDisplay(f"## {title}"))
-        self.add_item(discord.ui.TextDisplay(subtitle))
         self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(self._body(rows, limit=limit)),
-            accent_colour=discord.Color.gold(),
+            discord.ui.TextDisplay(f"## {title}"),
+            discord.ui.TextDisplay(subtitle),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(self._body(rows, limit=limit))
         ))
 
         footer = "Data from swapjs.dev"

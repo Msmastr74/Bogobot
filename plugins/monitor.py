@@ -16,11 +16,13 @@ class MonitorView(discord.ui.LayoutView):
         # Static LayoutViews with timeout=None avoid discord.py's dispatch
         # listener machinery because they contain no interactive components.
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay("## Monitor"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("## Monitor"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(body or "\u200b"),
             discord.ui.Separator(),
             discord.ui.TextDisplay("-# Oldest -> Newest [?? = Unknown]"),
+            discord.ui.TextDisplay(f"-# Updated <t:{int(time.time())}:R>")
         ))
 
 class MonitorPayload(TypedDict):
@@ -59,7 +61,7 @@ async def setup(bot: BotCore):
         ]
         contents = f"```\n{'.'.join(num_array)}\n```"
 
-        return {"view": MonitorView(f"<t:{int(round(time.time()))}:T>\n{contents}")}
+        return {"view": MonitorView(contents)}
 
     stream_monitor = PersistentChannelMonitor(
         bot,

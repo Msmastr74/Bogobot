@@ -157,21 +157,28 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
 
     def _render_page(self, page: Page) -> None:
         self.clear_items()
+        self.add_item(self.generate_container(page))
+        self.add_controls()
+
+    def generate_container(self, page: Page) -> discord.ui.Container:
+        c = discord.ui.Container(
+            accent_colour=self.page_accent_colour(page),
+        )
         header = self.page_header(page)
         remaining = DISPLAY_TEXT_LIMIT
         if header:
-            self.add_item(discord.ui.TextDisplay(header))
+            c.add_item(discord.ui.TextDisplay(header))
+            c.add_item(discord.ui.Separator())
             remaining -= count_characters(header)
 
         text = self._page_body_text(page.sections)
         text = truncate_text(text, remaining)
 
-        self.add_item(discord.ui.Container(
+        c.add_item(discord.ui.Container(
             discord.ui.TextDisplay(text or "\u200d"),
             accent_colour=self.page_accent_colour(page),
         ))
-
-        self.add_controls()
+        return c
 
     def _page_body_text(self, sections: list[PageSection]) -> str:
         return "\n".join(self._section_text(section) for section in sections)

@@ -12,8 +12,9 @@ from plugins import ai as ai_plugin
 class BogonameView(discord.ui.LayoutView):
     def __init__(self, original_name: str, new_name: str) -> None:
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay('## Bogoname'))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay('## Bogoname'),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(f"**Original Name**\n{discord.utils.escape_markdown(original_name)}"),
             discord.ui.TextDisplay(f"**Bogoed name**\n{discord.utils.escape_markdown(new_name)}"),
             accent_colour=discord.Colour.random()

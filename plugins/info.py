@@ -30,9 +30,11 @@ class HelpBox(discord.ui.LayoutView):
         context_menus: list[app_commands.ContextMenu],
     ) -> None:
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay("## Bogobot"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("## Bogobot"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(BOGOBOT_DESCRIPTION),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(self._command_text(commands, context_menus)),
         ))
 
@@ -81,9 +83,11 @@ class CommandSignatureBox(discord.ui.LayoutView):
         command: app_commands.Command | app_commands.ContextMenu,
     ) -> None:
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay("## Bogobot"))
         self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("## Bogobot"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(f"`{self._signature(command)}`"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(self._description(command)),
         ))
 

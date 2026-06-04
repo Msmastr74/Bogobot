@@ -45,28 +45,28 @@ class StatsView(discord.ui.LayoutView):
         updated_at: datetime.datetime | None = None
     ):
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay(f"## {title}"))
-        field_container = discord.ui.Container()
+        c = discord.ui.Container(
+            discord.ui.TextDisplay(f"## {title}")
+        )
         for index, (group_title, fields) in enumerate(groups):
             fields = list(fields)
             if not fields:
                 continue
-            if index and len(field_container.children) > 0:
-                field_container.add_item(discord.ui.Separator())
+            if index and len(c.children) > 0:
+                c.add_item(discord.ui.Separator())
             if group_title is not None:
-                field_container.add_item(discord.ui.TextDisplay(f"### {group_title}"))
-            field_container.add_item(
+                c.add_item(discord.ui.TextDisplay(f"### {group_title}"))
+            c.add_item(
                 discord.ui.TextDisplay("\n".join(
                     f"{header}: `{content}`"
                     for header, content in fields
                 ))
             )
-        self.add_item(field_container)
-        
         if updated_at is not None:
-            self.add_item(discord.ui.TextDisplay(
-                f"-# Updated at <t:{int(round(updated_at.timestamp()))}:T>"
+            c.add_item(discord.ui.TextDisplay(
+                f"-# Updated at <t:{int(updated_at.timestamp())}:T>"
             ))
+        self.add_item(c)
 
 class SortView(discord.ui.LayoutView):
     RED = '\x1b[31m'
@@ -84,12 +84,13 @@ class SortView(discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
         
-        self.add_item(discord.ui.TextDisplay("## Bogosort Stream Sort State"))
         colors = (self.RED, self.GREEN)
         container = discord.ui.Container(
+            discord.ui.TextDisplay("## Bogostream Sort State"),
             discord.ui.TextDisplay(
                 f"Current best shuffle in position: `{correct_count}/{total_count}`"
             ),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(
                 "```ansi\n" +
                 ' '.join(
@@ -111,7 +112,7 @@ class SortView(discord.ui.LayoutView):
 
         if timestamp is not None:
             self.add_item(discord.ui.TextDisplay(
-                f"-# Updated at <t:{int(round(timestamp.timestamp()))}:T>"
+                f"-# Updated at <t:{int(timestamp.timestamp())}:T>"
             ))
 
 
@@ -140,7 +141,7 @@ class StreamboardView(discord.ui.LayoutView):
         )
         if updated_at is not None:
             self.add_item(discord.ui.TextDisplay(
-                f"-# Updated at <t:{int(round(updated_at.timestamp()))}:T>"
+                f"-# Updated at <t:{int(updated_at.timestamp())}:T>"
             ))
 
     def _leaderboard_text(
@@ -179,16 +180,18 @@ class StreamboardView(discord.ui.LayoutView):
 class StreamContributorView(discord.ui.LayoutView):
     def __init__(self, contributor: StreamContributor) -> None:
         super().__init__(timeout=None)
-        self.add_item(discord.ui.TextDisplay(f"## {contributor.nickname}"))
-        self.add_item(discord.ui.Container(
+        c = discord.ui.Container(
+            discord.ui.TextDisplay(f"## {contributor.nickname}"),
+            discord.ui.Separator(),
             discord.ui.TextDisplay(self._body(contributor)),
-        ))
+        )
 
         created_at = contributor.created_datetime()
         if created_at is not None:
-            self.add_item(discord.ui.TextDisplay(
-                f"-# Contributor since <t:{int(round(created_at.timestamp()))}:R>"
+            c.add_item(discord.ui.TextDisplay(
+                f"-# Contributor since <t:{int(created_at.timestamp())}:R>"
             ))
+        self.add_item(c)
 
     def _body(self, contributor: StreamContributor) -> str:
         active_seconds = contributor.active_ms // 1000

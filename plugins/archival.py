@@ -835,13 +835,7 @@ async def setup(bot: BotCore):
                 return
 
             frozen_view = discord.ui.LayoutView(timeout=None)
-            header = self.page_header(self.current_page)
-            if header:
-                frozen_view.add_item(discord.ui.TextDisplay(header))
-            frozen_view.add_item(discord.ui.Container(
-                discord.ui.TextDisplay(self._page_body_text(self.current_page.sections)),
-                accent_colour=self.page_accent_colour(self.current_page),
-            ))
+            frozen_view.add_item(self.generate_container(self.current_page))
             await interaction.response.edit_message(
                 view=frozen_view,
                 **self.current_page.as_edit_kwargs(),

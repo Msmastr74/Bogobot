@@ -16,13 +16,14 @@ class AvatarView(discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
         self.add_item(
-            discord.ui.TextDisplay(f"## {user.mention}'s Avatar")
-        )
-        self.add_item(
-            discord.ui.MediaGallery(
-                discord.MediaGalleryItem(
-                    media=user.display_avatar.url,
-                    description=f"{user.display_name}'s avatar",
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"## {user.mention}'s Avatar"),
+                discord.ui.Separator(),
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(
+                        media=user.display_avatar.url,
+                        description=f"{user.display_name}'s avatar",
+                    )
                 )
             )
         )

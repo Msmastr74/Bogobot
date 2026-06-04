@@ -519,7 +519,7 @@ class AISchedulesView(discord.ui.LayoutView):
             return
 
         self.add_item(discord.ui.TextDisplay(
-            f"### Scheduled AI Activities for <#{channel_id}>:\n"
+            f"### Scheduled AI Activities for <#{channel_id}>:"
         ))
 
         now = discord.utils.utcnow()
