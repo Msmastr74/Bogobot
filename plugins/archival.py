@@ -1,12 +1,18 @@
 import asyncio
+import contextlib
 from dataclasses import dataclass, replace
+from datetime import datetime
+import io
 import json
+import math
 from pathlib import Path
 import re
 import tempfile
+import time
 from typing import Literal
 
 import discord
+from PIL import Image
 
 from bogobot_core import BotCore
 from utils import groups
@@ -22,6 +28,7 @@ DEFAULT_VIDEO_ARCHIVE_DIR = "archive/video"
 ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
 ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
+ARCHIVE_SCAN_COOLDOWN_SECONDS = 30.0
 DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFRsS])?>$")
 EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
@@ -58,6 +65,16 @@ def parse_archive_frame_time(value: str) -> float | None:
     if abs(timestamp) >= EPOCH_MILLISECONDS_THRESHOLD:
         timestamp /= 1000
     return timestamp
+
+
+def parse_archive_scan_day(value: str) -> str | None:
+    value = value.strip()
+    with contextlib.suppress(ValueError):
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+    timestamp = parse_archive_frame_time(value)
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
 
 
 async def setup(bot: BotCore):
@@ -132,6 +149,8 @@ async def setup(bot: BotCore):
 
     pending_parts: list[str] = []
     archive_lock = asyncio.Lock()
+    archive_scan_running = False
+    archive_scan_last_finished_at = 0.0
     flush_task: asyncio.Task[None] | None = None
     last_event_time: float | None = None
     chunk_base_time: float | None = None
@@ -944,3 +963,119 @@ async def setup(bot: BotCore):
                 )
             finally:
                 file.close()
+
+    @bot.setup.command(
+        name="archive_scan",
+        description="Find when an image appears in a visual archive recording",
+        perm_requirement=0,
+        eph=False,
+    )
+    async def archive_scan(
+        interaction: discord.Interaction,
+        date: str,
+        image: discord.Attachment,
+        min_score: float = 0.86,
+        locator_interval_seconds: float = 30.0,
+        max_candidates: int = 12,
+    ):
+        nonlocal archive_scan_last_finished_at, archive_scan_running
+
+        if archive_scan_running:
+            await bot.discord.send(
+                "An archive scan is already running.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        now = time.monotonic()
+        cooldown_remaining = ARCHIVE_SCAN_COOLDOWN_SECONDS - (
+            now - archive_scan_last_finished_at
+        )
+        if cooldown_remaining > 0:
+            await bot.discord.send(
+                f"Archive scanning is cooling down. Try again in `{math.ceil(cooldown_remaining)}` seconds.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        day = parse_archive_scan_day(date)
+        if day is None:
+            await bot.discord.send(
+                "Date must be `YYYY-MM-DD`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if min_score < 0 or min_score > 1:
+            await bot.discord.send(
+                "`min_score` must be between 0 and 1.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if locator_interval_seconds <= 0:
+            await bot.discord.send(
+                "`locator_interval_seconds` must be greater than 0.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if max_candidates <= 0:
+            await bot.discord.send(
+                "`max_candidates` must be greater than 0.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        archive_scan_running = True
+        scan_started = False
+        try:
+            image_bytes = await image.read()
+            target_image = Image.open(io.BytesIO(image_bytes))
+            target_image.load()
+        except Exception:
+            archive_scan_running = False
+            await bot.discord.send(
+                "Could not read that image attachment.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        try:
+            scan_started = True
+            result = await asyncio.to_thread(
+                video_archiver.scan_for_image,
+                day,
+                target_image,
+                min_score=min_score,
+                sample_interval_seconds=1.0,
+                locator_interval_seconds=locator_interval_seconds,
+                max_candidates=max_candidates,
+            )
+        finally:
+            archive_scan_running = False
+            if scan_started:
+                archive_scan_last_finished_at = time.monotonic()
+        if result is None:
+            await bot.discord.send(
+                f"No matching archive frame found for `{day}`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        epoch_ts = math.ceil(result.timestamp)
+        await bot.discord.send(
+            (
+                f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
+                f"-# score `{result.score:.3f}` over `{result.sampled_frames}` sampled frames"
+            ),
+            response=True,
+            ephemeral=False,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )

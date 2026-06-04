@@ -105,6 +105,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * @mention AI and /ai: Bogobot can chat, call registered command actions, and queue passive context requests. See `AI.md`.
  * /archive: Shows archived monitor values.
  * /archive_frame: Shows a visual archive frame by epoch or Discord timestamp.
+ * /archive_scan: Searches a day's visual archive for an attached image crop and returns the matching timestamp.
  * /top, /bottom, /middle: Shows sortoff leaderboard slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts, stops, or resends a persistent top leaderboard message.

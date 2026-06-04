@@ -1,6 +1,8 @@
 import contextlib
+import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime
+import math
 import logging
 from pathlib import Path
 import queue
@@ -9,8 +11,12 @@ import threading
 import time
 
 from PIL import Image
+from cv2.typing import MatLike
 
 from utils.logger_pipe import PipeLogger, log_subprocess_pipe
+
+
+SCAN_WORKERS = 3
 
 
 @dataclass(frozen=True)
@@ -21,6 +27,31 @@ class VideoArchiveStatus:
     recorded_frames: int
     dropped_frames: int
     last_frame_at: float | None
+
+
+@dataclass(frozen=True)
+class VideoScanResult:
+    timestamp: float
+    score: float
+    relative_seconds: float
+    sampled_frames: int
+
+
+@dataclass(frozen=True)
+class _ScanCandidate:
+    x: int
+    y: int
+    template: MatLike
+    template_mean: float
+    template_std: float
+    locator_score: float
+
+
+@dataclass(frozen=True)
+class _ScanRangeResult:
+    score: float
+    relative_seconds: float
+    sampled_frames: int
 
 
 @dataclass(frozen=True)
@@ -138,6 +169,9 @@ class VideoArchiver:
 
     def video_path_for_timestamp(self, timestamp: float) -> Path:
         day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+        return self.video_path_for_day(day)
+
+    def video_path_for_day(self, day: str) -> Path:
         final_path = self.directory / f"{day}.{self.final_format}"
         if final_path.exists():
             return final_path
@@ -253,6 +287,82 @@ class VideoArchiver:
             self.logger.warning("Could not extract video archive frame: no frame was written")
         return False
 
+    def scan_for_image(
+        self,
+        day: str,
+        image: Image.Image,
+        *,
+        min_score: float = 0.86,
+        sample_interval_seconds: float = 1.0,
+        locator_interval_seconds: float = 30.0,
+        max_candidates: int = 12,
+    ) -> VideoScanResult | None:
+        video_path = self.video_path_for_day(day)
+        if not video_path.exists():
+            return None
+
+        start_timestamp = self._read_start_timestamp(day)
+        if start_timestamp is None:
+            start_timestamp = self._read_metadata_start_timestamp(video_path)
+        if start_timestamp is None:
+            start_timestamp = datetime.strptime(day, "%Y-%m-%d").timestamp()
+
+        sample_interval_seconds = max(0.25, float(sample_interval_seconds))
+        locator_interval_seconds = max(sample_interval_seconds, float(locator_interval_seconds))
+        frame_size = self.width * self.height * 3
+        templates = self._scan_templates(image)
+        if not templates:
+            return None
+
+        candidates = self._scan_candidates(
+            video_path,
+            templates,
+            locator_interval_seconds=locator_interval_seconds,
+            max_candidates=max_candidates,
+        )
+        if not candidates:
+            return None
+
+        duration = self._video_duration(video_path)
+        if duration is None:
+            return None
+        ranges = self._scan_ranges(duration, sample_interval_seconds)
+        if not ranges:
+            return None
+
+        best_score = -1.0
+        best_relative_seconds = 0.0
+        sampled_frames = 0
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(ranges)) as executor:
+            futures = [
+                executor.submit(
+                    self._scan_video_range,
+                    video_path,
+                    candidates,
+                    sample_interval_seconds,
+                    start_seconds,
+                    duration_seconds,
+                    frame_size,
+                )
+                for start_seconds, duration_seconds in ranges
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                sampled_frames += result.sampled_frames
+                if result.score > best_score:
+                    best_score = result.score
+                    best_relative_seconds = result.relative_seconds
+
+        if sampled_frames <= 0 or best_score < min_score:
+            return None
+        return VideoScanResult(
+            timestamp=start_timestamp + best_relative_seconds,
+            score=best_score,
+            relative_seconds=best_relative_seconds,
+            sampled_frames=sampled_frames,
+        )
+
     def _extract_frame_command(
         self,
         video_path: Path,
@@ -260,32 +370,250 @@ class VideoArchiver:
         relative_seconds: float,
         quality: int,
     ) -> list[str]:
-        if video_path.suffix.lower() == ".ts":
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-y",
-                "-ss", f"{relative_seconds:.3f}",
-                "-i", str(video_path),
-                "-frames:v", "1",
-                "-q:v", str(max(1, int(quality))),
-            ]
-        else:
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-y",
-                "-ss", f"{relative_seconds:.3f}",
-                "-i", str(video_path),
-                "-frames:v", "1",
-                "-q:v", str(max(1, int(quality))),
-            ]
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-ss", f"{relative_seconds:.3f}",
+            "-i", str(video_path),
+            "-map", "0:v:0",
+            "-frames:v", "1",
+            "-q:v", str(max(1, int(quality))),
+        ]
         if output_path.suffix.lower() in {".jpg", ".jpeg"}:
             command.extend(["-pix_fmt", "yuvj420p"])
         command.append(str(output_path))
         return command
+
+    def _scan_frames_command(
+        self,
+        video_path: Path,
+        sample_interval_seconds: float,
+        *,
+        start_seconds: float = 0.0,
+        duration_seconds: float | None = None,
+    ) -> list[str]:
+        fps = 1.0 / max(0.25, sample_interval_seconds)
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+        ]
+        if start_seconds > 0:
+            command.extend(["-ss", f"{start_seconds:.3f}"])
+        command.extend([
+            "-i", str(video_path),
+            "-map", "0:v:0",
+        ])
+        if duration_seconds is not None:
+            command.extend(["-t", f"{duration_seconds:.3f}"])
+        command.extend([
+            "-vf", f"fps=fps={fps:.6f},scale={self.width}:{self.height}",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "pipe:1",
+        ])
+        return command
+
+    def _scan_templates(self, image: Image.Image) -> list[MatLike]:
+        import cv2
+        import numpy as np
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        source = np.array(image)
+        source_h, source_w = source.shape[:2]
+        if source_h < 8 or source_w < 8:
+            return []
+
+        scales = [1.0, 0.75, 2 / 3, 0.5, 0.4, 1 / 3, 0.25]
+        templates: list[MatLike] = []
+        seen_sizes: set[tuple[int, int]] = set()
+        for scale in scales:
+            width = int(round(source_w * scale))
+            height = int(round(source_h * scale))
+            if width < 8 or height < 8 or width > self.width or height > self.height:
+                continue
+            if (width, height) in seen_sizes:
+                continue
+            seen_sizes.add((width, height))
+            resized = cv2.resize(source, (width, height), interpolation=cv2.INTER_AREA)
+            if math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
+                continue
+            templates.append(resized)
+        return templates
+
+    def _scan_candidates(
+        self,
+        video_path: Path,
+        templates: list[MatLike],
+        *,
+        locator_interval_seconds: float,
+        max_candidates: int,
+    ) -> list[_ScanCandidate]:
+        import cv2
+        import numpy as np
+
+        frame_size = self.width * self.height * 3
+        process = subprocess.Popen(
+            self._scan_frames_command(video_path, locator_interval_seconds),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+
+        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
+        try:
+            while True:
+                data = process.stdout.read(frame_size)
+                if not data:
+                    break
+                if len(data) != frame_size:
+                    break
+                frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
+                for template in templates:
+                    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
+                    x, y = max_loc
+                    height, width = template.shape[:2]
+                    key = (x // 2, y // 2, width, height)
+                    score = float(max_value)
+                    existing = candidates.get(key)
+                    if existing is not None and existing.locator_score >= score:
+                        continue
+                    template_float = template.astype(np.float32)
+                    candidates[key] = _ScanCandidate(
+                        x=x,
+                        y=y,
+                        template=template_float,
+                        template_mean=float(template_float.mean()),
+                        template_std=max(1e-6, float(template_float.std())),
+                        locator_score=score,
+                    )
+        finally:
+            if process.stdout is not None:
+                with contextlib.suppress(OSError):
+                    process.stdout.close()
+
+        if process.stderr is not None:
+            stderr = process.stderr.read()
+            process.stderr.close()
+        else:
+            stderr = b""
+        process.wait(timeout=5)
+        if process.returncode not in (0, None):
+            message = stderr.decode(errors="replace").strip()
+            if message:
+                self.logger.warning(f"Video archive scan locator failed: {message}")
+            return []
+
+        return sorted(
+            candidates.values(),
+            key=lambda candidate: candidate.locator_score,
+            reverse=True,
+        )[:max(1, int(max_candidates))]
+
+    def _scan_ranges(
+        self,
+        duration: float,
+        sample_interval_seconds: float,
+    ) -> list[tuple[float, float | None]]:
+        if duration <= 0:
+            return [(0.0, None)]
+
+        total_samples = int(math.ceil(duration / sample_interval_seconds)) + 1
+        workers = max(1, min(SCAN_WORKERS, total_samples))
+        samples_per_worker = int(math.ceil(total_samples / workers))
+        ranges: list[tuple[float, float | None]] = []
+        for index in range(workers):
+            start_sample = index * samples_per_worker
+            if start_sample >= total_samples:
+                break
+            end_sample = min(total_samples, start_sample + samples_per_worker)
+            start_seconds = start_sample * sample_interval_seconds
+            duration_seconds = None if index == workers - 1 else (
+                (end_sample - start_sample) * sample_interval_seconds
+            )
+            ranges.append((start_seconds, duration_seconds))
+        return ranges
+
+    def _scan_video_range(
+        self,
+        video_path: Path,
+        candidates: list[_ScanCandidate],
+        sample_interval_seconds: float,
+        start_seconds: float,
+        duration_seconds: float | None,
+        frame_size: int,
+    ) -> _ScanRangeResult:
+        process = subprocess.Popen(
+            self._scan_frames_command(
+                video_path,
+                sample_interval_seconds,
+                start_seconds=start_seconds,
+                duration_seconds=duration_seconds,
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+
+        best_score = -1.0
+        best_relative_seconds = start_seconds
+        sampled_frames = 0
+
+        try:
+            while True:
+                data = process.stdout.read(frame_size)
+                if not data:
+                    break
+                if len(data) != frame_size:
+                    break
+                score = self._scan_frame_score(data, candidates)
+                relative_seconds = start_seconds + sampled_frames * sample_interval_seconds
+                sampled_frames += 1
+                if score > best_score:
+                    best_score = score
+                    best_relative_seconds = relative_seconds
+        finally:
+            if process.stdout is not None:
+                with contextlib.suppress(OSError):
+                    process.stdout.close()
+
+        stderr = b""
+        if process.stderr is not None:
+            stderr = process.stderr.read()
+            process.stderr.close()
+        process.wait(timeout=5)
+
+        if process.returncode not in (0, None):
+            message = stderr.decode(errors="replace").strip()
+            if message:
+                self.logger.warning(f"Video archive scan failed: {message}")
+            return _ScanRangeResult(-1.0, start_seconds, sampled_frames)
+        return _ScanRangeResult(best_score, best_relative_seconds, sampled_frames)
+
+    def _scan_frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
+        import numpy as np
+
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
+        best = -1.0
+        for candidate in candidates:
+            height, width = candidate.template.shape[:2]
+            roi = frame[candidate.y:candidate.y + height, candidate.x:candidate.x + width]
+            if roi.shape[:2] != (height, width):
+                continue
+            roi = roi.astype(np.float32)
+            roi_std = float(roi.std())
+            if roi_std <= 1e-6:
+                continue
+            score = float(
+                ((roi - float(roi.mean())) * (candidate.template - candidate.template_mean)).mean()
+                / (roi_std * candidate.template_std)
+            )
+            best = max(best, score)
+        return best
 
     def _frame_pts_candidates_at_or_after(
         self,
@@ -300,7 +628,17 @@ class VideoArchiver:
             if pts >= relative_seconds:
                 selected_index = index
                 break
-        return list(reversed(timeline_pts[max(0, selected_index - self.keyint):selected_index + 1]))
+        candidates = timeline_pts[selected_index:selected_index + self.keyint]
+        if selected_index > 0:
+            candidates.extend(reversed(timeline_pts[max(0, selected_index - self.keyint):selected_index]))
+        return candidates
+
+    def _video_duration(self, video_path: Path) -> float | None:
+        frame_pts = self._read_frame_pts(video_path)
+        timeline_pts = self._frame_timeline_pts(frame_pts)
+        if not timeline_pts:
+            return None
+        return timeline_pts[-1]
 
     def _frame_timeline_pts(self, frame_pts: list[tuple[int, float]]) -> list[float]:
         segment_base = 0.0
