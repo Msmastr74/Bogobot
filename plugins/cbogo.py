@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Any, Callable, Literal, Mapping, Self
 import asyncio
 import json
@@ -43,7 +41,7 @@ class CbogoView(discord.ui.LayoutView):
         self,
         *,
         title: str,
-        state: CbogoState,
+        state: "CbogoState",
         run_shuffles: int | None = None,
         previous_best_score: int | None = None,
         previous_array: list[int] | None = None,
@@ -109,7 +107,7 @@ class CbogoLeaderboard(discord.ui.LayoutView):
     def __init__(
         self,
         *,
-        leaderboard: dict[str, CbogoUserStats],
+        leaderboard: "dict[str, CbogoUserStats]",
         target: discord.Member | discord.User | None = None,
     ):
         super().__init__(timeout=None)
@@ -140,8 +138,8 @@ class CbogoLeaderboard(discord.ui.LayoutView):
     def leaderboard_container(
         self,
         title: str,
-        ranked: list[tuple[str, CbogoUserStats]],
-        line_for: Callable[[str, CbogoUserStats], str],
+        ranked: "list[tuple[str, CbogoUserStats]]",
+        line_for: "Callable[[str, CbogoUserStats], str]",
         colour: discord.Color,
         *,
         target: discord.Member | discord.User | None = None,
@@ -176,8 +174,8 @@ class CbogoLeaderboard(discord.ui.LayoutView):
     def append_target_line(
         self,
         lines: list[str],
-        ranked: list[tuple[str, CbogoUserStats]],
-        line_for: Callable[[str, CbogoUserStats], str],
+        ranked: "list[tuple[str, CbogoUserStats]]",
+        line_for: "Callable[[str, CbogoUserStats], str]",
         target: discord.Member | discord.User,
     ) -> None:
         uid = str(target.id)
@@ -203,7 +201,7 @@ class CbogoLeaderboard(discord.ui.LayoutView):
                 self.try_append_line(lines, "...")
 
 
-    def best_run_line(self, uid: str, stats: CbogoUserStats) -> str:
+    def best_run_line(self, uid: str, stats: "CbogoUserStats") -> str:
         timestamp = stats.best_timestamp
         best_time = f"<t:{timestamp}:f>" if timestamp else "never"
         return (
@@ -219,7 +217,7 @@ def default_array() -> list[int]:
     return values
 
 
-def default_state() -> CbogoState:
+def default_state() -> "CbogoState":
     current_array = default_array()
     return CbogoState(
         current_array=current_array,
@@ -232,7 +230,7 @@ def default_state() -> CbogoState:
     )
 
 
-def default_user_stats(username: str = "") -> CbogoUserStats:
+def default_user_stats(username: str = "") -> "CbogoUserStats":
     return CbogoUserStats(
         uses=0,
         shuffles=0,

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections import Counter
 from typing import Any, Callable, Literal, Self
 import asyncio
@@ -60,7 +58,7 @@ class BogotreeView(discord.ui.LayoutView):
         self,
         *,
         title: str,
-        state: BogotreeState,
+        state: "BogotreeState",
         performed_steps: int | None = None,
         previous_height: float | None = None,
         previous_best_score: float | None = None,
@@ -117,7 +115,7 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
     def __init__(
         self,
         *,
-        leaderboard: dict[str, BogotreeUserStats],
+        leaderboard: "dict[str, BogotreeUserStats]",
         target: discord.Member | discord.User | None = None,
     ):
         super().__init__(timeout=None)
@@ -155,8 +153,8 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
     def leaderboard_container(
         self,
         title: str,
-        ranked: list[tuple[str, BogotreeUserStats]],
-        line_for: Callable[[str, BogotreeUserStats], str],
+        ranked: "list[tuple[str, BogotreeUserStats]]",
+        line_for: "Callable[[str, BogotreeUserStats], str]",
         colour: discord.Color,
         *,
         target: discord.Member | discord.User | None = None,
@@ -191,8 +189,8 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
     def append_target_line(
         self,
         lines: list[str],
-        ranked: list[tuple[str, BogotreeUserStats]],
-        line_for: Callable[[str, BogotreeUserStats], str],
+        ranked: "list[tuple[str, BogotreeUserStats]]",
+        line_for: "Callable[[str, BogotreeUserStats], str]",
         target: discord.Member | discord.User,
     ) -> None:
         uid = str(target.id)
@@ -217,7 +215,7 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
             if lines[-1] != "...":
                 self.try_append_line(lines, "...")
 
-    def best_score_line(self, uid: str, stats: BogotreeUserStats) -> str:
+    def best_score_line(self, uid: str, stats: "BogotreeUserStats") -> str:
         timestamp = stats.best_timestamp
         best_time = f"<t:{timestamp}:T>" if timestamp else "never"
         return (
@@ -227,8 +225,8 @@ class BogotreeLeaderboard(discord.ui.LayoutView):
 
 
 def ranked_best_score(
-    leaderboard: dict[str, BogotreeUserStats],
-) -> list[tuple[str, BogotreeUserStats]]:
+    leaderboard: "dict[str, BogotreeUserStats]",
+) -> "list[tuple[str, BogotreeUserStats]]":
     return sorted(
         filter(lambda i: i[1].best_score > 0, leaderboard.items()),
         key=lambda item: (
@@ -242,8 +240,8 @@ def ranked_best_score(
 
 
 def ranked_steps(
-    leaderboard: dict[str, BogotreeUserStats],
-) -> list[tuple[str, BogotreeUserStats]]:
+    leaderboard: "dict[str, BogotreeUserStats]",
+) -> "list[tuple[str, BogotreeUserStats]]":
     return sorted(
         filter(lambda i: i[1].steps > 0, leaderboard.items()),
         key=lambda item: (
@@ -254,8 +252,8 @@ def ranked_steps(
 
 
 def ranked_height(
-    leaderboard: dict[str, BogotreeUserStats],
-) -> list[tuple[str, BogotreeUserStats]]:
+    leaderboard: "dict[str, BogotreeUserStats]",
+) -> "list[tuple[str, BogotreeUserStats]]":
     return sorted(
         filter(lambda i: i[1].height > 0, leaderboard.items()),
         key=lambda item: (
@@ -266,8 +264,8 @@ def ranked_height(
 
 
 def ranked_calls(
-    leaderboard: dict[str, BogotreeUserStats],
-) -> list[tuple[str, BogotreeUserStats]]:
+    leaderboard: "dict[str, BogotreeUserStats]",
+) -> "list[tuple[str, BogotreeUserStats]]":
     return sorted(
         filter(lambda i: i[1].calls > 0, leaderboard.items()),
         key=lambda item: (
@@ -277,12 +275,12 @@ def ranked_calls(
     )
 
 
-def default_state() -> BogotreeState:
+def default_state() -> "BogotreeState":
     x = warmup_values()
     return BogotreeState(x=x, best_x=x)
 
 
-def default_user_stats(username: str = "") -> BogotreeUserStats:
+def default_user_stats(username: str = "") -> "BogotreeUserStats":
     return BogotreeUserStats(username=username)
 
 
