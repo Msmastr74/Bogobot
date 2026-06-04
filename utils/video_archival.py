@@ -6,6 +6,7 @@ import math
 import logging
 from pathlib import Path
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -17,6 +18,7 @@ from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 
 
 SCAN_WORKERS = 3
+SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>-?\d+(?:\.\d+)?)")
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,8 @@ class VideoScanResult:
     timestamp: float
     score: float
     relative_seconds: float
-    sampled_frames: int
+    scanned_frames: int
+    frame: bytes | None
 
 
 @dataclass(frozen=True)
@@ -52,7 +55,8 @@ class _ScanCandidate:
 class _ScanRangeResult:
     score: float
     relative_seconds: float
-    sampled_frames: int
+    scanned_frames: int
+    frame: bytes | None
 
 
 @dataclass(frozen=True)
@@ -287,12 +291,12 @@ class VideoArchiver:
         image: Image.Image,
         *,
         min_score: float = 0.86,
-        sample_interval_seconds: float = 1.0,
         locator_interval_seconds: float = 30.0,
         max_candidates: int = 12,
         requested_start_timestamp: float | None = None,
         requested_end_timestamp: float | None = None,
     ) -> VideoScanResult | None:
+        total_started_at = time.perf_counter()
         video_path = self.video_path_for_day(day)
         if not video_path.exists():
             return None
@@ -303,14 +307,25 @@ class VideoArchiver:
         if archive_start_timestamp is None:
             archive_start_timestamp = datetime.strptime(day, "%Y-%m-%d").timestamp()
 
-        sample_interval_seconds = max(0.25, float(sample_interval_seconds))
-        locator_interval_seconds = max(sample_interval_seconds, float(locator_interval_seconds))
+        locator_interval_seconds = max(0.25, float(locator_interval_seconds))
         frame_size = self.width * self.height * 3
+        templates_started_at = time.perf_counter()
         templates = self._scan_templates(image)
+        self.logger.debug(
+            "Video archive scan templates: %s templates in %.3fs",
+            len(templates),
+            time.perf_counter() - templates_started_at,
+        )
         if not templates:
             return None
 
+        duration_started_at = time.perf_counter()
         duration = self._video_duration(video_path)
+        self.logger.debug(
+            "Video archive scan duration probe: %s in %.3fs",
+            f"{duration:.3f}s" if duration is not None else "unavailable",
+            time.perf_counter() - duration_started_at,
+        )
         if duration is None:
             return None
         scan_start_seconds = 0.0 if requested_start_timestamp is None else max(
@@ -324,6 +339,7 @@ class VideoArchiver:
         if scan_end_seconds <= scan_start_seconds:
             return None
 
+        locator_started_at = time.perf_counter()
         candidates = self._scan_candidates(
             video_path,
             templates,
@@ -332,28 +348,35 @@ class VideoArchiver:
             start_seconds=scan_start_seconds,
             duration_seconds=scan_end_seconds - scan_start_seconds,
         )
+        self.logger.debug(
+            "Video archive scan locator: %s candidates in %.3fs over %.3fs..%.3fs",
+            len(candidates),
+            time.perf_counter() - locator_started_at,
+            scan_start_seconds,
+            scan_end_seconds,
+        )
         if not candidates:
             return None
 
         ranges = self._scan_ranges(
             scan_start_seconds,
             scan_end_seconds,
-            sample_interval_seconds,
         )
         if not ranges:
             return None
 
         best_score = -1.0
         best_relative_seconds = 0.0
-        sampled_frames = 0
+        best_frame: bytes | None = None
+        scanned_frames = 0
 
+        dense_started_at = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(ranges)) as executor:
             futures = [
                 executor.submit(
                     self._scan_video_range,
                     video_path,
                     candidates,
-                    sample_interval_seconds,
                     start_seconds,
                     duration_seconds,
                     frame_size,
@@ -362,18 +385,42 @@ class VideoArchiver:
             ]
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
-                sampled_frames += result.sampled_frames
+                scanned_frames += result.scanned_frames
                 if result.score > best_score:
                     best_score = result.score
                     best_relative_seconds = result.relative_seconds
+                    best_frame = result.frame
+        dense_seconds = time.perf_counter() - dense_started_at
+        self.logger.debug(
+            "Video archive scan dense pass: %s frames in %.3fs; best %.3f at +%.3fs",
+            scanned_frames,
+            dense_seconds,
+            best_score,
+            best_relative_seconds,
+        )
 
-        if sampled_frames <= 0 or best_score < min_score:
+        if scanned_frames <= 0 or best_score < min_score:
+            self.logger.debug(
+                "Video archive scan rejected in %.3fs: frames=%s best=%.3f min=%.3f",
+                time.perf_counter() - total_started_at,
+                scanned_frames,
+                best_score,
+                min_score,
+            )
             return None
+        self.logger.debug(
+            "Video archive scan matched in %.3fs: score=%.3f relative=%.3fs frames=%s",
+            time.perf_counter() - total_started_at,
+            best_score,
+            best_relative_seconds,
+            scanned_frames,
+        )
         return VideoScanResult(
             timestamp=archive_start_timestamp + best_relative_seconds,
             score=best_score,
             relative_seconds=best_relative_seconds,
-            sampled_frames=sampled_frames,
+            scanned_frames=scanned_frames,
+            frame=best_frame,
         )
 
     def _extract_frame_command(
@@ -406,16 +453,16 @@ class VideoArchiver:
     def _scan_frames_command(
         self,
         video_path: Path,
-        sample_interval_seconds: float,
         *,
         start_seconds: float = 0.0,
         duration_seconds: float | None = None,
+        select_interval_seconds: float | None = None,
+        show_frame_info: bool = False,
     ) -> list[str]:
-        fps = 1.0 / max(0.25, sample_interval_seconds)
         command = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "error",
+            "-loglevel", "info" if show_frame_info else "error",
         ]
         if start_seconds > 0:
             command.extend(["-ss", f"{start_seconds:.3f}"])
@@ -425,8 +472,16 @@ class VideoArchiver:
         ])
         if duration_seconds is not None:
             command.extend(["-t", f"{duration_seconds:.3f}"])
+        filters: list[str] = []
+        if select_interval_seconds is not None:
+            interval = max(0.25, select_interval_seconds)
+            filters.append(f"select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})")
+        filters.append(f"scale={self.width}:{self.height}")
+        if show_frame_info:
+            filters.append("showinfo")
         command.extend([
-            "-vf", f"fps=fps={fps:.6f},scale={self.width}:{self.height}",
+            "-vf", ",".join(filters),
+            "-fps_mode", "passthrough",
             "-f", "rawvideo",
             "-pix_fmt", "rgb24",
             "pipe:1",
@@ -478,9 +533,9 @@ class VideoArchiver:
         process = subprocess.Popen(
             self._scan_frames_command(
                 video_path,
-                locator_interval_seconds,
                 start_seconds=start_seconds,
                 duration_seconds=duration_seconds,
+                select_interval_seconds=locator_interval_seconds,
             ),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -543,25 +598,17 @@ class VideoArchiver:
         self,
         start_seconds: float,
         end_seconds: float,
-        sample_interval_seconds: float,
     ) -> list[tuple[float, float | None]]:
         duration = end_seconds - start_seconds
         if duration <= 0:
             return []
 
-        total_samples = int(math.ceil(duration / sample_interval_seconds)) + 1
-        workers = max(1, min(SCAN_WORKERS, total_samples))
-        samples_per_worker = int(math.ceil(total_samples / workers))
+        workers = max(1, min(SCAN_WORKERS, int(math.ceil(duration))))
+        range_seconds = duration / workers
         ranges: list[tuple[float, float | None]] = []
         for index in range(workers):
-            start_sample = index * samples_per_worker
-            if start_sample >= total_samples:
-                break
-            end_sample = min(total_samples, start_sample + samples_per_worker)
-            range_start_seconds = start_seconds + start_sample * sample_interval_seconds
-            duration_seconds = None if index == workers - 1 else (
-                (end_sample - start_sample) * sample_interval_seconds
-            )
+            range_start_seconds = start_seconds + index * range_seconds
+            duration_seconds = None if index == workers - 1 else range_seconds
             ranges.append((range_start_seconds, duration_seconds))
         return ranges
 
@@ -569,26 +616,45 @@ class VideoArchiver:
         self,
         video_path: Path,
         candidates: list[_ScanCandidate],
-        sample_interval_seconds: float,
         start_seconds: float,
         duration_seconds: float | None,
         frame_size: int,
     ) -> _ScanRangeResult:
+        started_at = time.perf_counter()
         process = subprocess.Popen(
             self._scan_frames_command(
                 video_path,
-                sample_interval_seconds,
                 start_seconds=start_seconds,
                 duration_seconds=duration_seconds,
+                show_frame_info=True,
             ),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         assert process.stdout is not None
+        assert process.stderr is not None
 
         best_score = -1.0
         best_relative_seconds = start_seconds
-        sampled_frames = 0
+        best_frame: bytes | None = None
+        best_frame_index = 0
+        scanned_frames = 0
+        stderr_chunks: list[bytes] = []
+
+        def read_stderr() -> None:
+            assert process.stderr is not None
+            while True:
+                chunk = process.stderr.read(65536)
+                if not chunk:
+                    return
+                stderr_chunks.append(chunk)
+
+        stderr_thread = threading.Thread(
+            target=read_stderr,
+            name="BogobotVideoScanStderr",
+            daemon=True,
+        )
+        stderr_thread.start()
 
         try:
             while True:
@@ -598,28 +664,38 @@ class VideoArchiver:
                 if len(data) != frame_size:
                     break
                 score = self._scan_frame_score(data, candidates)
-                relative_seconds = start_seconds + sampled_frames * sample_interval_seconds
-                sampled_frames += 1
+                scanned_frames += 1
                 if score > best_score:
                     best_score = score
-                    best_relative_seconds = relative_seconds
+                    best_frame = bytes(data)
+                    best_frame_index = scanned_frames - 1
         finally:
             if process.stdout is not None:
                 with contextlib.suppress(OSError):
                     process.stdout.close()
 
-        stderr = b""
-        if process.stderr is not None:
-            stderr = process.stderr.read()
-            process.stderr.close()
         process.wait(timeout=5)
+        stderr_thread.join(timeout=5)
+        stderr = b"".join(stderr_chunks)
+        best_pts_time = self._scan_showinfo_time(stderr, best_frame_index)
+        if best_pts_time is not None:
+            best_relative_seconds = start_seconds + best_pts_time
 
         if process.returncode not in (0, None):
             message = stderr.decode(errors="replace").strip()
             if message:
                 self.logger.warning(f"Video archive scan failed: {message}")
-            return _ScanRangeResult(-1.0, start_seconds, sampled_frames)
-        return _ScanRangeResult(best_score, best_relative_seconds, sampled_frames)
+            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None)
+        self.logger.debug(
+            "Video archive scan worker: +%.3fs duration=%s frames=%s time=%.3fs best=%.3f at +%.3fs",
+            start_seconds,
+            f"{duration_seconds:.3f}s" if duration_seconds is not None else "end",
+            scanned_frames,
+            time.perf_counter() - started_at,
+            best_score,
+            best_relative_seconds,
+        )
+        return _ScanRangeResult(best_score, best_relative_seconds, scanned_frames, best_frame)
 
     def _scan_frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
         import numpy as np
@@ -641,7 +717,33 @@ class VideoArchiver:
     def _scan_sample_step(self, width: int, height: int) -> int:
         return max(1, min(width, height) // 96)
 
+    def _scan_showinfo_time(self, stderr: bytes, frame_index: int) -> float | None:
+        text = stderr.decode(errors="replace")
+        for match in SHOWINFO_RE.finditer(text):
+            if int(match.group("index")) == frame_index:
+                with contextlib.suppress(ValueError):
+                    return float(match.group("time"))
+                return None
+        return None
+
     def _video_duration(self, video_path: Path) -> float | None:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            with contextlib.suppress(ValueError):
+                duration = float(result.stdout.decode(errors="replace").strip())
+                if math.isfinite(duration) and duration > 0:
+                    return duration
+
         frame_pts = self._read_frame_pts(video_path)
         timeline_pts = self._frame_timeline_pts(frame_pts)
         if not timeline_pts:

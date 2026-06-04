@@ -1107,7 +1107,6 @@ async def setup(bot: BotCore):
                 day,
                 target_image,
                 min_score=min_score,
-                sample_interval_seconds=1.0,
                 max_candidates=max_candidates,
                 requested_start_timestamp=requested_start_timestamp,
                 requested_end_timestamp=requested_end_timestamp,
@@ -1124,11 +1123,31 @@ async def setup(bot: BotCore):
             return
 
         epoch_ts = math.ceil(result.timestamp)
-        await bot.discord.send(
-            (
-                f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
-                f"-# score `{result.score:.3f}` over `{result.sampled_frames}` sampled frames"
-            ),
-            response=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        files: list[discord.File] = []
+        if result.frame is not None:
+            frame_image = Image.frombytes(
+                "RGB",
+                (video_archiver.width, video_archiver.height),
+                result.frame,
+            )
+            frame_buffer = io.BytesIO()
+            frame_image.save(frame_buffer, format="JPEG", quality=90)
+            frame_buffer.seek(0)
+            files.append(discord.File(
+                frame_buffer,
+                filename=f"archive_scan_{epoch_ts}.jpg",
+            ))
+
+        try:
+            await bot.discord.send(
+                (
+                    f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
+                    f"-# score `{result.score:.3f}` over `{result.scanned_frames}` archive frames"
+                ),
+                files=files,
+                response=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        finally:
+            for file in files:
+                file.close()
