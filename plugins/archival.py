@@ -975,7 +975,6 @@ async def setup(bot: BotCore):
         image: discord.Attachment,
         date: str | None = None,
         min_score: float = 0.86,
-        locator_interval_seconds: float = 30.0,
         max_candidates: int = 12,
     ):
         nonlocal archive_scan_last_finished_at, archive_scan_running
@@ -1018,13 +1017,6 @@ async def setup(bot: BotCore):
                 ephemeral=True,
             )
             return
-        if locator_interval_seconds <= 0:
-            await bot.discord.send(
-                "`locator_interval_seconds` must be greater than 0.",
-                response=True,
-                ephemeral=True,
-            )
-            return
         if max_candidates <= 0:
             await bot.discord.send(
                 "`max_candidates` must be greater than 0.",
@@ -1056,7 +1048,6 @@ async def setup(bot: BotCore):
                 target_image,
                 min_score=min_score,
                 sample_interval_seconds=1.0,
-                locator_interval_seconds=locator_interval_seconds,
                 max_candidates=max_candidates,
             )
         finally:
