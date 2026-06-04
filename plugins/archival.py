@@ -64,14 +64,15 @@ class ScanView(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=None)
 
-        self.add_item(discord.ui.Section(
-            discord.ui.TextDisplay(f"## Scan <t:{int(day_timestamp)}:D>"),
-            accessory=discord.ui.Thumbnail(
-                input_media,
-                description="Input image",
-            ),
-        ))
         container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(f"## Scan <t:{int(day_timestamp)}:D>"),
+                accessory=discord.ui.Thumbnail(
+                    input_media,
+                    description="Input image",
+                ),
+            ),
+            discord.ui.Separator(),
             discord.ui.TextDisplay("### Scan Progress"),
             discord.ui.TextDisplay(self._progress_text(progress)),
         )
@@ -86,6 +87,12 @@ class ScanView(discord.ui.LayoutView):
                         description="Matched archive frame",
                     )
                 ))
+        elif progress.done:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(
+                "No matching archive frame found.\n"
+                "-# Try a lower `min_score` or a narrower `start_time`/`end_time` window."
+            ))
 
         self.add_item(container)
 
@@ -103,9 +110,9 @@ class ScanView(discord.ui.LayoutView):
             lines.append(f"Best score: `{progress.best_score:.3f}`")
         remaining = progress.estimated_remaining_seconds
         if remaining is not None and not progress.done:
-            lines.append(f"Estimated remaining: `{self._duration(remaining)}`")
+            lines.append(f"Estimated time remaining: `{self._duration(remaining)}`")
         elif progress.done:
-            lines.append("Estimated remaining: `0s`")
+            lines.append("Estimated time remaining: `0s`")
         return "\n".join(lines)
 
     def _progress_bar(self, progress: ScanProgress) -> str | None:
