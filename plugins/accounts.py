@@ -1,6 +1,8 @@
+from collections.abc import Mapping
+
 import discord
 
-from typing import Any, Iterable, Literal, Mapping
+from typing import Any, Iterable, Literal, Protocol
 from bogobot_core import BotCore
 from utils.accounts import AccountRecord, Account
 from utils import groups
@@ -25,6 +27,11 @@ RANK_NUMS: dict[Rank, int] = {
     "admin": 3,
     "owner": 4
 }
+
+class ModelDump(Protocol):
+    def model_dump(self) -> dict[str, Any]:
+        ...
+
 class AccountListView(discord.ui.LayoutView):
     def __init__(
         self, *,
@@ -95,7 +102,10 @@ class AccountView(discord.ui.LayoutView):
         container.add_item(discord.ui.TextDisplay(self._format_data("Cbogo", cbogo_data)))
         self.add_item(container)
     
-    def _format_data(self, title: str, data: Mapping[str, Any]):
+    def _format_data(self, title: str, data: Mapping[str, Any] | ModelDump):
+        if not isinstance(data, Mapping):
+            data = data.model_dump()
+
         text = f"### {title}\n"
         for k, v in data.items():
             if k == "username":

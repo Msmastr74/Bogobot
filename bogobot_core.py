@@ -17,7 +17,6 @@ from utils.edit_coalescer import EditCoalescer
 from utils.notifications import NotificationBroadcaster
 from utils.type import P, T, Coro
 from utils.callbacks import CallbackRegistry, AsyncCallback, MaybeAwaitableT
-from utils.ai import ai
 import logging
 from plugins.admin import MEMORY_LOG_HANDLER
 
@@ -161,30 +160,6 @@ class BotCore(discord.Client):
         self.event(self.on_member_join)
         self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
-        ai_config = self.config.get("ai", {})
-        if not isinstance(ai_config, dict):
-            raise TypeError("Config key 'ai' must be an object.")
-        ai_history_config_raw = ai_config.get("history", {})
-        ai_history_config = ai_history_config_raw if isinstance(ai_history_config_raw, dict) else {}
-        ai.configure(
-            enabled=bool(ai_config.get("enabled", True)),
-            model_name=str(ai_config.get("model", ai.model_name)),
-            api_key_env=str(ai_config.get("api_key_env", ai.api_key_env)),
-            base_url=ai_config.get("base_url"),
-            request_interval_seconds=float(ai_config.get(
-                "request_interval_seconds",
-                ai.request_interval_seconds,
-            )),
-            normalize_discord=bool(ai_config.get("normalize_discord", ai.normalize_discord)),
-            history_enabled=bool(ai_history_config.get("enabled", ai.history_enabled)),
-            history_path=str(ai_history_config.get("path", ai.history_path)),
-            history_char_budget=int(ai_history_config.get("char_budget", ai.history_char_budget)),
-            logger=self.logger.getChild("AI"),
-        )
-        api_key = ai_config.get("api_key")
-        if ai.enabled and api_key:
-            os.environ[ai.api_key_env] = str(api_key)
-        
         self.milestones: 'MilestoneTracker | None' = None
     
     def get_stream_uptime(self):

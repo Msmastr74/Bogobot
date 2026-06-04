@@ -1,4 +1,6 @@
-from typing import Callable, Literal, Mapping, TypedDict
+from __future__ import annotations
+
+from typing import Any, Callable, Literal, Mapping, Self
 import asyncio
 import json
 import os
@@ -6,10 +8,12 @@ import random
 import time
 
 import discord
+from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
 
 from bogobot_core import BotCore
 from utils.ai import AIParam, action
 from utils.discord import count_characters
+from utils.schemas import Schema
 
 
 CBOGO_N = 10
@@ -34,28 +38,6 @@ HEIGHT_CHARS = [
 
 BOGOGREEN = 0x499D6A
 BOGORANGE = 0xDA7656
-class CbogoState(TypedDict):
-    current_array: list[int]
-    shuffles: int
-    uses: int
-    best_run_shuffle: int
-    best_score: int
-    best_run_count: int
-    best_array: list[int]
-    solved: bool
-    winner_id: int | None
-    winner_name: str | None
-    last_user: int | None
-
-
-class CbogoUserStats(TypedDict):
-    uses: int
-    shuffles: int
-    best_run: int
-    best_timestamp: int
-    username: str
-
-
 class CbogoView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -72,39 +54,39 @@ class CbogoView(discord.ui.LayoutView):
         run_stats = [f"Shuffled {run_shuffles} times"] if run_shuffles is not None else []
 
         body_lines = [
-            *render_array(state["current_array"], previous_array),
+            *render_array(state.current_array, previous_array),
             "-# ■ = correct",
             *run_stats,
             "",
             "**Stats:**",
-            f"Shuffles: {state['shuffles']:,}",
-            f"Uses: {state['uses']:,}",
+            f"Shuffles: {state.shuffles:,}",
+            f"Uses: {state.uses:,}",
             f"Best run: {best_result_text(state, previous_best_score)}",
-            f"Achieved first at shuffle {state['best_run_shuffle']:,}",
-            f"Times achieved: {state['best_run_count']:,}",
+            f"Achieved first at shuffle {state.best_run_shuffle:,}",
+            f"Times achieved: {state.best_run_count:,}",
         ]
-        if state["solved"]:
+        if state.solved:
             winner = (
-                f"<@{state['winner_id']}>"
-                if state["winner_id"] is not None
-                else state["winner_name"] or "someone"
+                f"<@{state.winner_id}>"
+                if state.winner_id is not None
+                else state.winner_name or "someone"
             )
             body_lines.append(f"Sorted by {winner}.")
 
         best_improved = (
             previous_best_score is not None
-            and state["best_score"] > previous_best_score
+            and state.best_score > previous_best_score
         )
         best_equal = (
             previous_best_score is not None
-            and in_position(state["current_array"]) == previous_best_score
+            and in_position(state.current_array) == previous_best_score
         )
         accent_colour = discord.Colour.blue()
         if best_improved:
             accent_colour = discord.Colour.gold()
         elif best_equal:
             accent_colour = discord.Colour(BOGOGREEN)
-        if state["solved"] and not best_improved:
+        if state.solved and not best_improved:
             accent_colour = discord.Color.light_grey()
 
         self.add_item(discord.ui.TextDisplay(f"## {title}"))
@@ -143,14 +125,14 @@ class CbogoLeaderboard(discord.ui.LayoutView):
         self.add_item(self.leaderboard_container(
             "Shuffles",
             ranked_shuffles(leaderboard),
-            lambda uid, stats: f"<@{uid}> — {stats['shuffles']:,} shuffles",
+            lambda uid, stats: f"<@{uid}> — {stats.shuffles:,} shuffles",
             discord.Colour(BOGOGREEN),
             target=target,
         ))
         self.add_item(self.leaderboard_container(
             "Uses",
             ranked_uses(leaderboard),
-            lambda uid, stats: f"<@{uid}> — {stats['uses']:,} uses",
+            lambda uid, stats: f"<@{uid}> — {stats.uses:,} uses",
             discord.Colour.blurple(),
             target=target,
         ))
@@ -222,10 +204,10 @@ class CbogoLeaderboard(discord.ui.LayoutView):
 
 
     def best_run_line(self, uid: str, stats: CbogoUserStats) -> str:
-        timestamp = stats["best_timestamp"]
+        timestamp = stats.best_timestamp
         best_time = f"<t:{timestamp}:f>" if timestamp else "never"
         return (
-            f"<@{uid}> — {stats['best_run']}/{CBOGO_N}\n"
+            f"<@{uid}> — {stats.best_run}/{CBOGO_N}\n"
             f"-# Achieved first at {best_time}"
         )
 
@@ -239,50 +221,127 @@ def default_array() -> list[int]:
 
 def default_state() -> CbogoState:
     current_array = default_array()
-    return {
-        "current_array": current_array,
-        "shuffles": 0,
-        "uses": 0,
-        "best_run_shuffle": 0,
-        "best_score": 0,
-        "best_run_count": 0,
-        "best_array": current_array,
-        "solved": False,
-        "winner_id": None,
-        "winner_name": None,
-        "last_user": None
-    }
+    return CbogoState(
+        current_array=current_array,
+        shuffles=0,
+        uses=0,
+        best_run_shuffle=0,
+        best_score=0,
+        best_run_count=0,
+        best_array=current_array,
+    )
 
 
 def default_user_stats(username: str = "") -> CbogoUserStats:
-    return {
-        "uses": 0,
-        "shuffles": 0,
-        "best_run": 0,
-        "best_timestamp": 0,
-        "username": username,
-    }
+    return CbogoUserStats(
+        uses=0,
+        shuffles=0,
+        best_run=0,
+        best_timestamp=0,
+        username=username,
+    )
+
+
+class CbogoUserStats(Schema):
+    uses: int = Field(0, validation_alias=AliasChoices("uses", "runs"))
+    shuffles: int = 0
+    best_run: int = Field(0, validation_alias=AliasChoices("best_run", "best_shuffle"))
+    best_timestamp: int = 0
+    username: str = ""
+
+    @field_validator("uses", "shuffles", "best_run", "best_timestamp", mode="before")
+    @classmethod
+    def nonnegative_int(cls, value: Any) -> int:
+        return max(0, int(value))
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def stringify_username(cls, value: Any) -> str:
+        return str(value)
+
+
+class CbogoState(Schema):
+    current_array: list[int]
+    shuffles: int = Field(
+        0,
+        validation_alias=AliasChoices("shuffles", "current_shuffle", "total_shuffles"),
+    )
+    uses: int = Field(0, validation_alias=AliasChoices("uses", "runs"))
+    best_run_shuffle: int = Field(
+        0,
+        validation_alias=AliasChoices("best_run_shuffle", "best_shuffle"),
+    )
+    best_score: int = Field(0, validation_alias=AliasChoices("best_score", "best_run"))
+    best_run_count: int = Field(
+        0,
+        validation_alias=AliasChoices("best_run_count", "best_run_number"),
+    )
+    best_array: list[int]
+    solved: bool = False
+    winner_id: int | None = None
+    winner_name: str | None = None
+    last_user: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_best_array(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if "best_array" not in data and "current_array" in data:
+            data["best_array"] = data["current_array"]
+        return data
+
+    @field_validator("current_array", "best_array", mode="before")
+    @classmethod
+    def validate_array(cls, value: object) -> list[int]:
+        return normalize_array(value)
+
+    @field_validator(
+        "shuffles",
+        "uses",
+        "best_run_shuffle",
+        "best_run_count",
+        mode="before",
+    )
+    @classmethod
+    def nonnegative_int(cls, value: Any) -> int:
+        return max(0, int(value))
+
+    @field_validator("best_score", mode="before")
+    @classmethod
+    def best_score_value(cls, value: Any) -> int:
+        return max(0, min(CBOGO_N, int(value)))
+
+    @field_validator("winner_name", mode="before")
+    @classmethod
+    def stringify_winner_name(cls, value: Any) -> str | None:
+        return str(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def derive_state(self) -> Self:
+        if self.best_run_shuffle > 0:
+            self.best_score = max(self.best_score, in_position(self.best_array))
+        if self.best_score > 0:
+            self.best_run_count = max(self.best_run_count, 1)
+        if is_sorted(self.current_array):
+            self.best_array = self.current_array
+            self.best_score = CBOGO_N
+            self.best_run_shuffle = self.best_run_shuffle or self.shuffles
+            self.best_run_count = max(self.best_run_count, 1)
+        self.solved = self.solved or self.best_score >= CBOGO_N
+        return self
 
 
 def normalize_user_stats(raw_stats: object, username: str = "") -> CbogoUserStats:
     if not isinstance(raw_stats, dict):
         return default_user_stats(username)
 
+    raw_stats = {**raw_stats}
+    raw_stats.setdefault("username", username)
     try:
-        return {
-            "uses": max(0, int(raw_stats.get(
-                "uses",
-                raw_stats.get("runs", 0),
-            ))),
-            "shuffles": max(0, int(raw_stats.get("shuffles", 0))),
-            "best_run": max(0, int(raw_stats.get(
-                "best_run",
-                raw_stats.get("best_shuffle", 0),
-            ))),
-            "best_timestamp": max(0, int(raw_stats.get("best_timestamp", 0))),
-            "username": str(raw_stats.get("username", username)),
-        }
-    except (TypeError, ValueError):
+        return CbogoUserStats.model_validate(raw_stats)
+    except ValidationError:
         return default_user_stats(username)
 
 
@@ -290,11 +349,11 @@ def ranked_best_runs(
     leaderboard: dict[str, CbogoUserStats],
 ) -> list[tuple[str, CbogoUserStats]]:
     return sorted(
-        filter(lambda item: item[1]["best_run"] > 0, leaderboard.items()),
+        filter(lambda item: item[1].best_run > 0, leaderboard.items()),
         key=lambda item: (
-            -item[1]["best_run"],
-            item[1]["best_timestamp"] or 2**63 - 1,
-            -item[1]["uses"],
+            -item[1].best_run,
+            item[1].best_timestamp or 2**63 - 1,
+            -item[1].uses,
             item[0],
         ),
     )
@@ -304,8 +363,8 @@ def ranked_shuffles(
     leaderboard: dict[str, CbogoUserStats],
 ) -> list[tuple[str, CbogoUserStats]]:
     return sorted(
-        filter(lambda item: item[1]["shuffles"] > 0, leaderboard.items()),
-        key=lambda item: (-item[1]["shuffles"], item[0]),
+        filter(lambda item: item[1].shuffles > 0, leaderboard.items()),
+        key=lambda item: (-item[1].shuffles, item[0]),
     )
 
 
@@ -313,8 +372,8 @@ def ranked_uses(
     leaderboard: dict[str, CbogoUserStats],
 ) -> list[tuple[str, CbogoUserStats]]:
     return sorted(
-        filter(lambda item: item[1]["uses"] > 0, leaderboard.items()),
-        key=lambda item: (-item[1]["uses"], item[0]),
+        filter(lambda item: item[1].uses > 0, leaderboard.items()),
+        key=lambda item: (-item[1].uses, item[0]),
     )
 
 
@@ -323,60 +382,9 @@ def normalize_state(raw_state: object) -> CbogoState:
         return default_state()
 
     try:
-        current_array = normalize_array(raw_state.get("current_array"))
-        best_array = normalize_array(raw_state.get("best_array", current_array))
-        shuffles = max(0, int(raw_state.get(
-            "shuffles",
-            raw_state.get("current_shuffle", raw_state.get("total_shuffles", 0)),
-        )))
-        uses = max(0, int(raw_state.get("uses", raw_state.get("runs", 0))))
-        best_run_shuffle = max(0, int(raw_state.get(
-            "best_run_shuffle",
-            raw_state.get("best_shuffle", 0),
-        )))
-        best_score = max(0, min(CBOGO_N, int(raw_state.get(
-            "best_score",
-            raw_state.get("best_run", 0),
-        ))))
-        best_run_count = max(0, int(raw_state.get(
-            "best_run_count",
-            raw_state.get("best_run_number", 0),
-        )))
-        if best_run_shuffle > 0:
-            best_score = max(best_score, in_position(best_array))
-        if best_score > 0:
-            best_run_count = max(best_run_count, 1)
-        if is_sorted(current_array):
-            best_array = current_array
-            best_score = CBOGO_N
-            best_run_shuffle = best_run_shuffle or shuffles
-            best_run_count = max(best_run_count, 1)
-        solved = bool(raw_state.get("solved", False)) or best_score >= CBOGO_N
-        winner_id = raw_state.get("winner_id")
-        if winner_id is not None:
-            winner_id = int(winner_id)
-        winner_name = raw_state.get("winner_name")
-        if winner_name is not None:
-            winner_name = str(winner_name)
-        last_user = raw_state.get("last_user")
-        if last_user is not None:
-            last_user = int(last_user)
-    except (TypeError, ValueError):
+        return CbogoState.model_validate(raw_state)
+    except ValidationError:
         return default_state()
-
-    return {
-        "current_array": current_array,
-        "shuffles": shuffles,
-        "uses": uses,
-        "best_run_shuffle": best_run_shuffle,
-        "best_score": best_score,
-        "best_run_count": best_run_count,
-        "best_array": best_array,
-        "solved": solved,
-        "winner_id": winner_id,
-        "winner_name": winner_name,
-        "last_user": last_user
-    }
 
 
 def normalize_array(value: object) -> list[int]:
@@ -470,7 +478,7 @@ def render_previous_array(
     ]
 
 def best_result_text(state: CbogoState, previous_best_score: int | None = None) -> str:
-    current = state["best_score"]
+    current = state.best_score
     if previous_best_score is None or previous_best_score == current:
         return f"{current}/{CBOGO_N}"
     return f"{previous_best_score}/{CBOGO_N} → {current}/{CBOGO_N}"
@@ -541,14 +549,15 @@ async def setup(bot: BotCore):
     async def get_state() -> CbogoState:
         storage = await load_storage()
         state = normalize_state(storage.get(CBOGO_STATE_KEY, storage))
-        if state != storage.get(CBOGO_STATE_KEY):
-            storage[CBOGO_STATE_KEY] = state
+        state_data = state.model_dump()
+        if state_data != storage.get(CBOGO_STATE_KEY):
+            storage[CBOGO_STATE_KEY] = state_data
             await save_storage(storage)
         return state
 
     async def save_state(state: CbogoState) -> None:
         storage = await load_storage()
-        storage[CBOGO_STATE_KEY] = state
+        storage[CBOGO_STATE_KEY] = state.model_dump()
         await save_storage(storage)
 
     async def get_leaderboard() -> dict[str, CbogoUserStats]:
@@ -574,10 +583,10 @@ async def setup(bot: BotCore):
     async def reset_user_scores() -> None:
         for uid, raw_stats in await bot.accounts.query(CBOGO_ACCOUNT_KEY):
             stats = normalize_user_stats(raw_stats)
-            stats["shuffles"] = 0
-            stats["best_run"] = 0
-            stats["best_timestamp"] = 0
-            await bot.accounts[uid].write(CBOGO_ACCOUNT_KEY, stats)
+            stats.shuffles = 0
+            stats.best_run = 0
+            stats.best_timestamp = 0
+            await bot.accounts[uid].write(CBOGO_ACCOUNT_KEY, stats.model_dump())
 
     async def update_user_stats(
         interaction: discord.Interaction,
@@ -592,13 +601,13 @@ async def setup(bot: BotCore):
             account.get(CBOGO_ACCOUNT_KEY),
             str(interaction.user),
         )
-        stats["username"] = str(interaction.user)
-        stats["uses"] += uses
-        stats["shuffles"] += shuffles
-        if best_run > stats["best_run"]:
-            stats["best_run"] = best_run
-            stats["best_timestamp"] = int(time.time())
-        await account.write(CBOGO_ACCOUNT_KEY, stats)
+        stats.username = str(interaction.user)
+        stats.uses += uses
+        stats.shuffles += shuffles
+        if best_run > stats.best_run:
+            stats.best_run = best_run
+            stats.best_timestamp = int(time.time())
+        await account.write(CBOGO_ACCOUNT_KEY, stats.model_dump())
 
     @bot.setup.command(
         name="cbogo",
@@ -648,8 +657,8 @@ async def setup(bot: BotCore):
                 return
             async with state_lock:
                 state = await get_state()
-                old_last_user = state["last_user"]
-                state["last_user"] = None
+                old_last_user = state.last_user
+                state.last_user = None
                 await save_state(state)
             if old_last_user is None:
                 await bot.discord.send(
@@ -685,14 +694,14 @@ async def setup(bot: BotCore):
 
         async with state_lock:
             state = await get_state()
-            if state["solved"]:
+            if state.solved:
                 await bot.discord.send(
                     view=CbogoView(title=f"cbogo {sorted_emoji}", state=state),
                     response=True,
                     safety_filter=True
                 )
                 return
-            if state["last_user"] == interaction.user.id:
+            if state.last_user == interaction.user.id:
                 await bot.discord.send(
                     "You cannot use cbogo twice in a row!",
                     response=True,
@@ -700,28 +709,28 @@ async def setup(bot: BotCore):
                 )
                 return
             await bot.discord.defer()
-            state["last_user"] = interaction.user.id
+            state.last_user = interaction.user.id
 
-            shuffle_start = state["shuffles"]
-            previous_best_score = state["best_score"]
-            previous_array = state["current_array"]
+            shuffle_start = state.shuffles
+            previous_best_score = state.best_score
+            previous_array = state.current_array
 
-            current, performed, run_best_score = run_shuffles(state["current_array"])
+            current, performed, run_best_score = run_shuffles(state.current_array)
 
-            state["current_array"] = current
-            state["shuffles"] = shuffle_start + performed
-            state["uses"] += 1
-            if run_best_score > state["best_score"]:
-                state["best_score"] = run_best_score
-                state["best_array"] = current
-                state["best_run_shuffle"] = state["shuffles"]
-                state["best_run_count"] = 1
-            elif run_best_score > 0 and run_best_score == state["best_score"]:
-                state["best_run_count"] += 1
-            state["solved"] = run_best_score >= CBOGO_N
-            if state["solved"]:
-                state["winner_id"] = interaction.user.id
-                state["winner_name"] = str(interaction.user)
+            state.current_array = current
+            state.shuffles = shuffle_start + performed
+            state.uses += 1
+            if run_best_score > state.best_score:
+                state.best_score = run_best_score
+                state.best_array = current
+                state.best_run_shuffle = state.shuffles
+                state.best_run_count = 1
+            elif run_best_score > 0 and run_best_score == state.best_score:
+                state.best_run_count += 1
+            state.solved = run_best_score >= CBOGO_N
+            if state.solved:
+                state.winner_id = interaction.user.id
+                state.winner_name = str(interaction.user)
             await update_user_stats(
                 interaction,
                 uses=1,
@@ -732,7 +741,7 @@ async def setup(bot: BotCore):
 
         message = await bot.discord.send(
             view=CbogoView(
-                title=f"cbogo {sorted_emoji}" if state["solved"] else "cbogo",
+                title=f"cbogo {sorted_emoji}" if state.solved else "cbogo",
                 state=state,
                 run_shuffles=performed,
                 previous_best_score=previous_best_score,
@@ -741,5 +750,5 @@ async def setup(bot: BotCore):
             response=True,
             safety_filter=True
         )
-        if state["solved"] and message:
+        if state.solved and message:
             await message.add_reaction(sorted_emoji)

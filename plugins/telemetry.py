@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Literal, TypedDict, TypeAlias
 import itertools
 import discord
+from pydantic import TypeAdapter, ValidationError, field_validator
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
 from utils import groups
 from utils.ai import AIParam, action
+from utils.schemas import Schema
 from discord import app_commands
 
 class CommandTelemetryBase(TypedDict):
@@ -32,6 +34,44 @@ class CommandTelemetryEnd(CommandTelemetryBase):
     error: str | None
 
 CommandTelemetryEvent: TypeAlias = CommandTelemetryStart | CommandTelemetryEnd
+
+class CommandTelemetryEndSchema(Schema):
+    interaction_id: int
+    command: str
+    user_id: int
+    username: str
+    channel_id: int | None = None
+    time: int
+    phase: Literal["end"]
+    status: Literal["ok", "unauthorized", "error"]
+    duration_ms: float
+    error: str | None = None
+
+    @field_validator("command", "username", mode="before")
+    @classmethod
+    def stringify_required(cls, value: object) -> str:
+        return str(value)
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def stringify_optional(cls, value: object) -> str | None:
+        return str(value) if value is not None else None
+
+    def to_action(self) -> CommandTelemetryEnd:
+        return {
+            "interaction_id": self.interaction_id,
+            "command": self.command,
+            "user_id": self.user_id,
+            "username": self.username,
+            "channel_id": self.channel_id,
+            "time": self.time,
+            "phase": self.phase,
+            "status": self.status,
+            "duration_ms": self.duration_ms,
+            "error": self.error,
+        }
+
+COMMAND_TELEMETRY_END_ADAPTER = TypeAdapter(CommandTelemetryEndSchema)
 
 @dataclass
 class UserUsage:
@@ -105,32 +145,10 @@ async def setup(bot: BotCore):
         users_by_command[command][user_id] += 1
 
     def parse_action(item) -> "CommandTelemetryEnd | None":
-        if not isinstance(item, dict):
-            return None
-
-        if item.get("phase") != "end":
-            return None
-
         try:
-            action: CommandTelemetryEnd = {
-                "interaction_id": int(item["interaction_id"]),
-                "command": str(item["command"]),
-                "user_id": int(item["user_id"]),
-                "username": str(item["username"]),
-                "channel_id": int(item["channel_id"]) if item.get("channel_id") is not None else None,
-                "time": int(item["time"]),
-                "phase": "end",
-                "status": item["status"],
-                "duration_ms": float(item["duration_ms"]),
-                "error": str(item["error"]) if item.get("error") is not None else None,
-            }
-        except (KeyError, TypeError, ValueError):
+            return COMMAND_TELEMETRY_END_ADAPTER.validate_python(item).to_action()
+        except ValidationError:
             return None
-
-        if action["status"] not in ("ok", "unauthorized", "error"):
-            return None
-
-        return action
 
     def load_actions() -> None:
         if not telemetry_path.exists():

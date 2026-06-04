@@ -12,10 +12,12 @@ from requests import Response
 from discord.mentions import AllowedMentions
 from discord.poll import Poll
 from discord.ui.view import BaseView
+from pydantic import Field, field_validator
 
 from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.ai_context import ContextRequest, close_system_tag, open_system_tag
 from utils.discord import chunk_text, split_text_to_character_limit
+from utils.schemas import Schema
 from utils.type import Coro
 
 if TYPE_CHECKING:
@@ -40,6 +42,93 @@ class BotActionParameters(TypedDict, total=False):
 BotAction: TypeAlias = Callable[..., Coro[None]]
 MAX_ASSISTANT_CONTEXT_CHARS = 4500
 MAX_REPLY_CHARS = 2000
+
+
+class AIHistoryConfig(Schema):
+    enabled: bool = True
+    path: str = "ai_history.sqlite3"
+    char_budget: int = 10_000
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def stringify_path(cls, value: object) -> str:
+        return str(value)
+
+    @field_validator("char_budget", mode="before")
+    @classmethod
+    def nonnegative_char_budget(cls, value: Any) -> int:
+        return max(0, int(value))
+
+
+class AIBreakConfig(Schema):
+    enabled: bool = True
+    active_minutes: float = 20
+    break_minutes: float = 10
+
+    @field_validator("active_minutes", "break_minutes", mode="before")
+    @classmethod
+    def nonnegative_minutes(cls, value: Any) -> float:
+        return max(0.0, float(value))
+
+
+class AIConfig(Schema):
+    enabled: bool = True
+    model: str = "gpt-4o-mini"
+    api_key_env: str = "OPENAI_API_KEY"
+    api_key: str | None = None
+    base_url: str | None = None
+    request_interval_seconds: float = 60.0
+    normalize_discord: bool = True
+    history: AIHistoryConfig = Field(default_factory=AIHistoryConfig)
+    breaks: AIBreakConfig = Field(default_factory=AIBreakConfig)
+
+    @field_validator("model", "api_key_env", mode="before")
+    @classmethod
+    def stringify_required(cls, value: object) -> str:
+        return str(value)
+
+    @field_validator("api_key", "base_url", mode="before")
+    @classmethod
+    def stringify_optional(cls, value: object) -> str | None:
+        return str(value) if value is not None else None
+
+    @field_validator("request_interval_seconds", mode="before")
+    @classmethod
+    def nonnegative_request_interval(cls, value: Any) -> float:
+        return max(0.0, float(value))
+
+
+ai_config = AIConfig()
+
+
+def setup_ai(bot: "BotCore"):
+    import os
+    from utils.ai import ai as ai_core
+
+    global ai_config
+
+    raw_config = bot.config.get("ai", {})
+    if not isinstance(raw_config, dict):
+        raise TypeError("Config key 'ai' must be an object.")
+
+    ai_config = AIConfig.model_validate(raw_config)
+    ai_core.configure(
+        enabled=ai_config.enabled,
+        model_name=ai_config.model,
+        api_key_env=ai_config.api_key_env,
+        base_url=ai_config.base_url,
+        request_interval_seconds=ai_config.request_interval_seconds,
+        normalize_discord=ai_config.normalize_discord,
+        history_enabled=ai_config.history.enabled,
+        history_path=ai_config.history.path,
+        history_char_budget=ai_config.history.char_budget,
+        logger=bot.logger.getChild("AI"),
+    )
+    if ai_core.enabled and ai_config.api_key:
+        os.environ[ai_core.api_key_env] = ai_config.api_key
+    return ai_core
+
+
 _ai_break_until: datetime.datetime | None = None
 _capture_add_message_by_id: dict[int, Callable[[discord.Message | None], None]] = {}
 
@@ -439,20 +528,12 @@ def ai_on_break() -> bool:
     return _ai_break_until is not None and discord.utils.utcnow() < _ai_break_until
 
 
-def ai_config(bot: 'BotCore') -> dict[str, Any]:
-    config = bot.config.get("ai", {})
-    if not isinstance(config, dict):
-        raise TypeError("Config key 'ai' must be an object.")
-    return config
-
-
-def ai_break_config(bot: 'BotCore') -> dict[str, Any]:
-    config = ai_config(bot).get("breaks", {})
-    return config if isinstance(config, dict) else {}
+def ai_break_config(bot: 'BotCore') -> AIBreakConfig:
+    return ai_config.breaks
 
 
 def ai_enabled(bot: 'BotCore') -> bool:
-    return bool(ai_config(bot).get("enabled", True))
+    return ai_config.enabled
 
 
 class ContextRequestExecutor:
@@ -695,7 +776,7 @@ async def capture_interaction_output(interaction: discord.Interaction):
         followup.__class__ = followup_class
 
 async def setup(bot: 'BotCore'):
-    from utils.ai import ai as ai_core
+    ai_core = setup_ai(bot)
 
     bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
@@ -704,8 +785,8 @@ async def setup(bot: 'BotCore'):
     async def ai_break_cycle() -> None:
         global _ai_break_until
         breaks = ai_break_config(bot)
-        active_minutes = max(0.0, float(breaks.get("active_minutes", 20)))
-        break_minutes = max(0.0, float(breaks.get("break_minutes", 10)))
+        active_minutes = breaks.active_minutes
+        break_minutes = breaks.break_minutes
         if active_minutes <= 0 or break_minutes <= 0:
             return
 
@@ -905,7 +986,7 @@ async def setup(bot: 'BotCore'):
             "[DISPLAY_NAME]",
             bot.user.display_name
         )
-        if bool(ai_break_config(bot).get("enabled", True)) and (break_task is None or break_task.done()):
+        if ai_break_config(bot).enabled and (break_task is None or break_task.done()):
             break_task = asyncio.create_task(ai_break_cycle())
 
     @bot.close_callback

@@ -3,7 +3,7 @@ import datetime
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, get_args, get_origin
+from typing import Any, Callable, Generic, TypeVar, get_args, get_origin
 
 import pydantic
 from pydantic import (
@@ -18,16 +18,15 @@ from pydantic import (
 
 StatValue = str | int | float | bool
 
+T = TypeVar("T", bound='Schema', covariant=True)
+T2 = TypeVar("T2", bound='Schema', covariant=True)
+@dataclass(frozen=True)
+class Filter(Generic[T]):
+    display: Callable[[Any, T], Any] | None = None
 
 @dataclass(frozen=True)
-class Filter:
-    func: Callable[[Any, Any], Any] | None = None
-
-
-@dataclass(frozen=True)
-class StatsFilter(Filter):
-    cache: Callable[[Any, Any], Any] | bool = True
-
+class StatsFilter(Filter[T], Generic[T, T2]):
+    cache: Callable[[Any, 'T2'], Any] | bool = True
 
 def format_count(value: int | float | str | None) -> str:
     if value is None:
@@ -36,11 +35,6 @@ def format_count(value: int | float | str | None) -> str:
         return f"{int(value):,}"
     except (TypeError, ValueError):
         return value if isinstance(value, str) else "Loading..."
-
-
-def format_optional_count(value: int | float | str | None) -> str:
-    return format_count(value) if value is not None else "N/A"
-
 
 def format_bool(value: bool | str | None) -> str:
     if value is True:
@@ -55,8 +49,31 @@ def format_bool(value: bool | str | None) -> str:
         return value
     return "Unknown"
 
+def count_filter(value: int | float | str, _model: 'Schema') -> str | None:
+    if value is None:
+        return None
+    return format_count(value)
 
-def format_duration(seconds: int | str | None) -> str:
+
+def rounded_count_filter(value: int | float | str, _model: 'Schema') -> str | None:
+    if value is None:
+        return None
+    try:
+        return format_count(round(float(value)))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def optional_count_filter(value: int | float | str | None, _model: 'Schema') -> str:
+    return format_count(value) if value is not None else "N/A"
+
+def bool_filter(value: bool | str | None, _model: 'Schema') -> str | None:
+    if value is None:
+        return None
+    return format_bool(value)
+
+
+def duration_filter(seconds: int | str | None, _model: 'Schema') -> str:
     if seconds is None:
         return "N/A"
     try:
@@ -68,48 +85,18 @@ def format_duration(seconds: int | str | None) -> str:
     days, hours = divmod(hours, 24)
     return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
 
-
-def count_filter(value: Any, _model: Any) -> str | None:
-    if value is None:
-        return None
-    return format_count(value)
-
-
-def rounded_count_filter(value: Any, _model: Any) -> str | None:
-    if value is None:
-        return None
-    try:
-        return format_count(round(float(value)))
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def optional_count_filter(value: Any, _model: Any) -> str:
-    return format_optional_count(value)
-
-
-def bool_filter(value: Any, _model: Any) -> str | None:
-    if value is None:
-        return None
-    return format_bool(value)
-
-
-def duration_filter(value: Any, _model: Any) -> str:
-    return format_duration(value)
-
-
-def best_filter(value: Any, model: Any) -> str:
+def best_filter(value: Any, model: 'StatsSchemaWithSectionCount') -> str:
     return f"{value}/{model.section_count}"
 
 
-def record_holder_filter(value: Any, model: Any) -> str:
+def record_holder_filter(value: 'BogostreamRecordHolder', model: 'StatsSchemaWithSectionCount') -> str:
     if value is None:
         return "engine"
     return f"{value.nickname} ({value.value}/{model.section_count})"
 
 
 class Schema(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="ignore", validate_by_name=True, validate_by_alias=True, revalidate_instances='subclass-instances')
 
     @staticmethod
     @contextmanager
@@ -152,7 +139,7 @@ class Schema(BaseModel):
             if (
                 get_origin(field.annotation) is None
                 and Schema.is_model_type(field.annotation)
-                and not isinstance(data.get(field_name), dict)
+                and not isinstance(data.get(field_name), Schema)
             ):
                 data[field_name] = root_data
         return data
@@ -168,8 +155,8 @@ class Schema(BaseModel):
 
     def render_value(self, field_name: str, display_filter: Filter) -> str | None:
         value = getattr(self, field_name)
-        if display_filter.func is not None:
-            value = display_filter.func(value, self)
+        if display_filter.display is not None:
+            value = display_filter.display(value, self)
         if value is None:
             return None
         return str(value)
@@ -193,25 +180,8 @@ class Schema(BaseModel):
                 groups.append((field.title, rows))
         return groups
 
-    def group_dict(self) -> dict[str, dict[str, str]]:
-        return {
-            title or "Source": dict(rows)
-            for title, rows in self.groups()
-        }
-
 
 class StatsSchema(Schema):
-    @staticmethod
-    @contextmanager
-    def filter(**filters: StatsFilter) -> Iterator[None]:
-        yield
-        locals_dict = sys._getframe(2).f_locals
-        for field_name, filter_ in filters.items():
-            field_info = locals_dict.get(field_name)
-            if not isinstance(field_info, pydantic.fields.FieldInfo):
-                continue
-            field_info.metadata.append(filter_)
-
     def stats_cache(self) -> dict[str, StatValue]:
         cache: dict[str, StatValue] = {}
         for field_name, _title, display_filter in self.display_fields():
@@ -302,9 +272,10 @@ class BogostreamRecordHolder(Schema):
     nickname: str = "unknown"
     value: int = 0
 
-
-class ApiStatsStreamGroup(StatsSchema):
+class StatsSchemaWithSectionCount(StatsSchema):
     section_count: int = Field(25)
+
+class ApiStatsStreamGroup(StatsSchemaWithSectionCount):
     engine_total: int = Field(validation_alias=AliasPath("engine", "total"))
     crowd_total: int = Field(validation_alias=AliasPath("crowd", "total_shuffles"))
 
@@ -335,9 +306,7 @@ class ApiStatsApiGroup(StatsSchema):
         crowd_rate: float = Field(title="Crowd Rate", validation_alias=AliasPath("crowd", "rate"))
 
 
-class ApiStatsRecentBestGroup(StatsSchema):
-    section_count: int = Field(25)
-
+class ApiStatsRecentBestGroup(StatsSchemaWithSectionCount):
     with StatsSchema.filter(
         best_at=StatsFilter(optional_count_filter),
         tick_best=StatsFilter(best_filter, cache=best_filter),
@@ -347,9 +316,7 @@ class ApiStatsRecentBestGroup(StatsSchema):
     tick_best_source: str = Field("vps", title="Tick Best Source", validation_alias=AliasPath("combined_tick", "source"))
 
 
-class ApiStatsContributorsGroup(StatsSchema):
-    section_count: int = Field(25)
-
+class ApiStatsContributorsGroup(StatsSchemaWithSectionCount):
     with StatsSchema.filter(
         active_contributors=StatsFilter(count_filter),
         record_holder=StatsFilter(record_holder_filter),
