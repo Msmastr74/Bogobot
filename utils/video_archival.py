@@ -38,6 +38,71 @@ class VideoScanResult:
     frame: bytes | None
 
 
+@dataclass
+class ScanProgress:
+    stage: str
+    started_at: float
+    stage_started_at: float
+    window_start_seconds: float
+    window_end_seconds: float
+    current_seconds: float | None = None
+    scanned_frames: int = 0
+    best_score: float | None = None
+    done: bool = False
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return max(0.0, time.monotonic() - self.started_at)
+
+    @property
+    def stage_elapsed_seconds(self) -> float:
+        return max(0.0, time.monotonic() - self.stage_started_at)
+
+    @property
+    def progress_ratio(self) -> float | None:
+        if self.done:
+            return 1.0
+        if self.current_seconds is None:
+            return None
+        span = self.window_end_seconds - self.window_start_seconds
+        if span <= 0:
+            return None
+        return max(0.0, min(1.0, (self.current_seconds - self.window_start_seconds) / span))
+
+    @property
+    def estimated_remaining_seconds(self) -> float | None:
+        ratio = self.progress_ratio
+        if ratio is None or ratio <= 0 or self.done:
+            return 0.0 if self.done else None
+        current_seconds = self.current_seconds
+        if current_seconds is None:
+            return None
+        current_units = current_seconds - self.window_start_seconds
+        total_units = self.window_end_seconds - self.window_start_seconds
+        if current_units <= 0 or total_units <= 0:
+            return None
+        estimated_total = self.stage_elapsed_seconds / current_units * total_units
+        return max(0.0, estimated_total - self.stage_elapsed_seconds)
+
+    def set_stage(
+        self,
+        stage: str,
+        *,
+        window_start_seconds: float | None = None,
+        window_end_seconds: float | None = None,
+    ) -> None:
+        self.stage = stage
+        self.stage_started_at = time.monotonic()
+        self.current_seconds = None
+        self.scanned_frames = 0
+        self.best_score = None
+        self.done = False
+        if window_start_seconds is not None:
+            self.window_start_seconds = window_start_seconds
+        if window_end_seconds is not None:
+            self.window_end_seconds = window_end_seconds
+
+
 @dataclass(frozen=True)
 class _ScanCandidate:
     x: int
@@ -293,8 +358,10 @@ class VideoArchiver:
         max_candidates: int = 12,
         requested_start_timestamp: float | None = None,
         requested_end_timestamp: float | None = None,
+        progress: ScanProgress | None = None,
     ) -> VideoScanResult | None:
         total_started_at = time.perf_counter()
+
         video_path = self.video_path_for_day(day)
         if not video_path.exists():
             return None
@@ -308,6 +375,8 @@ class VideoArchiver:
         locator_interval_seconds = max(0.25, float(locator_interval_seconds))
         frame_size = self.width * self.height * 3
         templates_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage("Preparing templates")
         templates = self._scan_templates(image)
         self.logger.debug(
             "Video archive scan templates: %s templates in %.3fs",
@@ -318,6 +387,8 @@ class VideoArchiver:
             return None
 
         duration_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage("Reading archive duration")
         duration = self._video_duration(video_path)
         self.logger.debug(
             "Video archive scan duration probe: %s in %.3fs",
@@ -338,6 +409,12 @@ class VideoArchiver:
             return None
 
         locator_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage(
+                "Locating image",
+                window_start_seconds=scan_start_seconds,
+                window_end_seconds=scan_end_seconds,
+            )
         candidates = self._scan_candidates(
             video_path,
             templates,
@@ -357,12 +434,19 @@ class VideoArchiver:
             return None
 
         dense_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage(
+                "Scanning archive frames",
+                window_start_seconds=scan_start_seconds,
+                window_end_seconds=scan_end_seconds,
+            )
         result = self._scan_video_range(
             video_path,
             candidates,
             scan_start_seconds,
             scan_end_seconds - scan_start_seconds,
             frame_size,
+            progress=progress,
         )
         best_score = result.score
         best_relative_seconds = result.relative_seconds
@@ -386,6 +470,12 @@ class VideoArchiver:
                 min_score,
             )
             return None
+        if progress is not None:
+            progress.stage = "Finished"
+            progress.current_seconds = best_relative_seconds
+            progress.scanned_frames = scanned_frames
+            progress.best_score = best_score
+            progress.done = True
         self.logger.debug(
             "Video archive scan matched in %.3fs: score=%.3f relative=%.3fs frames=%s",
             time.perf_counter() - total_started_at,
@@ -588,6 +678,8 @@ class VideoArchiver:
         start_seconds: float,
         duration_seconds: float | None,
         frame_size: int,
+        *,
+        progress: ScanProgress | None = None,
     ) -> _ScanRangeResult:
         started_at = time.perf_counter()
         process = subprocess.Popen(
@@ -609,6 +701,8 @@ class VideoArchiver:
         best_frame_index = 0
         scanned_frames = 0
         stderr_chunks: list[bytes] = []
+        stderr_lock = threading.Lock()
+        last_progress_at = 0.0
 
         def read_stderr() -> None:
             assert process.stderr is not None
@@ -616,7 +710,8 @@ class VideoArchiver:
                 chunk = process.stderr.read(65536)
                 if not chunk:
                     return
-                stderr_chunks.append(chunk)
+                with stderr_lock:
+                    stderr_chunks.append(chunk)
 
         stderr_thread = threading.Thread(
             target=read_stderr,
@@ -638,6 +733,16 @@ class VideoArchiver:
                     best_score = score
                     best_frame = bytes(data)
                     best_frame_index = scanned_frames - 1
+                now = time.monotonic()
+                if now - last_progress_at >= 1.0:
+                    last_progress_at = now
+                    with stderr_lock:
+                        stderr = b"".join(stderr_chunks)
+                    current_seconds = self._scan_latest_showinfo_time(stderr)
+                    if progress is not None:
+                        progress.current_seconds = current_seconds
+                        progress.scanned_frames = scanned_frames
+                        progress.best_score = best_score if best_score >= 0 else None
         finally:
             if process.stdout is not None:
                 with contextlib.suppress(OSError):
@@ -645,7 +750,8 @@ class VideoArchiver:
 
         process.wait(timeout=5)
         stderr_thread.join(timeout=5)
-        stderr = b"".join(stderr_chunks)
+        with stderr_lock:
+            stderr = b"".join(stderr_chunks)
         best_pts_time = self._scan_showinfo_time(stderr, best_frame_index)
         if best_pts_time is not None:
             best_relative_seconds = best_pts_time
@@ -687,12 +793,23 @@ class VideoArchiver:
         return max(1, min(width, height) // 96)
 
     def _scan_showinfo_time(self, stderr: bytes, frame_index: int) -> float | None:
-        text = stderr.decode(errors="replace")
-        matches = list(SHOWINFO_RE.finditer(text))
+        matches = self._scan_showinfo_matches(stderr)
         if 0 <= frame_index < len(matches):
             with contextlib.suppress(ValueError):
                 return float(matches[frame_index].group("time"))
         return None
+
+    def _scan_latest_showinfo_time(self, stderr: bytes) -> float | None:
+        matches = self._scan_showinfo_matches(stderr)
+        if not matches:
+            return None
+        with contextlib.suppress(ValueError):
+            return float(matches[-1].group("time"))
+        return None
+
+    def _scan_showinfo_matches(self, stderr: bytes) -> list[re.Match[str]]:
+        text = stderr.decode(errors="replace")
+        return list(SHOWINFO_RE.finditer(text))
 
     def _video_duration(self, video_path: Path) -> float | None:
         result = subprocess.run(

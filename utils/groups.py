@@ -13,3 +13,6 @@ def bogo(bot: 'BotCore'):
 
 def ai_activity(bot: 'BotCore'):
     return bot.setup.group("ai_activity", "AI activity controls")
+
+def archive(bot: 'BotCore'):
+    return bot.setup.group("archive", "Archive commands")

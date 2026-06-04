@@ -18,7 +18,7 @@ from bogobot_core import BotCore
 from utils import groups
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from utils.ai import AIParam, action
-from utils.video_archival import VideoArchiver
+from utils.video_archival import ScanProgress, VideoArchiver, VideoScanResult
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
@@ -50,6 +50,89 @@ class ArchiveEvent:
 class ArchiveState:
     cursor: int
     snapshot_end: int
+
+
+class ScanView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        day_timestamp: float,
+        input_media: str | discord.File,
+        progress: ScanProgress,
+        result: VideoScanResult | None = None,
+        result_media: str | discord.File | None = None,
+    ) -> None:
+        super().__init__(timeout=None)
+
+        self.add_item(discord.ui.Section(
+            discord.ui.TextDisplay(f"## Scan <t:{int(day_timestamp)}:D>"),
+            accessory=discord.ui.Thumbnail(
+                input_media,
+                description="Input image",
+            ),
+        ))
+        container = discord.ui.Container(
+            discord.ui.TextDisplay("### Scan Progress"),
+            discord.ui.TextDisplay(self._progress_text(progress)),
+        )
+
+        if progress.done and result is not None:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(self._result_text(result)))
+            if result_media is not None:
+                container.add_item(discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(
+                        result_media,
+                        description="Matched archive frame",
+                    )
+                ))
+
+        self.add_item(container)
+
+    def _progress_text(self, progress: ScanProgress) -> str:
+        lines = [
+            f"Stage: `{progress.stage}`",
+            f"Elapsed: `{self._duration(progress.elapsed_seconds)}`",
+        ]
+        bar = self._progress_bar(progress)
+        if bar is not None:
+            lines.append(f"`{bar}`")
+        if progress.scanned_frames > 0:
+            lines.append(f"Archive frames: `{progress.scanned_frames}`")
+        if progress.best_score is not None:
+            lines.append(f"Best score: `{progress.best_score:.3f}`")
+        remaining = progress.estimated_remaining_seconds
+        if remaining is not None and not progress.done:
+            lines.append(f"Estimated remaining: `{self._duration(remaining)}`")
+        elif progress.done:
+            lines.append("Estimated remaining: `0s`")
+        return "\n".join(lines)
+
+    def _progress_bar(self, progress: ScanProgress) -> str | None:
+        ratio = progress.progress_ratio
+        if ratio is None:
+            return None
+        width = 16
+        filled = min(width, max(0, round(ratio * width)))
+        bar = "█" * filled + "░" * (width - filled)
+        return f"[{bar}] {ratio * 100:.1f}%"
+
+    def _result_text(self, result: VideoScanResult) -> str:
+        epoch_ts = math.ceil(result.timestamp)
+        return (
+            f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
+            f"-# score `{result.score:.3f}` over `{result.scanned_frames}` archive frames"
+        )
+
+    def _duration(self, seconds: float) -> str:
+        seconds = max(0, int(round(seconds)))
+        minutes, second = divmod(seconds, 60)
+        hours, minute = divmod(minutes, 60)
+        if hours:
+            return f"{hours}h {minute}m {second}s"
+        if minutes:
+            return f"{minutes}m {second}s"
+        return f"{second}s"
 
 
 def parse_archive_frame_time(value: str) -> float | None:
@@ -108,6 +191,7 @@ def parse_archive_scan_time(day: str, value: str | None) -> float | None:
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
+    archive_group = groups.archive(bot)
     archive_config_raw = bot.config.get("archive", {})
     archive_config = archive_config_raw if isinstance(archive_config_raw, dict) else {}
 
@@ -895,20 +979,20 @@ async def setup(bot: BotCore):
         ) -> None:
             await delete_archive_message(interaction)
 
-    @bot.setup.command(
-        name="archive",
+    @archive_group.command(
+        name="view",
         description="View archived monitor values",
         perm_requirement=0,
         eph=False,
     )
     @action(
-        "archive",
+        "archive_view",
         "View the monitor archive, optionally filtered by correct-section value.",
         params={
             "value": AIParam("Only show archive entries with this correct-section value.", type=int | None, required=False),
         },
     )
-    async def archive(
+    async def archive_view(
         interaction: discord.Interaction,
         value: int | None = None,
     ):
@@ -936,20 +1020,20 @@ async def setup(bot: BotCore):
             ephemeral=False,
         )
 
-    @bot.setup.command(
-        name="archive_frame",
+    @archive_group.command(
+        name="retrieve",
         description="View a visual archive frame by timestamp",
         perm_requirement=0,
         eph=False,
     )
     @action(
-        "archive_frame",
+        "archive_retrieve",
         "Show a visual archive frame by epoch seconds, epoch milliseconds, or Discord timestamp.",
         params={
             "time": AIParam("Epoch seconds, epoch milliseconds, <t:...>, or <t:...:*>.", type=str),
         },
     )
-    async def archive_frame(
+    async def archive_retrieve(
         interaction: discord.Interaction,
         time: str,
     ):
@@ -993,8 +1077,8 @@ async def setup(bot: BotCore):
             finally:
                 file.close()
 
-    @bot.setup.command(
-        name="archive_scan",
+    @archive_group.command(
+        name="scan",
         description="Find when an image appears in a visual archive recording",
         perm_requirement=0,
         defer=False,
@@ -1084,6 +1168,7 @@ async def setup(bot: BotCore):
             )
             return
 
+        day_timestamp = datetime.strptime(day, "%Y-%m-%d").timestamp()
         archive_scan_running = True
         scan_started = False
         try:
@@ -1098,7 +1183,63 @@ async def setup(bot: BotCore):
                 ephemeral=True,
             )
             return
-        await bot.discord.defer()
+
+        progress = ScanProgress(
+            stage="Queued",
+            started_at=time.monotonic(),
+            stage_started_at=time.monotonic(),
+            window_start_seconds=0.0,
+            window_end_seconds=0.0,
+        )
+        input_buffer = io.BytesIO(image_bytes)
+        input_file = discord.File(
+            input_buffer,
+            filename=f"archive_scan_input_{image.filename or 'image'}",
+        )
+        scan_message = await bot.discord.send(
+            view=ScanView(
+                day_timestamp=day_timestamp,
+                input_media=input_file,
+                progress=progress,
+            ),
+            files=[input_file],
+            response=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        input_file.close()
+
+        if scan_message is None or scan_message.message is None:
+            archive_scan_running = False
+            await bot.discord.send(
+                "Could not create scan progress message.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        input_attachment = (
+            scan_message.message.attachments[0]
+            if scan_message.message.attachments
+            else None
+        )
+        input_media: str = input_attachment.url if input_attachment is not None else image.url
+        scan_done = asyncio.Event()
+
+        async def edit_progress_loop() -> None:
+            while not scan_done.is_set():
+                await asyncio.sleep(10)
+                if scan_done.is_set():
+                    break
+                await scan_message.edit(
+                    view=ScanView(
+                        day_timestamp=day_timestamp,
+                        input_media=input_media,
+                        progress=progress,
+                    ),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
+        progress_task = asyncio.create_task(edit_progress_loop())
 
         try:
             scan_started = True
@@ -1110,20 +1251,31 @@ async def setup(bot: BotCore):
                 max_candidates=max_candidates,
                 requested_start_timestamp=requested_start_timestamp,
                 requested_end_timestamp=requested_end_timestamp,
+                progress=progress,
             )
         finally:
+            scan_done.set()
+            progress_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await progress_task
             archive_scan_running = False
             if scan_started:
                 archive_scan_last_finished_at = time.monotonic()
         if result is None:
-            await bot.discord.send(
-                f"No matching archive frame found for `{day}`.",
-                response=True,
+            progress.stage = "Finished"
+            progress.done = True
+            await scan_message.edit(
+                view=ScanView(
+                    day_timestamp=day_timestamp,
+                    input_media=input_media,
+                    progress=progress,
+                ),
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
 
         epoch_ts = math.ceil(result.timestamp)
-        files: list[discord.File] = []
+        result_file: discord.File | None = None
         if result.frame is not None:
             frame_image = Image.frombytes(
                 "RGB",
@@ -1133,21 +1285,28 @@ async def setup(bot: BotCore):
             frame_buffer = io.BytesIO()
             frame_image.save(frame_buffer, format="JPEG", quality=90)
             frame_buffer.seek(0)
-            files.append(discord.File(
+            result_file = discord.File(
                 frame_buffer,
                 filename=f"archive_scan_{epoch_ts}.jpg",
-            ))
+            )
 
         try:
-            await bot.discord.send(
-                (
-                    f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
-                    f"-# score `{result.score:.3f}` over `{result.scanned_frames}` archive frames"
+            attachments: list[discord.Attachment | discord.File] = []
+            if input_attachment is not None:
+                attachments.append(input_attachment)
+            if result_file is not None:
+                attachments.append(result_file)
+            await scan_message.edit(
+                view=ScanView(
+                    day_timestamp=day_timestamp,
+                    input_media=input_media,
+                    progress=progress,
+                    result=result,
+                    result_media=result_file,
                 ),
-                files=files,
-                response=True,
+                attachments=attachments,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         finally:
-            for file in files:
-                file.close()
+            if result_file is not None:
+                result_file.close()

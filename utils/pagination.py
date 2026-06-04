@@ -174,10 +174,7 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
         text = self._page_body_text(page.sections)
         text = truncate_text(text, remaining)
 
-        c.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(text or "\u200d"),
-            accent_colour=self.page_accent_colour(page),
-        ))
+        c.add_item(discord.ui.TextDisplay(text or "\u200d"))
         return c
 
     def _page_body_text(self, sections: list[PageSection]) -> str:
