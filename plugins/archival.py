@@ -1094,7 +1094,7 @@ async def setup(bot: BotCore):
         interaction: discord.Interaction,
         image: discord.Attachment,
         date: str | None = None,
-        min_score: float = 0.86,
+        min_score: float = 0.8,
         max_candidates: int = 12,
         start_time: str | None = None,
         end_time: str | None = None,
