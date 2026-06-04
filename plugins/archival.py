@@ -972,8 +972,8 @@ async def setup(bot: BotCore):
     )
     async def archive_scan(
         interaction: discord.Interaction,
-        date: str,
         image: discord.Attachment,
+        date: str | None = None,
         min_score: float = 0.86,
         locator_interval_seconds: float = 30.0,
         max_candidates: int = 12,
@@ -1000,7 +1000,9 @@ async def setup(bot: BotCore):
             )
             return
 
-        day = parse_archive_scan_day(date)
+        day = datetime.now().strftime("%Y-%m-%d") if date is None else (
+            parse_archive_scan_day(date)
+        )
         if day is None:
             await bot.discord.send(
                 "Date must be `YYYY-MM-DD`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.",
