@@ -30,6 +30,7 @@ ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
 ARCHIVE_SCAN_COOLDOWN_SECONDS = 30.0
 DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFRsS])?>$")
+DAY_TIME_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?$")
 EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
 
@@ -75,6 +76,34 @@ def parse_archive_scan_day(value: str) -> str | None:
     if timestamp is None:
         return None
     return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+
+
+def parse_archive_scan_time(day: str, value: str | None) -> float | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+
+    timestamp = parse_archive_frame_time(value)
+    if timestamp is not None:
+        return timestamp
+
+    match = DAY_TIME_RE.match(value)
+    if match is None:
+        return None
+
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    second_raw = match.group("second")
+    second = 0 if second_raw is None else int(second_raw)
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+
+    return datetime.strptime(
+        f"{day} {hour:02d}:{minute:02d}:{second:02d}",
+        "%Y-%m-%d %H:%M:%S",
+    ).timestamp()
 
 
 async def setup(bot: BotCore):
@@ -968,7 +997,7 @@ async def setup(bot: BotCore):
         name="archive_scan",
         description="Find when an image appears in a visual archive recording",
         perm_requirement=0,
-        eph=False,
+        defer=False,
     )
     async def archive_scan(
         interaction: discord.Interaction,
@@ -976,6 +1005,8 @@ async def setup(bot: BotCore):
         date: str | None = None,
         min_score: float = 0.86,
         max_candidates: int = 12,
+        start_time: str | None = None,
+        end_time: str | None = None,
     ):
         nonlocal archive_scan_last_finished_at, archive_scan_running
 
@@ -1010,6 +1041,34 @@ async def setup(bot: BotCore):
             )
             return
 
+        requested_start_timestamp = parse_archive_scan_time(day, start_time)
+        requested_end_timestamp = parse_archive_scan_time(day, end_time)
+        if start_time is not None and requested_start_timestamp is None:
+            await bot.discord.send(
+                "`start_time` must be epoch seconds, epoch milliseconds, `<t:...>`, `<t:...:*>`, `HH:MM`, or `HH:MM:SS`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if end_time is not None and requested_end_timestamp is None:
+            await bot.discord.send(
+                "`end_time` must be epoch seconds, epoch milliseconds, `<t:...>`, `<t:...:*>`, `HH:MM`, or `HH:MM:SS`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if (
+            requested_start_timestamp is not None
+            and requested_end_timestamp is not None
+            and requested_end_timestamp <= requested_start_timestamp
+        ):
+            await bot.discord.send(
+                "`end_time` must be after `start_time`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
         if min_score < 0 or min_score > 1:
             await bot.discord.send(
                 "`min_score` must be between 0 and 1.",
@@ -1039,6 +1098,7 @@ async def setup(bot: BotCore):
                 ephemeral=True,
             )
             return
+        await bot.discord.defer()
 
         try:
             scan_started = True
@@ -1049,6 +1109,8 @@ async def setup(bot: BotCore):
                 min_score=min_score,
                 sample_interval_seconds=1.0,
                 max_candidates=max_candidates,
+                requested_start_timestamp=requested_start_timestamp,
+                requested_end_timestamp=requested_end_timestamp,
             )
         finally:
             archive_scan_running = False
@@ -1058,7 +1120,6 @@ async def setup(bot: BotCore):
             await bot.discord.send(
                 f"No matching archive frame found for `{day}`.",
                 response=True,
-                ephemeral=True,
             )
             return
 
@@ -1069,6 +1130,5 @@ async def setup(bot: BotCore):
                 f"-# score `{result.score:.3f}` over `{result.sampled_frames}` sampled frames"
             ),
             response=True,
-            ephemeral=False,
             allowed_mentions=discord.AllowedMentions.none(),
         )
