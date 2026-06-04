@@ -1,5 +1,4 @@
 import contextlib
-import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime
 import math
@@ -17,7 +16,6 @@ from cv2.typing import MatLike
 from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 
 
-SCAN_WORKERS = 3
 SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>-?\d+(?:\.\d+)?)")
 
 
@@ -358,38 +356,18 @@ class VideoArchiver:
         if not candidates:
             return None
 
-        ranges = self._scan_ranges(
-            scan_start_seconds,
-            scan_end_seconds,
-        )
-        if not ranges:
-            return None
-
-        best_score = -1.0
-        best_relative_seconds = 0.0
-        best_frame: bytes | None = None
-        scanned_frames = 0
-
         dense_started_at = time.perf_counter()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(ranges)) as executor:
-            futures = [
-                executor.submit(
-                    self._scan_video_range,
-                    video_path,
-                    candidates,
-                    start_seconds,
-                    duration_seconds,
-                    frame_size,
-                )
-                for start_seconds, duration_seconds in ranges
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                scanned_frames += result.scanned_frames
-                if result.score > best_score:
-                    best_score = result.score
-                    best_relative_seconds = result.relative_seconds
-                    best_frame = result.frame
+        result = self._scan_video_range(
+            video_path,
+            candidates,
+            scan_start_seconds,
+            scan_end_seconds - scan_start_seconds,
+            frame_size,
+        )
+        best_score = result.score
+        best_relative_seconds = result.relative_seconds
+        best_frame = result.frame
+        scanned_frames = result.scanned_frames
         dense_seconds = time.perf_counter() - dense_started_at
         self.logger.debug(
             "Video archive scan dense pass: %s frames in %.3fs; best %.3f at +%.3fs",
@@ -464,18 +442,27 @@ class VideoArchiver:
             "-hide_banner",
             "-loglevel", "info" if show_frame_info else "error",
         ]
-        if start_seconds > 0:
-            command.extend(["-ss", f"{start_seconds:.3f}"])
         command.extend([
             "-i", str(video_path),
             "-map", "0:v:0",
         ])
-        if duration_seconds is not None:
-            command.extend(["-t", f"{duration_seconds:.3f}"])
         filters: list[str] = []
+        range_filter: str | None = None
+        if start_seconds > 0 or duration_seconds is not None:
+            if duration_seconds is None:
+                range_filter = f"gte(t\\,{start_seconds:.6f})"
+            else:
+                end_seconds = start_seconds + duration_seconds
+                range_filter = f"between(t\\,{start_seconds:.6f}\\,{end_seconds:.6f})"
         if select_interval_seconds is not None:
             interval = max(0.25, select_interval_seconds)
-            filters.append(f"select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})")
+            interval_filter = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})"
+            if range_filter is not None:
+                filters.append(f"select={range_filter}*({interval_filter})")
+            else:
+                filters.append(f"select={interval_filter}")
+        elif range_filter is not None:
+            filters.append(f"select={range_filter}")
         filters.append(f"scale={self.width}:{self.height}")
         if show_frame_info:
             filters.append("showinfo")
@@ -594,24 +581,6 @@ class VideoArchiver:
             reverse=True,
         )[:max(1, int(max_candidates))]
 
-    def _scan_ranges(
-        self,
-        start_seconds: float,
-        end_seconds: float,
-    ) -> list[tuple[float, float | None]]:
-        duration = end_seconds - start_seconds
-        if duration <= 0:
-            return []
-
-        workers = max(1, min(SCAN_WORKERS, int(math.ceil(duration))))
-        range_seconds = duration / workers
-        ranges: list[tuple[float, float | None]] = []
-        for index in range(workers):
-            range_start_seconds = start_seconds + index * range_seconds
-            duration_seconds = None if index == workers - 1 else range_seconds
-            ranges.append((range_start_seconds, duration_seconds))
-        return ranges
-
     def _scan_video_range(
         self,
         video_path: Path,
@@ -679,7 +648,7 @@ class VideoArchiver:
         stderr = b"".join(stderr_chunks)
         best_pts_time = self._scan_showinfo_time(stderr, best_frame_index)
         if best_pts_time is not None:
-            best_relative_seconds = start_seconds + best_pts_time
+            best_relative_seconds = best_pts_time
 
         if process.returncode not in (0, None):
             message = stderr.decode(errors="replace").strip()
@@ -687,7 +656,7 @@ class VideoArchiver:
                 self.logger.warning(f"Video archive scan failed: {message}")
             return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None)
         self.logger.debug(
-            "Video archive scan worker: +%.3fs duration=%s frames=%s time=%.3fs best=%.3f at +%.3fs",
+            "Video archive scan pass: +%.3fs duration=%s frames=%s time=%.3fs best=%.3f at +%.3fs",
             start_seconds,
             f"{duration_seconds:.3f}s" if duration_seconds is not None else "end",
             scanned_frames,
@@ -719,11 +688,10 @@ class VideoArchiver:
 
     def _scan_showinfo_time(self, stderr: bytes, frame_index: int) -> float | None:
         text = stderr.decode(errors="replace")
-        for match in SHOWINFO_RE.finditer(text):
-            if int(match.group("index")) == frame_index:
-                with contextlib.suppress(ValueError):
-                    return float(match.group("time"))
-                return None
+        matches = list(SHOWINFO_RE.finditer(text))
+        if 0 <= frame_index < len(matches):
+            with contextlib.suppress(ValueError):
+                return float(matches[frame_index].group("time"))
         return None
 
     def _video_duration(self, video_path: Path) -> float | None:
