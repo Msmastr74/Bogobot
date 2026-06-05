@@ -49,6 +49,7 @@ class ScanProgress:
     scanned_frames: int = 0
     best_score: float | None = None
     done: bool = False
+    completed_at: float | None = None
 
     @property
     def elapsed_seconds(self) -> float:
@@ -97,6 +98,7 @@ class ScanProgress:
         self.scanned_frames = 0
         self.best_score = None
         self.done = False
+        self.completed_at = None
         if window_start_seconds is not None:
             self.window_start_seconds = window_start_seconds
         if window_end_seconds is not None:
@@ -353,7 +355,6 @@ class VideoArchiver:
         day: str,
         image: Image.Image,
         *,
-        min_score: float = 0.86,
         locator_interval_seconds: float = 30.0,
         max_candidates: int = 12,
         requested_start_timestamp: float | None = None,
@@ -461,13 +462,12 @@ class VideoArchiver:
             best_relative_seconds,
         )
 
-        if scanned_frames <= 0 or best_score < min_score:
+        if scanned_frames <= 0:
             self.logger.debug(
-                "Video archive scan rejected in %.3fs: frames=%s best=%.3f min=%.3f",
+                "Video archive scan rejected in %.3fs: frames=%s best=%.3f",
                 time.perf_counter() - total_started_at,
                 scanned_frames,
                 best_score,
-                min_score,
             )
             return None
         if progress is not None:
@@ -476,6 +476,7 @@ class VideoArchiver:
             progress.scanned_frames = scanned_frames
             progress.best_score = best_score
             progress.done = True
+            progress.completed_at = time.time()
         self.logger.debug(
             "Video archive scan matched in %.3fs: score=%.3f relative=%.3fs frames=%s",
             time.perf_counter() - total_started_at,

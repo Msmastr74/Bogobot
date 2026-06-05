@@ -66,7 +66,7 @@ class ScanView(discord.ui.LayoutView):
 
         container = discord.ui.Container(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"## Scan <t:{int(day_timestamp)}:D>"),
+                discord.ui.TextDisplay(f"## Scan of <t:{int(day_timestamp)}:D>"),
                 accessory=discord.ui.Thumbnail(
                     input_media,
                     description="Input image",
@@ -91,8 +91,10 @@ class ScanView(discord.ui.LayoutView):
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.TextDisplay(
                 "No matching archive frame found.\n"
-                "-# Try a lower `min_score` or a narrower `start_time`/`end_time` window."
+                "-# Try a narrower `start_time`/`end_time` window."
             ))
+        if progress.done:
+            container.add_item(discord.ui.TextDisplay(self._completed_text(progress)))
 
         self.add_item(container)
 
@@ -128,8 +130,12 @@ class ScanView(discord.ui.LayoutView):
         epoch_ts = math.ceil(result.timestamp)
         return (
             f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
-            f"-# score `{result.score:.3f}` over `{result.scanned_frames}` archive frames"
+            f"-# Matched archive frame with score `{result.score:.3f}`"
         )
+
+    def _completed_text(self, progress: ScanProgress) -> str:
+        completed_at = progress.completed_at if progress.completed_at is not None else time.time()
+        return f"-# Scan completed at <t:{round(completed_at)}:T>"
 
     def _duration(self, seconds: float) -> str:
         seconds = max(0, int(round(seconds)))
@@ -1094,7 +1100,6 @@ async def setup(bot: BotCore):
         interaction: discord.Interaction,
         image: discord.Attachment,
         date: str | None = None,
-        min_score: float = 0.8,
         max_candidates: int = 12,
         start_time: str | None = None,
         end_time: str | None = None,
@@ -1160,13 +1165,6 @@ async def setup(bot: BotCore):
             )
             return
 
-        if min_score < 0 or min_score > 1:
-            await bot.discord.send(
-                "`min_score` must be between 0 and 1.",
-                response=True,
-                ephemeral=True,
-            )
-            return
         if max_candidates <= 0:
             await bot.discord.send(
                 "`max_candidates` must be greater than 0.",
@@ -1254,7 +1252,6 @@ async def setup(bot: BotCore):
                 video_archiver.scan_for_image,
                 day,
                 target_image,
-                min_score=min_score,
                 max_candidates=max_candidates,
                 requested_start_timestamp=requested_start_timestamp,
                 requested_end_timestamp=requested_end_timestamp,
@@ -1271,6 +1268,7 @@ async def setup(bot: BotCore):
         if result is None:
             progress.stage = "Finished"
             progress.done = True
+            progress.completed_at = time.time()
             await scan_message.edit(
                 view=ScanView(
                     day_timestamp=day_timestamp,
@@ -1281,6 +1279,8 @@ async def setup(bot: BotCore):
             )
             return
 
+        if progress.completed_at is None:
+            progress.completed_at = time.time()
         epoch_ts = math.ceil(result.timestamp)
         result_file: discord.File | None = None
         if result.frame is not None:
