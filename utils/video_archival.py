@@ -284,6 +284,8 @@ class _ScanCandidate:
     height: int
     sample_step: int
     template: MatLike
+    template_centered: MatLike
+    template_int16: MatLike
     locator_score: float
 
 
@@ -833,19 +835,23 @@ class VideoScanner:
                 if existing is not None and existing.locator_score >= score:
                     continue
                 sample_step = self._sample_step(width, height)
+                sampled_template = candidate_template[::sample_step, ::sample_step].copy()
+                template_float = sampled_template.astype(np.float32)
+                template_centered = (template_float - template_float.mean()).ravel()
                 candidates[key] = _ScanCandidate(
                     x=x,
                     y=y,
                     width=width,
                     height=height,
                     sample_step=sample_step,
-                    template=candidate_template[::sample_step, ::sample_step].copy(),
+                    template=sampled_template,
+                    template_centered=template_centered,
+                    template_int16=sampled_template.astype(np.int16),
                     locator_score=score,
                 )
         return candidates
 
     def _frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
-        import cv2
         import numpy as np
 
         frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
@@ -859,16 +865,17 @@ class VideoScanner:
                 continue
             if math.isclose(float(roi.std()), 0.0, abs_tol=0.01):
                 continue
-            correlation_score = float(cv2.matchTemplate(
-                roi,
-                candidate.template,
-                cv2.TM_CCOEFF_NORMED,
-            )[0][0])
-            mean_abs_diff = float(np.abs(
-                roi.astype(np.int16) - candidate.template.astype(np.int16)
+            roi_float = roi.astype(np.float32)
+            roi_centered = (roi_float - roi_float.mean()).ravel()
+            offset_adjusted_diff = float(np.abs(
+                roi_centered - candidate.template_centered
             ).mean())
-            difference_score = 1.0 - math.sqrt(mean_abs_diff / 255.0)
-            best = max(best, (correlation_score + difference_score) / 2)
+            offset_adjusted_score = 1.0 - math.sqrt(min(1.0, offset_adjusted_diff / 255.0))
+            raw_diff = float(np.abs(
+                roi.astype(np.int16) - candidate.template_int16
+            ).mean())
+            raw_score = 1.0 - math.sqrt(min(1.0, raw_diff / 255.0))
+            best = max(best, offset_adjusted_score * 0.8 + raw_score * 0.2)
         return best
 
     def _frame_scores(
