@@ -137,11 +137,10 @@ class VideoArchiver:
         directory: Path,
         width: int = 640,
         height: int = 360,
-        fps: float = 1.0,
-        crf: int = 36,
+        crf: int = 22,
         preset: str = "fast",
         tune: str | None = "animation",
-        keyint: int = 30,
+        keyint: int = 60,
         final_format: str = "mkv",
         queue_size: int = 2,
         logger: logging.Logger | None = None,
@@ -149,7 +148,6 @@ class VideoArchiver:
         self.directory = directory
         self.width = max(1, int(width))
         self.height = max(1, int(height))
-        self.fps = max(0.1, float(fps))
         self.crf = max(0, int(crf))
         self.preset = preset
         self.tune = tune if tune else None

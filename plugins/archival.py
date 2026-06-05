@@ -264,11 +264,10 @@ async def setup(bot: BotCore):
         directory=Path(video_setting("dir", DEFAULT_VIDEO_ARCHIVE_DIR)),
         width=int(video_setting("width", 640)),
         height=int(video_setting("height", 360)),
-        fps=float(video_setting("fps", bot.config.get("fps", 1))),
         crf=int(video_setting("crf", 22)),
         preset=str(video_setting("preset", "fast")),
         tune=video_setting("tune", "animation"),
-        keyint=int(video_setting("keyint", 30)),
+        keyint=int(video_setting("keyint", 60)),
         final_format=str(video_setting("final_format", "mkv")),
         logger=bot.logger.getChild("VideoArchive"),
     )

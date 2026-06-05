@@ -84,11 +84,10 @@ Archive configuration:
     "dir": "archive/video",
     "width": 640,
     "height": 360,
-    "fps": 1,
-    "crf": 36,
+    "crf": 22,
     "preset": "fast",
     "tune": "animation",
-    "keyint": 30,
+    "keyint": 60,
     "final_format": "mkv"
   }
 }
