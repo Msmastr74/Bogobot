@@ -68,15 +68,15 @@ class ScanView(discord.ui.LayoutView):
         container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay(f"## Scan of <t:{int(day_timestamp)}:D>"),
+                *(
+                    [discord.ui.TextDisplay(self._window_text(scan_window))]
+                    if scan_window is not None else
+                    []
+                ),
                 accessory=discord.ui.Thumbnail(
                     input_media,
                     description="Input image",
                 ),
-            ),
-            *(
-                [discord.ui.TextDisplay(self._window_text(scan_window))]
-                if scan_window is not None else
-                []
             ),
             discord.ui.Separator(),
             discord.ui.TextDisplay("### Scan Progress"),
