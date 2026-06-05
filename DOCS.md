@@ -281,7 +281,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
 - `/manage video_archive start|stop|restart|status`: Starts, stops, restarts, or inspects visual stream archive recording. Video archive files are daily appendable MPEG-TS files in `archive.video.dir`.
 - `/archive view [value]`: Shows archived monitor values with a public paginated view.
-- `/archive retrieve time`: Extracts a visual archive frame card for the target timestamp, with four surrounding seconds before and after when available. `time` accepts epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.
+- `/archive retrieve time`: Extracts a visual archive frame card for the target timestamp, with four archive frames before and after when available. `time` accepts epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.
 - `/archive scan image [end] [start] [window]`: Searches the visual archive for an attached image crop and returns the matching epoch/Discord timestamp plus the matched frame. `start` and `end` accept only absolute values: `now`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`. `window` is a relative duration such as `30s`, `15min`, `12h`, or `1day`; scans are capped at 24 hours. Only one scan may run at a time, and scans have a 30-second cooldown after finishing.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.

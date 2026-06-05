@@ -44,6 +44,12 @@ class VideoArchiveRange:
 
 
 @dataclass(frozen=True)
+class VideoArchiveFrame:
+    timestamp: float
+    data: bytes
+
+
+@dataclass(frozen=True)
 class VideoScanMatch:
     timestamp: float
     score: float
@@ -1044,6 +1050,57 @@ class VideoArchiver:
             locator_interval_seconds=locator_interval_seconds,
             progress=progress,
         )
+
+    def extract_frame_window(
+        self,
+        timestamp: float,
+        *,
+        before: int = 4,
+        after: int = 4,
+    ) -> tuple[VideoArchiveFrame, ...]:
+        before = max(0, int(before))
+        after = max(0, int(after))
+        target_timestamp = float(timestamp)
+        best_frames: tuple[VideoArchiveFrame, ...] = ()
+        expected_count = before + 1 + after
+
+        for padding_seconds in (30.0, 120.0, 600.0):
+            ranges = self._prepared_scan_ranges(
+                target_timestamp - padding_seconds,
+                target_timestamp + padding_seconds,
+            )
+            if not ranges:
+                continue
+
+            frames = [
+                VideoArchiveFrame(timestamp=frame.timestamp, data=frame.data)
+                for frame in VideoScanner(
+                    width=self.width,
+                    height=self.height,
+                    logger=self.logger,
+                )._frame_stream(ranges)
+            ]
+            if not frames:
+                continue
+
+            target_index = next(
+                (
+                    index
+                    for index, frame in enumerate(frames)
+                    if frame.timestamp >= target_timestamp
+                ),
+                len(frames) - 1,
+            )
+            start_index = max(0, target_index - before)
+            end_index = min(len(frames), target_index + after + 1)
+            best_frames = tuple(frames[start_index:end_index])
+
+            has_before = target_index - start_index >= before
+            has_after = end_index - target_index - 1 >= after
+            if len(best_frames) >= expected_count or (has_before and has_after):
+                return best_frames
+
+        return best_frames
 
     def _prepared_scan_ranges(
         self,

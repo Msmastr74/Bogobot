@@ -18,7 +18,7 @@ from bogobot_core import BotCore
 from utils import groups
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from utils.ai import AIParam, action
-from utils.video_archival import ScanProgress, VideoArchiver, VideoScanMatch, VideoScanResult
+from utils.video_archival import ScanProgress, VideoArchiveFrame, VideoArchiver, VideoScanMatch, VideoScanResult
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
@@ -60,7 +60,7 @@ class ArchiveState:
 @dataclass(frozen=True)
 class ArchiveRetrieveFrame:
     timestamp: int
-    offset_seconds: int
+    offset_frames: int
     media: str | discord.File
 
 
@@ -68,19 +68,22 @@ class ArchiveRetrieveView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
-        target_timestamp: int,
         before_frames: Sequence[ArchiveRetrieveFrame],
         target_frame: ArchiveRetrieveFrame,
         after_frames: Sequence[ArchiveRetrieveFrame],
     ) -> None:
         super().__init__(timeout=None)
         container = discord.ui.Container(
-            discord.ui.TextDisplay(f"## Archive Frame <t:{target_timestamp}:S>"),
+            discord.ui.TextDisplay("## Archive Frames"),
+            discord.ui.Separator(),
         )
 
         for frame in before_frames:
             container.add_item(self._frame_section(frame))
 
+        container.add_item(discord.ui.TextDisplay(
+            self._active_frame_text(target_frame)
+        ))
         container.add_item(discord.ui.MediaGallery(
             discord.MediaGalleryItem(
                 target_frame.media,
@@ -93,11 +96,16 @@ class ArchiveRetrieveView(discord.ui.LayoutView):
 
         self.add_item(container)
 
+    def _active_frame_text(self, frame: ArchiveRetrieveFrame) -> str:
+        return f"### Archive Frame\n<t:{frame.timestamp}:S> `{frame.timestamp}`"
+
     def _frame_section(self, frame: ArchiveRetrieveFrame) -> discord.ui.Section:
-        offset = f"{frame.offset_seconds:+d}s"
+        offset = f"{frame.offset_frames:+d} frame"
+        if abs(frame.offset_frames) != 1:
+            offset += "s"
         return discord.ui.Section(
             discord.ui.TextDisplay(
-                f"`{offset}` <t:{frame.timestamp}:S>"
+                f"`{offset}` <t:{frame.timestamp}:S> `{frame.timestamp}`"
             ),
             accessory=discord.ui.Thumbnail(
                 frame.media,
@@ -270,6 +278,16 @@ def parse_archive_frame_time(value: str) -> float | None:
     if abs(timestamp) >= EPOCH_MILLISECONDS_THRESHOLD:
         timestamp /= 1000
     return timestamp
+
+
+def save_archive_retrieve_frame(
+    frame: VideoArchiveFrame,
+    output_path: Path,
+    width: int,
+    height: int,
+) -> None:
+    image = Image.frombytes("RGB", (width, height), frame.data)
+    image.save(output_path, format="JPEG", quality=90)
 
 
 def parse_archive_scan_duration(value: str) -> float | None:
@@ -1203,23 +1221,13 @@ async def setup(bot: BotCore):
         timestamp_seconds = int(timestamp)
         with tempfile.TemporaryDirectory(prefix="bogobot_archive_frame_") as temp_dir:
             temp_path = Path(temp_dir)
-            offsets = list(range(-4, 5))
-            output_paths = {
-                offset: temp_path / f"archive_frame_{timestamp_seconds}_{offset:+d}s.jpg"
-                for offset in offsets
-            }
-            extracted_by_offset = dict(zip(
-                offsets,
-                await asyncio.gather(*[
-                    asyncio.to_thread(
-                        video_archiver.extract_frame,
-                        timestamp_seconds + offset,
-                        output_paths[offset],
-                    )
-                    for offset in offsets
-                ]),
-            ))
-            if not extracted_by_offset.get(0, False):
+            archive_frames = await asyncio.to_thread(
+                video_archiver.extract_frame_window,
+                timestamp,
+                before=4,
+                after=4,
+            )
+            if not archive_frames:
                 await bot.discord.send(
                     f"No archived frame found for <t:{timestamp_seconds}:S>.",
                     response=True,
@@ -1227,35 +1235,50 @@ async def setup(bot: BotCore):
                 )
                 return
 
+            target_index = next(
+                (
+                    index
+                    for index, frame in enumerate(archive_frames)
+                    if frame.timestamp >= timestamp
+                ),
+                len(archive_frames) - 1,
+            )
             files: list[discord.File] = []
-            frame_by_offset: dict[int, ArchiveRetrieveFrame] = {}
-            for offset in offsets:
-                if not extracted_by_offset.get(offset, False):
-                    continue
-                filename = f"archive_frame_{timestamp_seconds}_{offset:+d}s.jpg"
-                file = discord.File(output_paths[offset], filename=filename)
-                files.append(file)
-                frame_by_offset[offset] = ArchiveRetrieveFrame(
-                    timestamp=timestamp_seconds + offset,
-                    offset_seconds=offset,
-                    media=file,
+            retrieve_frames: list[ArchiveRetrieveFrame] = []
+            for index, frame in enumerate(archive_frames):
+                offset_frames = index - target_index
+                frame_timestamp = int(frame.timestamp)
+                output_path = temp_path / f"archive_frame_{timestamp_seconds}_{offset_frames:+d}f.jpg"
+                await asyncio.to_thread(
+                    save_archive_retrieve_frame,
+                    frame,
+                    output_path,
+                    video_archiver.width,
+                    video_archiver.height,
                 )
+                filename = f"archive_frame_{timestamp_seconds}_{offset_frames:+d}f.jpg"
+                file = discord.File(output_path, filename=filename)
+                files.append(file)
+                retrieve_frames.append(ArchiveRetrieveFrame(
+                    timestamp=frame_timestamp,
+                    offset_frames=offset_frames,
+                    media=file,
+                ))
 
-            target_frame = frame_by_offset[0]
+            target_frame = retrieve_frames[target_index]
             before_frames = [
-                frame_by_offset[offset]
-                for offset in range(-4, 0)
-                if offset in frame_by_offset
+                frame
+                for frame in retrieve_frames
+                if frame.offset_frames < 0
             ]
             after_frames = [
-                frame_by_offset[offset]
-                for offset in range(1, 5)
-                if offset in frame_by_offset
+                frame
+                for frame in retrieve_frames
+                if frame.offset_frames > 0
             ]
             try:
                 await bot.discord.send(
                     view=ArchiveRetrieveView(
-                        target_timestamp=timestamp_seconds,
                         before_frames=before_frames,
                         target_frame=target_frame,
                         after_frames=after_frames,
