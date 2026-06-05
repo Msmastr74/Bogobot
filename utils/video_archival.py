@@ -56,7 +56,6 @@ class ScanProgress:
     cancelled: bool = False
     completed_at: float | None = None
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     @property
     def elapsed_seconds(self) -> float:
@@ -68,7 +67,7 @@ class ScanProgress:
 
     @property
     def progress_ratio(self) -> float | None:
-        if self.done:
+        if self.done and not self.cancelled:
             return 1.0
         if self.current_seconds is None:
             return None
@@ -112,22 +111,19 @@ class ScanProgress:
             self.window_end_seconds = window_end_seconds
 
     def request_cancel(self) -> None:
-        with self._lock:
-            self.cancel_requested = True
-            process = self._process
+        self.cancel_requested = True
+        process = self._process
         self.stage = "Cancelling scan"
         if process is not None and process.poll() is None:
             with contextlib.suppress(OSError):
                 process.terminate()
 
     def is_cancel_requested(self) -> bool:
-        with self._lock:
-            return self.cancel_requested
+        return self.cancel_requested
 
     def set_process(self, process: subprocess.Popen[bytes] | None) -> None:
-        with self._lock:
-            self._process = process
-            should_cancel = self.cancel_requested and process is not None
+        self._process = process
+        should_cancel = self.cancel_requested and process is not None
         if should_cancel and process is not None and process.poll() is None:
             with contextlib.suppress(OSError):
                 process.terminate()
@@ -664,9 +660,6 @@ class VideoArchiver:
         duration_seconds: float | None = None,
         progress: ScanProgress | None = None,
     ) -> list[_ScanCandidate]:
-        import cv2
-        import numpy as np
-
         frame_size = self.width * self.height * 3
         process = subprocess.Popen(
             self._scan_frames_command(
@@ -683,39 +676,61 @@ class VideoArchiver:
         assert process.stdout is not None
 
         candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
+        pending: dict[Future[dict[tuple[int, int, int, int], _ScanCandidate]], None] = {}
+        executor = ThreadPoolExecutor(
+            max_workers=SCAN_THREADS,
+            thread_name_prefix="BogobotVideoScanLocate",
+        )
+
+        def merge_candidates(
+            new_candidates: dict[tuple[int, int, int, int], _ScanCandidate],
+        ) -> None:
+            for key, candidate in new_candidates.items():
+                existing = candidates.get(key)
+                if existing is not None and existing.locator_score >= candidate.locator_score:
+                    continue
+                candidates[key] = candidate
+
+        def collect_finished(done: set[Future[dict[tuple[int, int, int, int], _ScanCandidate]]]) -> None:
+            for future in done:
+                pending.pop(future)
+                merge_candidates(future.result())
+
+        def collect_one_finished() -> None:
+            if not pending:
+                return
+            done, _pending = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            collect_finished(done)
+
         try:
+            eof = False
             while True:
                 if progress is not None and progress.is_cancel_requested():
                     with contextlib.suppress(OSError):
                         process.terminate()
                     break
-                data = process.stdout.read(frame_size)
-                if not data:
+                batch: list[bytes] = []
+                for _ in range(SCAN_BATCH_SIZE):
+                    data = process.stdout.read(frame_size)
+                    if not data:
+                        eof = True
+                        break
+                    if len(data) != frame_size:
+                        eof = True
+                        break
+                    batch.append(bytes(data))
+                if not batch:
                     break
-                if len(data) != frame_size:
+                future = executor.submit(self._scan_candidate_batch, batch, templates)
+                pending[future] = None
+                while len(pending) >= SCAN_THREADS * 2:
+                    collect_one_finished()
+                if eof:
                     break
-                frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
-                for template in templates:
-                    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
-                    x, y = max_loc
-                    height, width = template.shape[:2]
-                    key = (x // 2, y // 2, width, height)
-                    score = float(max_value)
-                    existing = candidates.get(key)
-                    if existing is not None and existing.locator_score >= score:
-                        continue
-                    sample_step = self._scan_sample_step(width, height)
-                    candidates[key] = _ScanCandidate(
-                        x=x,
-                        y=y,
-                        width=width,
-                        height=height,
-                        sample_step=sample_step,
-                        template=template[::sample_step, ::sample_step].astype(np.int16),
-                        locator_score=score,
-                    )
+            while pending and not (progress is not None and progress.is_cancel_requested()):
+                collect_one_finished()
         finally:
+            executor.shutdown(wait=False, cancel_futures=True)
             if progress is not None:
                 progress.set_process(None)
             if process.stdout is not None:
@@ -742,6 +757,39 @@ class VideoArchiver:
             key=lambda candidate: candidate.locator_score,
             reverse=True,
         )[:max(1, int(max_candidates))]
+
+    def _scan_candidate_batch(
+        self,
+        batch: list[bytes],
+        templates: list[MatLike],
+    ) -> dict[tuple[int, int, int, int], _ScanCandidate]:
+        import cv2
+        import numpy as np
+
+        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
+        for data in batch:
+            frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
+            for template in templates:
+                result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+                _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
+                x, y = max_loc
+                height, width = template.shape[:2]
+                key = (x // 2, y // 2, width, height)
+                score = float(max_value)
+                existing = candidates.get(key)
+                if existing is not None and existing.locator_score >= score:
+                    continue
+                sample_step = self._scan_sample_step(width, height)
+                candidates[key] = _ScanCandidate(
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    sample_step=sample_step,
+                    template=template[::sample_step, ::sample_step].astype(np.int16),
+                    locator_score=score,
+                )
+        return candidates
 
     def _scan_video_range(
         self,
