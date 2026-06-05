@@ -2,6 +2,7 @@ import contextlib
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
+import heapq
 import math
 import logging
 from pathlib import Path
@@ -20,6 +21,7 @@ from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>-?\d+(?:\.\d+)?)")
 SCAN_THREADS = 3
 SCAN_BATCH_SIZE = 64
+SCAN_RESULT_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -33,12 +35,33 @@ class VideoArchiveStatus:
 
 
 @dataclass(frozen=True)
-class VideoScanResult:
+class VideoScanMatch:
     timestamp: float
     score: float
     relative_seconds: float
-    scanned_frames: int
     frame: bytes | None
+
+
+@dataclass(frozen=True)
+class VideoScanResult:
+    scanned_frames: int
+    matches: tuple[VideoScanMatch, ...]
+
+    @property
+    def timestamp(self) -> float:
+        return self.matches[0].timestamp
+
+    @property
+    def score(self) -> float:
+        return self.matches[0].score
+
+    @property
+    def relative_seconds(self) -> float:
+        return self.matches[0].relative_seconds
+
+    @property
+    def frame(self) -> bytes | None:
+        return self.matches[0].frame
 
 
 @dataclass
@@ -153,6 +176,36 @@ class _ScanRangeResult:
     relative_seconds: float
     scanned_frames: int
     frame: bytes | None
+    matches: tuple["_ScanRangeMatch", ...]
+
+
+@dataclass(frozen=True)
+class _ScanRangeMatch:
+    score: float
+    frame_index: int
+    relative_seconds: float
+    frame: bytes | None
+
+
+class _TopScanMatches:
+    def __init__(self, limit: int):
+        self.limit = max(1, int(limit))
+        self._next_index = 0
+        self._heap: list[tuple[float, int, _ScanRangeMatch]] = []
+
+    def insert(self, match: _ScanRangeMatch) -> None:
+        item = (match.score, self._next_index, match)
+        self._next_index += 1
+        if len(self._heap) < self.limit:
+            heapq.heappush(self._heap, item)
+        elif match.score > self._heap[0][0]:
+            heapq.heappushpop(self._heap, item)
+
+    def get_top_n(self) -> tuple[_ScanRangeMatch, ...]:
+        return tuple(
+            item[2]
+            for item in sorted(self._heap, key=lambda item: item[0], reverse=True)
+        )
 
 
 @dataclass(frozen=True)
@@ -365,9 +418,6 @@ class VideoArchiver:
                 microsecond=0,
             ).timestamp()
         relative_seconds = max(0.0, float(timestamp) - start_timestamp)
-        frame_pts = self._read_frame_pts(video_path)
-        if not frame_pts:
-            return False
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with contextlib.suppress(OSError):
@@ -506,7 +556,7 @@ class VideoArchiver:
             return None
         best_score = result.score
         best_relative_seconds = result.relative_seconds
-        best_frame = result.frame
+        _best_frame = result.frame
         scanned_frames = result.scanned_frames
         dense_seconds = time.perf_counter() - dense_started_at
         self.logger.debug(
@@ -539,12 +589,20 @@ class VideoArchiver:
             best_relative_seconds,
             scanned_frames,
         )
+        matches = tuple(
+            VideoScanMatch(
+                timestamp=archive_start_timestamp + match.relative_seconds,
+                score=match.score,
+                relative_seconds=match.relative_seconds,
+                frame=match.frame,
+            )
+            for match in result.matches
+        )
+        if not matches:
+            return None
         return VideoScanResult(
-            timestamp=archive_start_timestamp + best_relative_seconds,
-            score=best_score,
-            relative_seconds=best_relative_seconds,
             scanned_frames=scanned_frames,
-            frame=best_frame,
+            matches=matches,
         )
 
     def _extract_frame_command(
@@ -554,18 +612,19 @@ class VideoArchiver:
         relative_seconds: float,
         quality: int,
     ) -> list[str]:
-        preroll_seconds = min(max(1.0, float(self.keyint)), relative_seconds)
+        preroll_seconds = min(max(10.0, float(self.keyint) * 3.0), relative_seconds)
         seek_seconds = max(0.0, relative_seconds - preroll_seconds)
         decode_seconds = relative_seconds - seek_seconds
+        select_filter = f"select=gte(t\\,{decode_seconds:.6f})"
         command = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
             "-y",
-            "-ss", f"{seek_seconds:.3f}",
+            "-ss", f"{seek_seconds:.6f}",
             "-i", str(video_path),
             "-map", "0:v:0",
-            "-ss", f"{decode_seconds:.3f}",
+            "-vf", select_filter,
             "-frames:v", "1",
             "-q:v", str(max(1, int(quality))),
         ]
@@ -821,6 +880,7 @@ class VideoArchiver:
         best_relative_seconds = start_seconds
         best_frame: bytes | None = None
         best_frame_index = 0
+        top_matches = _TopScanMatches(SCAN_RESULT_LIMIT)
         scanned_frames = 0
         stderr_chunks: list[bytes] = []
         stderr_lock = threading.Lock()
@@ -875,6 +935,12 @@ class VideoArchiver:
                         best_score = score
                         best_frame = batch[offset]
                         best_frame_index = frame_index
+                    top_matches.insert(_ScanRangeMatch(
+                        score=score,
+                        frame_index=frame_index,
+                        relative_seconds=start_seconds,
+                        frame=batch[offset],
+                    ))
                 scanned_frames += len(scores)
             update_progress()
 
@@ -926,16 +992,25 @@ class VideoArchiver:
         with stderr_lock:
             stderr = b"".join(stderr_chunks)
         if progress is not None and progress.is_cancel_requested():
-            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None)
+            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None, ())
         best_pts_time = self._scan_showinfo_time(stderr, best_frame_index)
         if best_pts_time is not None:
             best_relative_seconds = best_pts_time
+        matches = tuple(
+            _ScanRangeMatch(
+                score=match.score,
+                frame_index=match.frame_index,
+                relative_seconds=self._scan_showinfo_time(stderr, match.frame_index) or start_seconds,
+                frame=match.frame,
+            )
+            for match in top_matches.get_top_n()
+        )
 
         if process.returncode not in (0, None):
             message = stderr.decode(errors="replace").strip()
             if message:
                 self.logger.warning(f"Video archive scan failed: {message}")
-            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None)
+            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None, ())
         self.logger.debug(
             "Video archive scan pass: +%.3fs duration=%s frames=%s time=%.3fs best=%.3f at +%.3fs",
             start_seconds,
@@ -945,7 +1020,13 @@ class VideoArchiver:
             best_score,
             best_relative_seconds,
         )
-        return _ScanRangeResult(best_score, best_relative_seconds, scanned_frames, best_frame)
+        return _ScanRangeResult(
+            best_score,
+            best_relative_seconds,
+            scanned_frames,
+            best_frame,
+            matches,
+        )
 
     def _scan_frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
         import numpy as np

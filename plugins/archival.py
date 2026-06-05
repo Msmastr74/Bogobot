@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 import contextlib
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -18,7 +19,7 @@ from bogobot_core import BotCore
 from utils import groups
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from utils.ai import AIParam, action
-from utils.video_archival import ScanProgress, VideoArchiver, VideoScanResult
+from utils.video_archival import ScanProgress, VideoArchiver, VideoScanMatch, VideoScanResult
 
 
 DEFAULT_ARCHIVE_PATH = "archive/monitor.bga"
@@ -29,6 +30,7 @@ ARCHIVE_CLOSE_CUSTOM_ID = "bogobot:archive:close"
 ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
 ARCHIVE_SCAN_COOLDOWN_SECONDS = 30.0
+ARCHIVE_IMAGES = 3
 DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFRsS])?>$")
 DAY_TIME_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?$")
 EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
@@ -62,6 +64,7 @@ class ScanView(discord.ui.LayoutView):
         progress: ScanProgress,
         result: VideoScanResult | None = None,
         result_media: str | discord.File | None = None,
+        preview_media: Sequence[tuple[VideoScanMatch, str | discord.File]] | None = None,
     ) -> None:
         super().__init__(timeout=None)
 
@@ -118,6 +121,14 @@ class ScanView(discord.ui.LayoutView):
                         description="Matched archive frame",
                     )
                 ))
+            for match, media in preview_media or []:
+                container.add_item(discord.ui.Section(
+                    discord.ui.TextDisplay(self._match_text(match)),
+                    accessory=discord.ui.Thumbnail(
+                        media,
+                        description="Archive match preview",
+                    ),
+                ))
         elif progress.done and progress.cancelled:
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.TextDisplay("Scan cancelled."))
@@ -169,6 +180,13 @@ class ScanView(discord.ui.LayoutView):
         return (
             f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
             f"-# Matched archive frame with score `{result.score:.3f}`"
+        )
+
+    def _match_text(self, match: VideoScanMatch) -> str:
+        epoch_ts = math.ceil(match.timestamp)
+        return (
+            f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
+            f"-# Score `{match.score:.3f}`"
         )
 
     def _completed_text(self, progress: ScanProgress) -> str:
@@ -1354,28 +1372,32 @@ async def setup(bot: BotCore):
 
         if progress.completed_at is None:
             progress.completed_at = time.time()
-        epoch_ts = math.ceil(result.timestamp)
-        result_file: discord.File | None = None
-        if result.frame is not None:
+        result_files: list[tuple[VideoScanMatch, discord.File]] = []
+        for index, match in enumerate(result.matches[:ARCHIVE_IMAGES]):
+            if match.frame is None:
+                continue
+            epoch_ts = math.ceil(match.timestamp)
             frame_image = Image.frombytes(
                 "RGB",
                 (video_archiver.width, video_archiver.height),
-                result.frame,
+                match.frame,
             )
             frame_buffer = io.BytesIO()
             frame_image.save(frame_buffer, format="JPEG", quality=90)
             frame_buffer.seek(0)
-            result_file = discord.File(
+            result_files.append((match, discord.File(
                 frame_buffer,
-                filename=f"archive_scan_{epoch_ts}.jpg",
-            )
+                filename=f"archive_scan_{index + 1}_{epoch_ts}.jpg",
+            )))
+
+        result_file = result_files[0][1] if result_files else None
+        preview_media = result_files[1:]
 
         try:
             attachments: list[discord.Attachment | discord.File] = []
             if input_attachment is not None:
                 attachments.append(input_attachment)
-            if result_file is not None:
-                attachments.append(result_file)
+            attachments.extend(file for _match, file in result_files)
             await scan_message.edit(
                 view=ScanView(
                     day_timestamp=day_timestamp,
@@ -1384,11 +1406,12 @@ async def setup(bot: BotCore):
                     progress=progress,
                     result=result,
                     result_media=result_file,
+                    preview_media=preview_media,
                 ),
                 attachments=attachments,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         finally:
-            if result_file is not None:
+            for _match, result_file in result_files:
                 result_file.close()
         await send_scan_completed_ping()
