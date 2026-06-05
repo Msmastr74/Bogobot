@@ -1,5 +1,5 @@
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,8 +26,12 @@ SCAN_THREAD_HEADROOM = 1.0
 SCAN_THREAD_SAMPLE_SECONDS = 2.0
 SCAN_THREAD_FALLBACK_CPU_FRACTION = 0.5
 SCAN_THREAD_TARGET_PROCESS_CPU_FRACTION = 0.75
-SCAN_LOCATOR_PROGRESS_WEIGHT = 1/3
-SCAN_DENSE_PROGRESS_WEIGHT = 2/3
+SCAN_LOCATOR_PROGRESS_WEIGHT = 0.4
+SCAN_DENSE_PROGRESS_WEIGHT = 0.6
+SCAN_TEMPLATE_SCALE_MAX = 2.0
+SCAN_TEMPLATE_SCALE_MIN = 0.2
+SCAN_TEMPLATE_SCALE_STEP = 0.01
+SCAN_LOCATOR_NORMAL_SCALES_PER_SAMPLE = 10
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
 SCAN_MAX_CANDIDATES = 12
@@ -293,6 +297,7 @@ class ScanProgress:
 
 @dataclass(frozen=True)
 class _ScanCandidate:
+    template_id: int
     x: int
     y: int
     width: int
@@ -364,6 +369,63 @@ class _TopScanMatches:
         )
 
 
+class _TopScanCandidates:
+    def __init__(self, limit: int):
+        self.limit = max(1, int(limit))
+        self._next_index = 0
+        self._heap: list[tuple[float, int, tuple[int, int, int, int, int], _ScanCandidate]] = []
+        self._by_key: dict[tuple[int, int, int, int, int], _ScanCandidate] = {}
+
+    def insert(self, key: tuple[int, int, int, int, int], candidate: _ScanCandidate) -> None:
+        existing = self._by_key.get(key)
+        if existing is not None and existing.locator_score >= candidate.locator_score:
+            return
+
+        self._by_key[key] = candidate
+        heapq.heappush(self._heap, (candidate.locator_score, self._next_index, key, candidate))
+        self._next_index += 1
+
+        if len(self._heap) > self.limit * 4:
+            self._prune()
+
+    def extend(self, candidates: Iterable[_ScanCandidate]) -> None:
+        for candidate in candidates:
+            self.insert(self._key(candidate), candidate)
+
+    def get_top_n(self) -> tuple[_ScanCandidate, ...]:
+        self._prune()
+        return tuple(
+            item[3]
+            for item in sorted(self._heap, key=lambda item: item[0], reverse=True)
+        )
+
+    def _prune(self) -> None:
+        candidates = sorted(
+            self._by_key.values(),
+            key=lambda candidate: candidate.locator_score,
+            reverse=True,
+        )[:self.limit]
+        self._by_key = {
+            self._key(candidate): candidate
+            for candidate in candidates
+        }
+        self._heap = [
+            (candidate.locator_score, index, self._key(candidate), candidate)
+            for index, candidate in enumerate(candidates)
+        ]
+        heapq.heapify(self._heap)
+        self._next_index = len(self._heap)
+
+    def _key(self, candidate: _ScanCandidate) -> tuple[int, int, int, int, int]:
+        return (
+            candidate.template_id,
+            candidate.x // 2,
+            candidate.y // 2,
+            candidate.width,
+            candidate.height,
+        )
+
+
 @dataclass(frozen=True)
 class _QueuedFrame:
     image: Image.Image
@@ -396,21 +458,6 @@ class VideoScanner:
         if not ranges:
             return None
 
-        templates_started_at = time.perf_counter()
-        if progress is not None:
-            progress.set_stage("Preparing templates")
-        templates = self._templates(image)
-        self.logger.debug(
-            "Video archive scan templates: %s templates in %.3fs",
-            len(templates),
-            time.perf_counter() - templates_started_at,
-        )
-        if not templates:
-            return None
-        if progress is not None and progress.is_cancel_requested():
-            progress.mark_cancelled()
-            return None
-
         locator_started_at = time.perf_counter()
         if progress is not None:
             progress.set_stage(
@@ -426,7 +473,7 @@ class VideoScanner:
                 select_interval_seconds=max(0.25, float(locator_interval_seconds)),
                 progress=progress,
             ),
-            templates,
+            image,
             max_candidates=SCAN_MAX_CANDIDATES,
             progress=progress,
         )
@@ -532,8 +579,7 @@ class VideoScanner:
             "pipe:1",
         ]
 
-    def _templates(self, image: Image.Image) -> list[MatLike]:
-        import cv2
+    def _candidate_source(self, image: Image.Image) -> MatLike | None:
         import numpy as np
 
         if image.mode != "RGB":
@@ -541,66 +587,82 @@ class VideoScanner:
         source = np.array(image)
         source_h, source_w = source.shape[:2]
         if source_h < 8 or source_w < 8:
-            return []
+            return None
+        if math.isclose(float(source.std()), 0.0, abs_tol=0.01):
+            return None
+        return source
 
-        templates: list[MatLike] = []
-        seen_sizes: set[tuple[int, int]] = set()
-        frame_pixels = self.width * self.height
-        reverse_template_count = 0
-        reverse_template_limit = 3
-
-        def add_template(width: int, height: int) -> None:
-            nonlocal reverse_template_count
-
-            if width < 8 or height < 8:
-                return
-            if width * height > frame_pixels * 4:
-                return
-            can_match_frame = width <= self.width and height <= self.height
-            can_contain_frame = width >= self.width and height >= self.height
-            if not can_match_frame and not can_contain_frame:
-                return
-            if can_contain_frame and not can_match_frame:
-                if reverse_template_count >= reverse_template_limit:
-                    return
-                reverse_template_count += 1
-            if (width, height) in seen_sizes:
-                return
-            seen_sizes.add((width, height))
-            interpolation = cv2.INTER_AREA if width <= source_w and height <= source_h else cv2.INTER_LINEAR
-            resized = cv2.resize(source, (width, height), interpolation=interpolation)
-            if not math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
-                templates.append(resized)
-
-        dynamic_scales: list[float] = []
-        source_aspect = source_w / source_h
-        archive_aspect = self.width / self.height
-        full_frame_like = (
-            source_w >= self.width
-            and source_h >= self.height
-            and abs(source_aspect - archive_aspect) / archive_aspect <= 0.08
-        )
+    def _template_scales(self, source_w: int, source_h: int) -> tuple[float, ...]:
+        scale_count = int(round(
+            (SCAN_TEMPLATE_SCALE_MAX - SCAN_TEMPLATE_SCALE_MIN)
+            / SCAN_TEMPLATE_SCALE_STEP
+        ))
+        scales = [
+            round(SCAN_TEMPLATE_SCALE_MAX - index * SCAN_TEMPLATE_SCALE_STEP, 2)
+            for index in range(scale_count + 1)
+        ]
         if source_w > self.width or source_h > self.height:
             fit_scale = min(self.width / source_w, self.height / source_h)
-            dynamic_scales.extend([
+            scales.extend([
                 fit_scale,
                 self.width / source_w,
                 self.height / source_h,
                 fit_scale * 0.98,
                 fit_scale * 1.02,
             ])
-            add_template(self.width, self.height)
-            if full_frame_like:
-                return templates
+        return tuple(dict.fromkeys(
+            scale
+            for scale in scales
+            if scale > 0
+        ))
 
-        scales = (
-            [2.0, 1.75, 1.5, 1.25, 1.0, 0.9, 0.8, 0.75, 2 / 3, 0.6, 0.55, 0.5, 0.45, 0.4, 1 / 3, 0.25, 0.2]
-            if source_w < self.width and source_h < self.height else
-            [1.0, 0.75, 0.5, *dynamic_scales, 0.45, 0.4, 1 / 3, 0.25, 0.2]
+    def _first_locator_batch_scale_indices(
+        self,
+        sample_count: int,
+        scale_count: int,
+    ) -> list[tuple[int, ...]]:
+        if sample_count <= 0 or scale_count <= 0:
+            return []
+
+        tries_per_scale = min(2, sample_count)
+        assignments = scale_count * tries_per_scale
+        scales_per_sample = min(
+            scale_count,
+            math.ceil(assignments / sample_count),
         )
-        for scale in scales:
-            add_template(int(round(source_w * scale)), int(round(source_h * scale)))
-        return templates
+        scheduled: list[tuple[int, ...]] = []
+        assignment_index = 0
+        for _sample_index in range(sample_count):
+            sample_scales: list[int] = []
+            seen_scales: set[int] = set()
+            while (
+                len(sample_scales) < scales_per_sample
+                and assignment_index < assignments
+            ):
+                scale_index = assignment_index % scale_count
+                assignment_index += 1
+                if scale_index in seen_scales:
+                    continue
+                seen_scales.add(scale_index)
+                sample_scales.append(scale_index)
+            scheduled.append(tuple(sample_scales))
+        return scheduled
+
+    def _candidate_scale_indices(
+        self,
+        candidates: tuple[_ScanCandidate, ...],
+        scale_count: int,
+    ) -> tuple[int, ...]:
+        if scale_count <= 0:
+            return ()
+        scale_indices = tuple(dict.fromkeys(
+            candidate.template_id
+            for candidate in candidates
+            if 0 <= candidate.template_id < scale_count
+        ))
+        if scale_indices:
+            return scale_indices
+        return tuple(range(min(scale_count, SCAN_LOCATOR_NORMAL_SCALES_PER_SAMPLE)))
 
     def _frame_stream(
         self,
@@ -688,24 +750,30 @@ class VideoScanner:
     def _candidates_from_frames(
         self,
         frames: Iterator[_ScanFrame],
-        templates: list[MatLike],
+        image: Image.Image,
         *,
         max_candidates: int,
         progress: ScanProgress | None = None,
     ) -> list[_ScanCandidate]:
-        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
-        pending: dict[Future[dict[tuple[int, int, int, int], _ScanCandidate]], float] = {}
+        source = self._candidate_source(image)
+        if source is None:
+            return []
+        source_h, source_w = source.shape[:2]
+        scales = self._template_scales(source_w, source_h)
+        self.logger.debug("Video archive scan locator scales: %s", len(scales))
+        if not scales:
+            return []
+
+        candidates = _TopScanCandidates(max_candidates)
+        pending: dict[Future[tuple[_ScanCandidate, ...]], float] = {}
         thread_budget = _AdaptiveScanThreadBudget(
             logger=self.logger,
             stage="locator",
         )
         executor = ThreadPoolExecutor(max_workers=thread_budget.max_workers, thread_name_prefix="BogobotVideoScanLocate")
 
-        def merge(new_candidates: dict[tuple[int, int, int, int], _ScanCandidate]) -> None:
-            for key, candidate in new_candidates.items():
-                existing = candidates.get(key)
-                if existing is None or existing.locator_score < candidate.locator_score:
-                    candidates[key] = candidate
+        def merge(new_candidates: tuple[_ScanCandidate, ...]) -> None:
+            candidates.extend(new_candidates)
 
         def collect_one() -> None:
             if not pending:
@@ -717,24 +785,59 @@ class VideoScanner:
                 if progress is not None:
                     progress.current_seconds = timestamp
 
+        def submit_batch(
+            batch: list[tuple[bytes, tuple[int, ...]]],
+            batch_timestamp: float,
+        ) -> None:
+            while len(pending) >= thread_budget.pending_limit:
+                collect_one()
+            pending[executor.submit(self._candidate_batch, batch, source, scales)] = batch_timestamp
+
         try:
-            batch: list[bytes] = []
-            batch_timestamp = 0.0
-            for frame in frames:
+            frame_iter = iter(frames)
+            first_frames: list[_ScanFrame] = []
+            for frame in frame_iter:
                 if progress is not None and progress.is_cancel_requested():
                     break
-                batch.append(frame.data)
+                first_frames.append(frame)
+                if len(first_frames) >= SCAN_BATCH_SIZE:
+                    break
+
+            if first_frames and not (progress is not None and progress.is_cancel_requested()):
+                first_schedule = self._first_locator_batch_scale_indices(
+                    len(first_frames),
+                    len(scales),
+                )
+                first_batch = [
+                    (frame.data, scale_indices)
+                    for frame, scale_indices in zip(first_frames, first_schedule, strict=True)
+                    if scale_indices
+                ]
+                if first_batch:
+                    submit_batch(first_batch, first_frames[-1].timestamp)
+                while pending and not (progress is not None and progress.is_cancel_requested()):
+                    collect_one()
+
+            batch: list[tuple[bytes, tuple[int, ...]]] = []
+            batch_timestamp = 0.0
+            for frame in frame_iter:
+                if progress is not None and progress.is_cancel_requested():
+                    break
+                scale_indices = self._candidate_scale_indices(
+                    candidates.get_top_n(),
+                    len(scales),
+                )
+                batch.append((
+                    frame.data,
+                    scale_indices,
+                ))
                 batch_timestamp = frame.timestamp
                 if len(batch) < SCAN_BATCH_SIZE:
                     continue
-                while len(pending) >= thread_budget.pending_limit:
-                    collect_one()
-                pending[executor.submit(self._candidate_batch, batch, templates)] = batch_timestamp
+                submit_batch(batch, batch_timestamp)
                 batch = []
             if batch and not (progress is not None and progress.is_cancel_requested()):
-                while len(pending) >= thread_budget.pending_limit:
-                    collect_one()
-                pending[executor.submit(self._candidate_batch, batch, templates)] = batch_timestamp
+                submit_batch(batch, batch_timestamp)
             while pending and not (progress is not None and progress.is_cancel_requested()):
                 collect_one()
         finally:
@@ -742,7 +845,7 @@ class VideoScanner:
 
         if progress is not None and progress.is_cancel_requested():
             return []
-        return sorted(candidates.values(), key=lambda candidate: candidate.locator_score, reverse=True)[:max(1, int(max_candidates))]
+        return list(candidates.get_top_n())
 
     def _scan_frame_stream(
         self,
@@ -818,16 +921,49 @@ class VideoScanner:
 
     def _candidate_batch(
         self,
-        batch: list[bytes],
-        templates: list[MatLike],
-    ) -> dict[tuple[int, int, int, int], _ScanCandidate]:
+        batch: list[tuple[bytes, tuple[int, ...]]],
+        source: MatLike,
+        scales: tuple[float, ...],
+    ) -> tuple[_ScanCandidate, ...]:
         import cv2
         import numpy as np
 
-        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
-        for data in batch:
+        candidates = _TopScanCandidates(SCAN_MAX_CANDIDATES)
+        source_h, source_w = source.shape[:2]
+        frame_pixels = self.width * self.height
+        template_cache: dict[int, MatLike | None] = {}
+
+        def template_for_scale(scale_index: int) -> MatLike | None:
+            if scale_index in template_cache:
+                return template_cache[scale_index]
+            scale = scales[scale_index]
+            width = int(round(source_w * scale))
+            height = int(round(source_h * scale))
+            if width < 8 or height < 8:
+                template_cache[scale_index] = None
+                return None
+            if width * height > frame_pixels * 4:
+                template_cache[scale_index] = None
+                return None
+            can_match_frame = width <= self.width and height <= self.height
+            can_contain_frame = width >= self.width and height >= self.height
+            if not can_match_frame and not can_contain_frame:
+                template_cache[scale_index] = None
+                return None
+            interpolation = cv2.INTER_AREA if width <= source_w and height <= source_h else cv2.INTER_LINEAR
+            resized = cv2.resize(source, (width, height), interpolation=interpolation)
+            if math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
+                template_cache[scale_index] = None
+                return None
+            template_cache[scale_index] = resized
+            return resized
+
+        for data, scale_indices in batch:
             frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
-            for template in templates:
+            for scale_index in scale_indices:
+                template = template_for_scale(scale_index)
+                if template is None:
+                    continue
                 height, width = template.shape[:2]
                 if width <= self.width and height <= self.height:
                     result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
@@ -848,27 +984,28 @@ class VideoScanner:
                     ]
                 else:
                     continue
-                key = (x // 2, y // 2, width, height)
+                key = (scale_index, x // 2, y // 2, width, height)
                 score = float(max_value)
-                existing = candidates.get(key)
-                if existing is not None and existing.locator_score >= score:
-                    continue
                 sample_step = self._sample_step(width, height)
                 sampled_template = candidate_template[::sample_step, ::sample_step].copy()
                 template_float = sampled_template.astype(np.float32)
                 template_centered = (template_float - template_float.mean()).ravel()
-                candidates[key] = _ScanCandidate(
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-                    sample_step=sample_step,
-                    template=sampled_template,
-                    template_centered=template_centered,
-                    template_int16=sampled_template.astype(np.int16),
-                    locator_score=score,
+                candidates.insert(
+                    key,
+                    _ScanCandidate(
+                        template_id=scale_index,
+                        x=x,
+                        y=y,
+                        width=width,
+                        height=height,
+                        sample_step=sample_step,
+                        template=sampled_template,
+                        template_centered=template_centered,
+                        template_int16=sampled_template.astype(np.int16),
+                        locator_score=score,
+                    )
                 )
-        return candidates
+        return candidates.get_top_n()
 
     def _frame_scores(
         self,
