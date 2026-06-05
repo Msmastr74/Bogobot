@@ -235,20 +235,8 @@ class VideoArchiver:
                 last_frame_at=self._last_frame_at,
             )
 
-    def active_until_for_day(self, day: str) -> float | None:
-        return self._recorded_until_for_day(day, self.video_path_for_day(day))
-
-    def video_path_for_timestamp(self, timestamp: float) -> Path:
-        day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        return self.video_path_for_day(day)
-
-    def video_path_for_day(self, day: str) -> Path:
-        final_path = self.directory / f"{day}.{self.final_format}"
-        if final_path.exists():
-            return final_path
-        return self.directory / f"{day}.ts"
-
-    def _recorded_until_for_day(self, day: str, video_path: Path) -> float | None:
+    def recorded_bounds_for_day(self, day: str) -> tuple[float, float] | None:
+        video_path = self.video_path_for_day(day)
         if not video_path.exists():
             return None
         start_timestamp = self._read_start_timestamp(day)
@@ -259,7 +247,17 @@ class VideoArchiver:
         duration = self._video_duration(video_path)
         if duration is None:
             return None
-        return start_timestamp + duration
+        return start_timestamp, start_timestamp + duration
+
+    def video_path_for_timestamp(self, timestamp: float) -> Path:
+        day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+        return self.video_path_for_day(day)
+
+    def video_path_for_day(self, day: str) -> Path:
+        final_path = self.directory / f"{day}.{self.final_format}"
+        if final_path.exists():
+            return final_path
+        return self.directory / f"{day}.ts"
 
     def finalize_old_recordings(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
