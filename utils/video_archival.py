@@ -35,6 +35,13 @@ class VideoArchiveStatus:
 
 
 @dataclass(frozen=True)
+class VideoArchiveRange:
+    day: str
+    start_timestamp: float
+    end_timestamp: float
+
+
+@dataclass(frozen=True)
 class VideoScanMatch:
     timestamp: float
     score: float
@@ -177,6 +184,23 @@ class _ScanRangeResult:
     scanned_frames: int
     frame: bytes | None
     matches: tuple["_ScanRangeMatch", ...]
+
+
+@dataclass(frozen=True)
+class _PreparedScanRange:
+    day: str
+    video_path: Path
+    archive_start_timestamp: float
+    start_timestamp: float
+    end_timestamp: float
+
+    @property
+    def start_seconds(self) -> float:
+        return self.start_timestamp - self.archive_start_timestamp
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.end_timestamp - self.start_timestamp
 
 
 @dataclass(frozen=True)
@@ -333,6 +357,35 @@ class VideoArchiver:
             return None
         return start_timestamp, start_timestamp + duration
 
+    def recorded_ranges_for_interval(
+        self,
+        start_timestamp: float,
+        end_timestamp: float,
+    ) -> list[VideoArchiveRange]:
+        ranges: list[VideoArchiveRange] = []
+        for day in self.recorded_days():
+            bounds = self.recorded_bounds_for_day(day)
+            if bounds is None:
+                continue
+            video_start_timestamp, video_end_timestamp = bounds
+            range_start_timestamp = max(float(start_timestamp), video_start_timestamp)
+            range_end_timestamp = min(float(end_timestamp), video_end_timestamp)
+            if range_end_timestamp > range_start_timestamp:
+                ranges.append(VideoArchiveRange(
+                    day=day,
+                    start_timestamp=range_start_timestamp,
+                    end_timestamp=range_end_timestamp,
+                ))
+        return ranges
+
+    def recorded_days(self) -> list[str]:
+        days: set[str] = set()
+        for suffix in ("ts", self.final_format, "start"):
+            for path in self.directory.glob(f"*.{suffix}"):
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", path.stem):
+                    days.add(path.stem)
+        return sorted(days)
+
     def video_path_for_timestamp(self, timestamp: float) -> Path:
         day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
         return self.video_path_for_day(day)
@@ -453,7 +506,7 @@ class VideoArchiver:
         requested_start_timestamp: float | None = None,
         requested_end_timestamp: float | None = None,
         progress: ScanProgress | None = None,
-    ) -> VideoScanResult | None:
+        ) -> VideoScanResult | None:
         total_started_at = time.perf_counter()
 
         video_path = self.video_path_for_day(day)
@@ -604,6 +657,123 @@ class VideoArchiver:
             scanned_frames=scanned_frames,
             matches=matches,
         )
+
+    def scan_for_image_interval(
+        self,
+        image: Image.Image,
+        *,
+        start_timestamp: float,
+        end_timestamp: float,
+        locator_interval_seconds: float = 30.0,
+        max_candidates: int = 12,
+        progress: ScanProgress | None = None,
+    ) -> VideoScanResult | None:
+        ranges = self._prepared_scan_ranges(start_timestamp, end_timestamp)
+        if not ranges:
+            return None
+
+        templates = self._scan_templates(image)
+        if not templates:
+            return None
+
+        frame_size = self.width * self.height * 3
+        locator_interval_seconds = max(0.25, float(locator_interval_seconds))
+        all_matches: list[VideoScanMatch] = []
+        scanned_frames = 0
+        best_score = -1.0
+
+        if progress is not None:
+            progress.set_stage(
+                "Scanning archive frames",
+                window_start_seconds=float(start_timestamp),
+                window_end_seconds=float(end_timestamp),
+            )
+
+        for scan_range in ranges:
+            if progress is not None and progress.is_cancel_requested():
+                progress.mark_cancelled()
+                return None
+
+            candidates = self._scan_candidates(
+                scan_range.video_path,
+                templates,
+                locator_interval_seconds=locator_interval_seconds,
+                max_candidates=max_candidates,
+                start_seconds=scan_range.start_seconds,
+                duration_seconds=scan_range.duration_seconds,
+                progress=progress,
+            )
+            if not candidates:
+                continue
+
+            result = self._scan_video_range(
+                scan_range.video_path,
+                candidates,
+                scan_range.start_seconds,
+                scan_range.duration_seconds,
+                frame_size,
+                progress=progress,
+                progress_timestamp_base=scan_range.archive_start_timestamp,
+            )
+            if progress is not None and progress.is_cancel_requested():
+                progress.mark_cancelled()
+                return None
+            if result.scanned_frames <= 0:
+                continue
+
+            scanned_frames += result.scanned_frames
+            for match in result.matches:
+                timestamp = scan_range.archive_start_timestamp + match.relative_seconds
+                if timestamp < start_timestamp or timestamp > end_timestamp:
+                    continue
+                all_matches.append(VideoScanMatch(
+                    timestamp=timestamp,
+                    score=match.score,
+                    relative_seconds=match.relative_seconds,
+                    frame=match.frame,
+                ))
+                best_score = max(best_score, match.score)
+            if progress is not None:
+                progress.current_seconds = min(float(end_timestamp), scan_range.end_timestamp)
+                progress.scanned_frames = scanned_frames
+                progress.best_score = best_score if best_score >= 0 else None
+
+        matches = tuple(
+            sorted(all_matches, key=lambda match: match.score, reverse=True)[:SCAN_RESULT_LIMIT]
+        )
+        if not matches:
+            return None
+        if progress is not None:
+            progress.stage = "Finished"
+            progress.current_seconds = float(end_timestamp)
+            progress.scanned_frames = scanned_frames
+            progress.best_score = matches[0].score
+            progress.done = True
+            progress.completed_at = time.time()
+        return VideoScanResult(
+            scanned_frames=scanned_frames,
+            matches=matches,
+        )
+
+    def _prepared_scan_ranges(
+        self,
+        start_timestamp: float,
+        end_timestamp: float,
+    ) -> list[_PreparedScanRange]:
+        ranges: list[_PreparedScanRange] = []
+        for archive_range in self.recorded_ranges_for_interval(start_timestamp, end_timestamp):
+            video_path = self.video_path_for_day(archive_range.day)
+            bounds = self.recorded_bounds_for_day(archive_range.day)
+            if bounds is None:
+                continue
+            ranges.append(_PreparedScanRange(
+                day=archive_range.day,
+                video_path=video_path,
+                archive_start_timestamp=bounds[0],
+                start_timestamp=archive_range.start_timestamp,
+                end_timestamp=archive_range.end_timestamp,
+            ))
+        return ranges
 
     def _extract_frame_command(
         self,
@@ -949,6 +1119,7 @@ class VideoArchiver:
         frame_size: int,
         *,
         progress: ScanProgress | None = None,
+        progress_timestamp_base: float = 0.0,
     ) -> _ScanRangeResult:
         started_at = time.perf_counter()
         process = subprocess.Popen(
@@ -1009,7 +1180,11 @@ class VideoArchiver:
                 stderr = b"".join(stderr_chunks)
             current_seconds = self._scan_latest_showinfo_time(stderr)
             if progress is not None:
-                progress.current_seconds = current_seconds
+                progress.current_seconds = (
+                    None
+                    if current_seconds is None else
+                    progress_timestamp_base + current_seconds
+                )
                 progress.scanned_frames = scanned_frames
                 progress.best_score = best_score if best_score >= 0 else None
 

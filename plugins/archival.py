@@ -31,8 +31,14 @@ ARCHIVE_BUFFER_EVENT_LIMIT = 200
 ARCHIVE_HEADER_SCAN_BLOCK_SIZE = 64 * 1024
 ARCHIVE_SCAN_COOLDOWN_SECONDS = 30.0
 ARCHIVE_IMAGES = 3
+ARCHIVE_SCAN_DEFAULT_WINDOW_SECONDS = 12 * 60 * 60
+ARCHIVE_SCAN_MAX_RANGE_SECONDS = 24 * 60 * 60
 DISCORD_TIMESTAMP_RE = re.compile(r"^<t:(?P<timestamp>-?\d+)(?::[tTdDfFRsS])?>$")
 DAY_TIME_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?$")
+ARCHIVE_SCAN_DURATION_RE = re.compile(
+    r"^\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*$",
+    re.IGNORECASE,
+)
 EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
 
@@ -96,7 +102,7 @@ class ScanView(discord.ui.LayoutView):
 
         container = discord.ui.Container(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"## Scan of <t:{int(day_timestamp)}:D>"),
+                discord.ui.TextDisplay("## Archive Scan"),
                 *(
                     [discord.ui.TextDisplay(self._window_text(scan_window))]
                     if scan_window is not None else
@@ -136,7 +142,7 @@ class ScanView(discord.ui.LayoutView):
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.TextDisplay(
                 "No matching archive frame found.\n"
-                "-# Try a narrower `start_time`/`end_time` window."
+                "-# Try a narrower `start`/`end` window."
             ))
         if progress.done:
             container.add_item(discord.ui.TextDisplay(self._completed_text(progress)))
@@ -145,7 +151,7 @@ class ScanView(discord.ui.LayoutView):
 
     def _window_text(self, scan_window: tuple[float, float]) -> str:
         start_timestamp, end_timestamp = scan_window
-        return f"-# From <t:{round(start_timestamp)}:T> to <t:{round(end_timestamp)}:T>"
+        return f"-# From <t:{int(start_timestamp)}:S> to <t:{int(end_timestamp)}:S>"
 
     def _progress_text(self, progress: ScanProgress) -> str:
         lines = [
@@ -176,25 +182,25 @@ class ScanView(discord.ui.LayoutView):
         return f"[{bar}] {ratio * 100:.1f}%"
 
     def _result_text(self, result: VideoScanResult) -> str:
-        epoch_ts = math.ceil(result.timestamp)
+        epoch_ts = int(result.timestamp)
         return (
             f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
             f"-# Matched archive frame with score `{result.score:.3f}`"
         )
 
     def _match_text(self, match: VideoScanMatch) -> str:
-        epoch_ts = math.ceil(match.timestamp)
+        epoch_ts = int(match.timestamp)
         return (
             f"`{epoch_ts}` <t:{epoch_ts}:S>\n"
-            f"-# Score `{match.score:.3f}`"
+            f"-# Archive frame with score `{match.score:.3f}`"
         )
 
     def _completed_text(self, progress: ScanProgress) -> str:
         completed_at = progress.completed_at if progress.completed_at is not None else time.time()
-        return f"-# Scan completed at <t:{round(completed_at)}:T>"
+        return f"-# Scan completed at <t:{int(completed_at)}:S>"
 
     def _duration(self, seconds: float) -> str:
-        seconds = max(0, int(round(seconds)))
+        seconds = max(0, int(seconds))
         minutes, second = divmod(seconds, 60)
         hours, minute = divmod(minutes, 60)
         if hours:
@@ -228,6 +234,106 @@ def parse_archive_scan_day(value: str) -> str | None:
     if timestamp is None:
         return None
     return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+
+
+def parse_archive_scan_duration(value: str) -> float | None:
+    match = ARCHIVE_SCAN_DURATION_RE.fullmatch(value)
+    if match is None:
+        return None
+    amount = float(match.group("value"))
+    unit = match.group("unit").lower()
+    if unit.startswith("s"):
+        return amount
+    if unit.startswith("m"):
+        return amount * 60
+    if unit.startswith("h"):
+        return amount * 60 * 60
+    if unit.startswith("d"):
+        return amount * 24 * 60 * 60
+    return None
+
+
+def parse_archive_scan_absolute_time(value: str) -> float | None:
+    value = value.strip()
+    if not value:
+        return None
+    if value.lower() == "now":
+        return time.time()
+
+    timestamp = parse_archive_frame_time(value)
+    if timestamp is not None:
+        return timestamp
+
+    for time_format in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ):
+        with contextlib.suppress(ValueError):
+            return datetime.strptime(value, time_format).timestamp()
+
+    match = DAY_TIME_RE.match(value)
+    if match is None:
+        return None
+
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    second_raw = match.group("second")
+    second = 0 if second_raw is None else int(second_raw)
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    return datetime.strptime(
+        f"{today} {hour:02d}:{minute:02d}:{second:02d}",
+        "%Y-%m-%d %H:%M:%S",
+    ).timestamp()
+
+
+def resolve_archive_scan_window(
+    *,
+    start: str | None,
+    end: str | None,
+    window: str,
+) -> tuple[float, float] | str:
+    window_seconds = parse_archive_scan_duration(window)
+    if window_seconds is None or window_seconds <= 0:
+        return "`window` must look like `30s`, `15min`, `12h`, or `1day`."
+    if window_seconds > ARCHIVE_SCAN_MAX_RANGE_SECONDS:
+        return "`window` cannot be longer than `24h`."
+
+    start_timestamp = (
+        parse_archive_scan_absolute_time(start)
+        if start is not None else
+        None
+    )
+    end_timestamp = (
+        parse_archive_scan_absolute_time(end)
+        if end is not None else
+        None
+    )
+    if start is not None and start_timestamp is None:
+        return "`start` must be `now`, epoch seconds, epoch milliseconds, `<t:...>`, `YYYY-MM-DD HH:MM[:SS]`, or `HH:MM[:SS]`."
+    if end is not None and end_timestamp is None:
+        return "`end` must be `now`, epoch seconds, epoch milliseconds, `<t:...>`, `YYYY-MM-DD HH:MM[:SS]`, or `HH:MM[:SS]`."
+
+    if start_timestamp is None and end_timestamp is None:
+        end_timestamp = time.time()
+        start_timestamp = end_timestamp - window_seconds
+    elif start_timestamp is None:
+        assert end_timestamp is not None
+        start_timestamp = end_timestamp - window_seconds
+    elif end_timestamp is None:
+        end_timestamp = start_timestamp + window_seconds
+
+    if end_timestamp <= start_timestamp:
+        return "`end` must be after `start`."
+    if end_timestamp - start_timestamp > ARCHIVE_SCAN_MAX_RANGE_SECONDS:
+        return "Archive scans cannot cover more than `24h`."
+    return start_timestamp, end_timestamp
 
 
 def parse_archive_scan_time(day: str, value: str | None) -> float | None:
@@ -764,7 +870,7 @@ async def setup(bot: BotCore):
 
         status = video_archiver.status()
         last_frame = (
-            f"<t:{round(status.last_frame_at)}:R>"
+            f"<t:{int(status.last_frame_at)}:R>"
             if status.last_frame_at is not None else
             "never"
         )
@@ -918,7 +1024,7 @@ async def setup(bot: BotCore):
             )
 
         def event_line(self, event: ArchiveEvent) -> str:
-            timestamp_ms = round(event.timestamp * 1000)
+            timestamp_ms = int(event.timestamp * 1000)
             timestamp = timestamp_ms // 1000
             seconds = timestamp % 60
             milliseconds = timestamp_ms % 1000
@@ -1114,7 +1220,7 @@ async def setup(bot: BotCore):
             )
             return
 
-        timestamp_seconds = round(timestamp)
+        timestamp_seconds = int(timestamp)
         with tempfile.TemporaryDirectory(prefix="bogobot_archive_frame_") as temp_dir:
             output_path = Path(temp_dir) / f"archive_frame_{timestamp_seconds}.jpg"
             extracted = await asyncio.to_thread(
@@ -1154,10 +1260,10 @@ async def setup(bot: BotCore):
     async def archive_scan(
         interaction: discord.Interaction,
         image: discord.Attachment,
-        date: str | None = None,
+        end: str | None = None,
+        start: str | None = None,
+        window: str = "12h",
         max_candidates: int = 12,
-        start_time: str | None = None,
-        end_time: str | None = None,
     ):
         nonlocal archive_scan_last_finished_at, archive_scan_running
 
@@ -1181,40 +1287,27 @@ async def setup(bot: BotCore):
             )
             return
 
-        day = datetime.now().strftime("%Y-%m-%d") if date is None else (
-            parse_archive_scan_day(date)
+        resolved_window = resolve_archive_scan_window(
+            start=start,
+            end=end,
+            window=window,
         )
-        if day is None:
+        if isinstance(resolved_window, str):
             await bot.discord.send(
-                "Date must be `YYYY-MM-DD`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.",
+                resolved_window,
                 response=True,
                 ephemeral=True,
             )
             return
 
-        requested_start_timestamp = parse_archive_scan_time(day, start_time)
-        requested_end_timestamp = parse_archive_scan_time(day, end_time)
-        if start_time is not None and requested_start_timestamp is None:
+        requested_start_timestamp, requested_end_timestamp = resolved_window
+        scan_ranges = video_archiver.recorded_ranges_for_interval(
+            requested_start_timestamp,
+            requested_end_timestamp,
+        )
+        if not scan_ranges:
             await bot.discord.send(
-                "`start_time` must be epoch seconds, epoch milliseconds, `<t:...>`, `<t:...:*>`, `HH:MM`, or `HH:MM:SS`.",
-                response=True,
-                ephemeral=True,
-            )
-            return
-        if end_time is not None and requested_end_timestamp is None:
-            await bot.discord.send(
-                "`end_time` must be epoch seconds, epoch milliseconds, `<t:...>`, `<t:...:*>`, `HH:MM`, or `HH:MM:SS`.",
-                response=True,
-                ephemeral=True,
-            )
-            return
-        if (
-            requested_start_timestamp is not None
-            and requested_end_timestamp is not None
-            and requested_end_timestamp <= requested_start_timestamp
-        ):
-            await bot.discord.send(
-                "`end_time` must be after `start_time`.",
+                "No visual archive recordings overlap that scan range.",
                 response=True,
                 ephemeral=True,
             )
@@ -1228,21 +1321,11 @@ async def setup(bot: BotCore):
             )
             return
 
-        day_timestamp = datetime.strptime(day, "%Y-%m-%d").timestamp()
-        scan_window: tuple[float, float] | None = None
-        video_bounds = video_archiver.recorded_bounds_for_day(day)
-        if video_bounds is not None:
-            video_start_timestamp, video_end_timestamp = video_bounds
-            scan_start_timestamp = max(
-                requested_start_timestamp if requested_start_timestamp is not None else 0.0,
-                video_start_timestamp,
-            )
-            scan_end_timestamp = min(
-                requested_end_timestamp if requested_end_timestamp is not None else math.inf,
-                video_end_timestamp,
-            )
-            if scan_end_timestamp >= scan_start_timestamp:
-                scan_window = (scan_start_timestamp, scan_end_timestamp)
+        day_timestamp = requested_start_timestamp
+        scan_window: tuple[float, float] | None = (
+            requested_start_timestamp,
+            requested_end_timestamp,
+        )
         archive_scan_running = True
         scan_started = False
         try:
@@ -1337,12 +1420,11 @@ async def setup(bot: BotCore):
         try:
             scan_started = True
             result = await asyncio.to_thread(
-                video_archiver.scan_for_image,
-                day,
+                video_archiver.scan_for_image_interval,
                 target_image,
                 max_candidates=max_candidates,
-                requested_start_timestamp=requested_start_timestamp,
-                requested_end_timestamp=requested_end_timestamp,
+                start_timestamp=requested_start_timestamp,
+                end_timestamp=requested_end_timestamp,
                 progress=progress,
             )
         finally:
@@ -1376,7 +1458,7 @@ async def setup(bot: BotCore):
         for index, match in enumerate(result.matches[:ARCHIVE_IMAGES]):
             if match.frame is None:
                 continue
-            epoch_ts = math.ceil(match.timestamp)
+            epoch_ts = int(match.timestamp)
             frame_image = Image.frombytes(
                 "RGB",
                 (video_archiver.width, video_archiver.height),
