@@ -1271,6 +1271,23 @@ async def setup(bot: BotCore):
 
         progress_task = asyncio.create_task(edit_progress_loop())
 
+        async def delete_later(message: BotCore._Discord.MessageHandle) -> None:
+            await asyncio.sleep(5)
+            await message.delete()
+
+        async def send_scan_completed_ping() -> None:
+            message = await bot.discord.send(
+                contents=f"{interaction.user.mention} Archive scan completed.",
+                response=True,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True,
+                    roles=False,
+                    everyone=False,
+                ),
+            )
+            if message is not None:
+                asyncio.create_task(delete_later(message))
+
         try:
             scan_started = True
             result = await asyncio.to_thread(
@@ -1303,6 +1320,7 @@ async def setup(bot: BotCore):
                 ),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+            await send_scan_completed_ping()
             return
 
         if progress.completed_at is None:
@@ -1344,3 +1362,4 @@ async def setup(bot: BotCore):
         finally:
             if result_file is not None:
                 result_file.close()
+        await send_scan_completed_ping()
