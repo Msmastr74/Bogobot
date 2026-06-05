@@ -6,6 +6,7 @@ from datetime import datetime
 import heapq
 import math
 import logging
+import os
 from pathlib import Path
 import queue
 import re
@@ -20,10 +21,111 @@ from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 
 
 SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>-?\d+(?:\.\d+)?)")
-SCAN_THREADS = 3
+SCAN_MAX_THREAD_CAP = 8
+SCAN_THREAD_HEADROOM = 1.0
+SCAN_THREAD_SAMPLE_SECONDS = 2.0
+SCAN_THREAD_FALLBACK_CPU_FRACTION = 0.5
+SCAN_THREAD_TARGET_PROCESS_CPU_FRACTION = 0.75
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
 SCAN_MAX_CANDIDATES = 12
+
+
+class _AdaptiveScanThreadBudget:
+    def __init__(self, *, logger: logging.Logger, stage: str):
+        self.logger = logger
+        self.stage = stage
+        self.cpu_count = max(1, os.cpu_count() or 1)
+        self.max_workers = max(
+            1,
+            min(
+                SCAN_MAX_THREAD_CAP,
+                self.cpu_count - 1 if self.cpu_count > 1 else 1,
+            ),
+        )
+        self._last_process_time: float | None = None
+        self._last_wall_time: float | None = None
+        self._active_workers = self._sample_active_workers()
+        self._sampled_at = time.monotonic()
+        self.logger.debug(
+            "Video archive scan %s active thread budget: %s/%s workers",
+            self.stage,
+            self._active_workers,
+            self.max_workers,
+        )
+
+    @property
+    def active_workers(self) -> int:
+        now = time.monotonic()
+        if now - self._sampled_at < SCAN_THREAD_SAMPLE_SECONDS:
+            return self._active_workers
+
+        self._sampled_at = now
+        sampled_workers = self._sample_active_workers()
+        if sampled_workers != self._active_workers:
+            self.logger.debug(
+                "Video archive scan %s active thread budget changed: %s -> %s workers",
+                self.stage,
+                self._active_workers,
+                sampled_workers,
+            )
+            self._active_workers = sampled_workers
+        return self._active_workers
+
+    @property
+    def pending_limit(self) -> int:
+        return max(1, self.active_workers * 2)
+
+    def _sample_active_workers(self) -> int:
+        load_average = self._load_average()
+        if load_average is None:
+            return self._sample_active_workers_from_process_cpu()
+
+        available_cpu = math.floor(self.cpu_count - load_average - SCAN_THREAD_HEADROOM)
+        return max(1, min(self.max_workers, available_cpu))
+
+    def _sample_active_workers_from_process_cpu(self) -> int:
+        current_process_time = time.process_time()
+        current_wall_time = time.monotonic()
+
+        if self._last_process_time is None or self._last_wall_time is None:
+            self._last_process_time = current_process_time
+            self._last_wall_time = current_wall_time
+            return self._fallback_workers()
+
+        process_delta = current_process_time - self._last_process_time
+        wall_delta = current_wall_time - self._last_wall_time
+        self._last_process_time = current_process_time
+        self._last_wall_time = current_wall_time
+        if wall_delta <= 0:
+            return self._fallback_workers()
+
+        process_cpu = max(0.0, process_delta / wall_delta)
+        target_cpu = max(
+            1.0,
+            (self.cpu_count - SCAN_THREAD_HEADROOM)
+            * SCAN_THREAD_TARGET_PROCESS_CPU_FRACTION,
+        )
+
+        if process_cpu > target_cpu and self._active_workers > 1:
+            return self._active_workers - 1
+        if process_cpu < target_cpu * 0.6 and self._active_workers < self.max_workers:
+            return self._active_workers + 1
+        return self._active_workers
+
+    def _fallback_workers(self) -> int:
+        return max(
+            1,
+            min(
+                self.max_workers,
+                math.ceil(self.cpu_count * SCAN_THREAD_FALLBACK_CPU_FRACTION),
+            ),
+        )
+
+    def _load_average(self) -> float | None:
+        with contextlib.suppress(AttributeError, OSError):
+            return os.getloadavg()[0]
+        return None
 
 
 @dataclass(frozen=True)
@@ -572,7 +674,11 @@ class VideoScanner:
     ) -> list[_ScanCandidate]:
         candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
         pending: dict[Future[dict[tuple[int, int, int, int], _ScanCandidate]], float] = {}
-        executor = ThreadPoolExecutor(max_workers=SCAN_THREADS, thread_name_prefix="BogobotVideoScanLocate")
+        thread_budget = _AdaptiveScanThreadBudget(
+            logger=self.logger,
+            stage="locator",
+        )
+        executor = ThreadPoolExecutor(max_workers=thread_budget.max_workers, thread_name_prefix="BogobotVideoScanLocate")
 
         def merge(new_candidates: dict[tuple[int, int, int, int], _ScanCandidate]) -> None:
             for key, candidate in new_candidates.items():
@@ -600,11 +706,13 @@ class VideoScanner:
                 batch_timestamp = frame.timestamp
                 if len(batch) < SCAN_BATCH_SIZE:
                     continue
+                while len(pending) >= thread_budget.pending_limit:
+                    collect_one()
                 pending[executor.submit(self._candidate_batch, batch, templates)] = batch_timestamp
                 batch = []
-                while len(pending) >= SCAN_THREADS * 2:
-                    collect_one()
             if batch and not (progress is not None and progress.is_cancel_requested()):
+                while len(pending) >= thread_budget.pending_limit:
+                    collect_one()
                 pending[executor.submit(self._candidate_batch, batch, templates)] = batch_timestamp
             while pending and not (progress is not None and progress.is_cancel_requested()):
                 collect_one()
@@ -627,7 +735,11 @@ class VideoScanner:
         top_matches = _TopScanMatches(SCAN_RESULT_LIMIT)
         scanned_frames = 0
         pending: dict[Future[list[float]], list[_ScanFrame]] = {}
-        executor = ThreadPoolExecutor(max_workers=SCAN_THREADS, thread_name_prefix="BogobotVideoScanScore")
+        thread_budget = _AdaptiveScanThreadBudget(
+            logger=self.logger,
+            stage="scorer",
+        )
+        executor = ThreadPoolExecutor(max_workers=thread_budget.max_workers, thread_name_prefix="BogobotVideoScanScore")
 
         def collect_one() -> None:
             nonlocal best_score, scanned_frames
@@ -660,11 +772,13 @@ class VideoScanner:
                 batch.append(frame)
                 if len(batch) < SCAN_BATCH_SIZE:
                     continue
+                while len(pending) >= thread_budget.pending_limit:
+                    collect_one()
                 pending[executor.submit(self._frame_scores, [scan_frame.data for scan_frame in batch], candidates)] = batch
                 batch = []
-                while len(pending) >= SCAN_THREADS * 2:
-                    collect_one()
             if batch and not (progress is not None and progress.is_cancel_requested()):
+                while len(pending) >= thread_budget.pending_limit:
+                    collect_one()
                 pending[executor.submit(self._frame_scores, [scan_frame.data for scan_frame in batch], candidates)] = batch
             while pending and not (progress is not None and progress.is_cancel_requested()):
                 collect_one()

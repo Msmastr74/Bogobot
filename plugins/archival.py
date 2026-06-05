@@ -118,7 +118,6 @@ class ScanView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
-        day_timestamp: float,
         scan_window: tuple[float, float] | None = None,
         input_media: str | discord.File,
         progress: ScanProgress,
@@ -1353,7 +1352,6 @@ async def setup(bot: BotCore):
             )
             return
 
-        day_timestamp = requested_start_timestamp
         scan_window: tuple[float, float] | None = (
             requested_start_timestamp,
             requested_end_timestamp,
@@ -1387,7 +1385,6 @@ async def setup(bot: BotCore):
         )
         scan_message = await bot.discord.send(
             view=ScanView(
-                day_timestamp=day_timestamp,
                 scan_window=scan_window,
                 input_media=input_file,
                 progress=progress,
@@ -1422,7 +1419,6 @@ async def setup(bot: BotCore):
                     break
                 await scan_message.edit(
                     view=ScanView(
-                        day_timestamp=day_timestamp,
                         scan_window=scan_window,
                         input_media=input_media,
                         progress=progress,
@@ -1472,7 +1468,6 @@ async def setup(bot: BotCore):
                 progress.completed_at = time.time()
             await scan_message.edit(
                 view=ScanView(
-                    day_timestamp=day_timestamp,
                     scan_window=scan_window,
                     input_media=input_media,
                     progress=progress,
@@ -1513,7 +1508,6 @@ async def setup(bot: BotCore):
             attachments.extend(file for _match, file in result_files)
             await scan_message.edit(
                 view=ScanView(
-                    day_timestamp=day_timestamp,
                     scan_window=scan_window,
                     input_media=input_media,
                     progress=progress,
