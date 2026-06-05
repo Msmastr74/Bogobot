@@ -1302,7 +1302,7 @@ async def setup(bot: BotCore):
 
         async def edit_progress_loop() -> None:
             while not scan_done.is_set():
-                await asyncio.sleep(10)
+                await asyncio.sleep(5)
                 if scan_done.is_set():
                     break
                 await scan_message.edit(

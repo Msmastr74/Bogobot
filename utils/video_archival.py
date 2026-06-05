@@ -691,21 +691,95 @@ class VideoArchiver:
         if source_h < 8 or source_w < 8:
             return []
 
-        scales = [1.0, 0.75, 2 / 3, 0.5, 0.4, 1 / 3, 0.25]
         templates: list[MatLike] = []
         seen_sizes: set[tuple[int, int]] = set()
+        frame_pixels = self.width * self.height
+        reverse_template_count = 0
+        reverse_template_limit = 3
+
+        def add_template(width: int, height: int) -> None:
+            nonlocal reverse_template_count
+
+            if width < 8 or height < 8:
+                return
+            if width * height > frame_pixels * 4:
+                return
+            can_match_frame = width <= self.width and height <= self.height
+            can_contain_frame = width >= self.width and height >= self.height
+            if not can_match_frame and not can_contain_frame:
+                return
+            if can_contain_frame and not can_match_frame:
+                if reverse_template_count >= reverse_template_limit:
+                    return
+                reverse_template_count += 1
+            if (width, height) in seen_sizes:
+                return
+            seen_sizes.add((width, height))
+            interpolation = cv2.INTER_AREA if width <= source_w and height <= source_h else cv2.INTER_LINEAR
+            resized = cv2.resize(source, (width, height), interpolation=interpolation)
+            if math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
+                return
+            templates.append(resized)
+
+        dynamic_scales: list[float] = []
+        source_aspect = source_w / source_h
+        archive_aspect = self.width / self.height
+        full_frame_like = (
+            source_w >= self.width
+            and source_h >= self.height
+            and abs(source_aspect - archive_aspect) / archive_aspect <= 0.08
+        )
+        if source_w > self.width or source_h > self.height:
+            fit_scale = min(self.width / source_w, self.height / source_h)
+            width_fit_scale = self.width / source_w
+            height_fit_scale = self.height / source_h
+            dynamic_scales.extend([
+                fit_scale,
+                width_fit_scale,
+                height_fit_scale,
+                fit_scale * 0.98,
+                fit_scale * 1.02,
+            ])
+            add_template(self.width, self.height)
+            if full_frame_like:
+                return templates
+
+        if source_w < self.width and source_h < self.height:
+            scales = [
+                2.0,
+                1.75,
+                1.5,
+                1.25,
+                1.0,
+                0.9,
+                0.8,
+                0.75,
+                2 / 3,
+                0.6,
+                0.55,
+                0.5,
+                0.45,
+                0.4,
+                1 / 3,
+                0.25,
+                0.2,
+            ]
+        else:
+            scales = [
+                1.0,
+                0.75,
+                0.5,
+                *dynamic_scales,
+                0.45,
+                0.4,
+                1 / 3,
+                0.25,
+                0.2,
+            ]
         for scale in scales:
             width = int(round(source_w * scale))
             height = int(round(source_h * scale))
-            if width < 8 or height < 8 or width > self.width or height > self.height:
-                continue
-            if (width, height) in seen_sizes:
-                continue
-            seen_sizes.add((width, height))
-            resized = cv2.resize(source, (width, height), interpolation=cv2.INTER_AREA)
-            if math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
-                continue
-            templates.append(resized)
+            add_template(width, height)
         return templates
 
     def _scan_candidates(
@@ -829,10 +903,26 @@ class VideoArchiver:
         for data in batch:
             frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
             for template in templates:
-                result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-                _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
-                x, y = max_loc
                 height, width = template.shape[:2]
+                if width <= self.width and height <= self.height:
+                    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
+                    x, y = max_loc
+                    candidate_template = template
+                elif width >= self.width and height >= self.height:
+                    result = cv2.matchTemplate(template, frame, cv2.TM_CCOEFF_NORMED)
+                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
+                    template_x, template_y = max_loc
+                    x = 0
+                    y = 0
+                    width = self.width
+                    height = self.height
+                    candidate_template = template[
+                        template_y:template_y + self.height,
+                        template_x:template_x + self.width,
+                    ]
+                else:
+                    continue
                 key = (x // 2, y // 2, width, height)
                 score = float(max_value)
                 existing = candidates.get(key)
@@ -845,7 +935,7 @@ class VideoArchiver:
                     width=width,
                     height=height,
                     sample_step=sample_step,
-                    template=template[::sample_step, ::sample_step].astype(np.int16),
+                    template=candidate_template[::sample_step, ::sample_step].copy(),
                     locator_score=score,
                 )
         return candidates
@@ -1029,6 +1119,7 @@ class VideoArchiver:
         )
 
     def _scan_frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
+        import cv2
         import numpy as np
 
         frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
@@ -1040,8 +1131,18 @@ class VideoArchiver:
             ]
             if roi.shape[:2] != candidate.template.shape[:2]:
                 continue
-            mean_abs_diff = float(np.abs(roi.astype(np.int16) - candidate.template).mean())
-            score = 1.0 - math.sqrt(mean_abs_diff / 255.0)
+            if math.isclose(float(roi.std()), 0.0, abs_tol=0.01):
+                continue
+            correlation_score = float(cv2.matchTemplate(
+                roi,
+                candidate.template,
+                cv2.TM_CCOEFF_NORMED,
+            )[0][0])
+            mean_abs_diff = float(np.abs(
+                roi.astype(np.int16) - candidate.template.astype(np.int16)
+            ).mean())
+            difference_score = 1.0 - math.sqrt(mean_abs_diff / 255.0)
+            score = (correlation_score + difference_score) / 2
             best = max(best, score)
         return best
 
@@ -1056,6 +1157,8 @@ class VideoArchiver:
         ]
 
     def _scan_sample_step(self, width: int, height: int) -> int:
+        if width == self.width and height == self.height:
+            return 1
         return max(1, min(width, height) // 96)
 
     def _scan_showinfo_time(self, stderr: bytes, frame_index: int) -> float | None:
