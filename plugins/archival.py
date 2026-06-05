@@ -1286,7 +1286,7 @@ async def setup(bot: BotCore):
                 ),
             )
             if message is not None:
-                asyncio.create_task(delete_later(message))
+                await delete_later(message)
 
         try:
             scan_started = True
