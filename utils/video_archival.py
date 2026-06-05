@@ -23,6 +23,7 @@ SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>
 SCAN_THREADS = 3
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
+SCAN_MAX_CANDIDATES = 12
 
 
 @dataclass(frozen=True)
@@ -264,7 +265,6 @@ class VideoScanner:
         start_timestamp: float,
         end_timestamp: float,
         locator_interval_seconds: float = 30.0,
-        max_candidates: int = 12,
         progress: ScanProgress | None = None,
     ) -> VideoScanResult | None:
         total_started_at = time.perf_counter()
@@ -300,7 +300,7 @@ class VideoScanner:
                 progress=progress,
             ),
             templates,
-            max_candidates=max_candidates,
+            max_candidates=SCAN_MAX_CANDIDATES,
             progress=progress,
         )
         self.logger.debug(
@@ -1029,7 +1029,6 @@ class VideoArchiver:
         start_timestamp: float,
         end_timestamp: float,
         locator_interval_seconds: float = 30.0,
-        max_candidates: int = 12,
         progress: ScanProgress | None = None,
     ) -> VideoScanResult | None:
         ranges = self._prepared_scan_ranges(start_timestamp, end_timestamp)
@@ -1043,7 +1042,6 @@ class VideoArchiver:
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
             locator_interval_seconds=locator_interval_seconds,
-            max_candidates=max_candidates,
             progress=progress,
         )
 
