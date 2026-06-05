@@ -26,6 +26,8 @@ SCAN_THREAD_HEADROOM = 1.0
 SCAN_THREAD_SAMPLE_SECONDS = 2.0
 SCAN_THREAD_FALLBACK_CPU_FRACTION = 0.5
 SCAN_THREAD_TARGET_PROCESS_CPU_FRACTION = 0.75
+SCAN_LOCATOR_PROGRESS_WEIGHT = 0.5
+SCAN_DENSE_PROGRESS_WEIGHT = 0.5
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
 SCAN_MAX_CANDIDATES = 12
@@ -195,6 +197,8 @@ class ScanProgress:
     cancel_requested: bool = False
     cancelled: bool = False
     completed_at: float | None = None
+    progress_base: float = 0.0
+    progress_weight: float = 1.0
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
     @property
@@ -214,7 +218,8 @@ class ScanProgress:
         span = self.window_end_seconds - self.window_start_seconds
         if span <= 0:
             return None
-        return max(0.0, min(1.0, (self.current_seconds - self.window_start_seconds) / span))
+        stage_ratio = max(0.0, min(1.0, (self.current_seconds - self.window_start_seconds) / span))
+        return max(0.0, min(1.0, self.progress_base + stage_ratio * self.progress_weight))
 
     @property
     def estimated_remaining_seconds(self) -> float | None:
@@ -228,8 +233,12 @@ class ScanProgress:
         total_units = self.window_end_seconds - self.window_start_seconds
         if current_units <= 0 or total_units <= 0:
             return None
-        estimated_total = self.stage_elapsed_seconds / current_units * total_units
-        return max(0.0, estimated_total - self.stage_elapsed_seconds)
+        stage_ratio = max(0.0, min(1.0, current_units / total_units))
+        current_overall = self.progress_base + stage_ratio * self.progress_weight
+        if current_overall <= 0:
+            return None
+        estimated_total = self.elapsed_seconds / current_overall
+        return max(0.0, estimated_total - self.elapsed_seconds)
 
     def set_stage(
         self,
@@ -237,6 +246,8 @@ class ScanProgress:
         *,
         window_start_seconds: float | None = None,
         window_end_seconds: float | None = None,
+        progress_base: float | None = None,
+        progress_weight: float | None = None,
     ) -> None:
         self.stage = stage
         self.stage_started_at = time.monotonic()
@@ -249,6 +260,10 @@ class ScanProgress:
             self.window_start_seconds = window_start_seconds
         if window_end_seconds is not None:
             self.window_end_seconds = window_end_seconds
+        if progress_base is not None:
+            self.progress_base = progress_base
+        if progress_weight is not None:
+            self.progress_weight = progress_weight
 
     def request_cancel(self) -> None:
         self.cancel_requested = True
@@ -402,6 +417,8 @@ class VideoScanner:
                 "Locating image",
                 window_start_seconds=float(start_timestamp),
                 window_end_seconds=float(end_timestamp),
+                progress_base=0.0,
+                progress_weight=SCAN_LOCATOR_PROGRESS_WEIGHT,
             )
         candidates = self._candidates_from_frames(
             self._frame_stream(
@@ -431,6 +448,8 @@ class VideoScanner:
                 "Scanning archive frames",
                 window_start_seconds=float(start_timestamp),
                 window_end_seconds=float(end_timestamp),
+                progress_base=SCAN_LOCATOR_PROGRESS_WEIGHT,
+                progress_weight=SCAN_DENSE_PROGRESS_WEIGHT,
             )
         result = self._scan_frame_stream(
             self._frame_stream(ranges, progress=progress),
@@ -851,39 +870,55 @@ class VideoScanner:
                 )
         return candidates
 
-    def _frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
-        import numpy as np
-
-        frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
-        best = -1.0
-        for candidate in candidates:
-            roi = frame[
-                candidate.y:candidate.y + candidate.height:candidate.sample_step,
-                candidate.x:candidate.x + candidate.width:candidate.sample_step,
-            ]
-            if roi.shape[:2] != candidate.template.shape[:2]:
-                continue
-            if math.isclose(float(roi.std()), 0.0, abs_tol=0.01):
-                continue
-            roi_float = roi.astype(np.float32)
-            roi_centered = (roi_float - roi_float.mean()).ravel()
-            offset_adjusted_diff = float(np.abs(
-                roi_centered - candidate.template_centered
-            ).mean())
-            offset_adjusted_score = 1.0 - math.sqrt(min(1.0, offset_adjusted_diff / 255.0))
-            raw_diff = float(np.abs(
-                roi.astype(np.int16) - candidate.template_int16
-            ).mean())
-            raw_score = 1.0 - math.sqrt(min(1.0, raw_diff / 255.0))
-            best = max(best, offset_adjusted_score * 0.8 + raw_score * 0.2)
-        return best
-
     def _frame_scores(
         self,
         batch: list[bytes],
         candidates: list[_ScanCandidate],
     ) -> list[float]:
-        return [self._frame_score(data, candidates) for data in batch]
+        import numpy as np
+
+        if not batch:
+            return []
+
+        frames = np.frombuffer(b"".join(batch), dtype=np.uint8).reshape((
+            len(batch),
+            self.height,
+            self.width,
+            3,
+        ))
+        best_scores = np.full((len(batch),), -1.0, dtype=np.float32)
+
+        for candidate in candidates:
+            roi = frames[
+                :,
+                candidate.y:candidate.y + candidate.height:candidate.sample_step,
+                candidate.x:candidate.x + candidate.width:candidate.sample_step,
+                :,
+            ]
+            if roi.shape[1:3] != candidate.template.shape[:2]:
+                continue
+
+            roi_float = roi.astype(np.float32)
+            flattened_roi = roi_float.reshape((len(batch), -1))
+            roi_means = flattened_roi.mean(axis=1, keepdims=True)
+            roi_centered = flattened_roi - roi_means
+            roi_std = flattened_roi.std(axis=1)
+            valid = roi_std > 0.01
+            if not np.any(valid):
+                continue
+
+            offset_adjusted_diff = np.abs(
+                roi_centered - candidate.template_centered
+            ).mean(axis=1)
+            offset_adjusted_score = 1.0 - np.sqrt(np.minimum(1.0, offset_adjusted_diff / 255.0))
+            raw_diff = np.abs(
+                roi.astype(np.int16) - candidate.template_int16
+            ).reshape((len(batch), -1)).mean(axis=1)
+            raw_score = 1.0 - np.sqrt(np.minimum(1.0, raw_diff / 255.0))
+            scores = offset_adjusted_score * 0.8 + raw_score * 0.2
+            best_scores[valid] = np.maximum(best_scores[valid], scores[valid])
+
+        return [float(score) for score in best_scores]
 
     def _sample_step(self, width: int, height: int) -> int:
         if width == self.width and height == self.height:
