@@ -1,4 +1,5 @@
 import contextlib
+from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -180,9 +181,7 @@ class _ScanCandidate:
 @dataclass(frozen=True)
 class _ScanRangeResult:
     score: float
-    relative_seconds: float
     scanned_frames: int
-    frame: bytes | None
     matches: tuple["_ScanRangeMatch", ...]
 
 
@@ -206,9 +205,16 @@ class _PreparedScanRange:
 @dataclass(frozen=True)
 class _ScanRangeMatch:
     score: float
-    frame_index: int
+    timestamp: float
     relative_seconds: float
     frame: bytes | None
+
+
+@dataclass(frozen=True)
+class _ScanFrame:
+    timestamp: float
+    relative_seconds: float
+    data: bytes
 
 
 class _TopScanMatches:
@@ -236,6 +242,526 @@ class _TopScanMatches:
 class _QueuedFrame:
     image: Image.Image
     timestamp: float
+
+
+class VideoScanner:
+    def __init__(
+        self,
+        *,
+        width: int,
+        height: int,
+        logger: logging.Logger,
+    ):
+        self.width = width
+        self.height = height
+        self.logger = logger
+
+    def scan_for_image(
+        self,
+        ranges: list[_PreparedScanRange],
+        image: Image.Image,
+        *,
+        start_timestamp: float,
+        end_timestamp: float,
+        locator_interval_seconds: float = 30.0,
+        max_candidates: int = 12,
+        progress: ScanProgress | None = None,
+    ) -> VideoScanResult | None:
+        total_started_at = time.perf_counter()
+        if not ranges:
+            return None
+
+        templates_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage("Preparing templates")
+        templates = self._templates(image)
+        self.logger.debug(
+            "Video archive scan templates: %s templates in %.3fs",
+            len(templates),
+            time.perf_counter() - templates_started_at,
+        )
+        if not templates:
+            return None
+        if progress is not None and progress.is_cancel_requested():
+            progress.mark_cancelled()
+            return None
+
+        locator_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage(
+                "Locating image",
+                window_start_seconds=float(start_timestamp),
+                window_end_seconds=float(end_timestamp),
+            )
+        candidates = self._candidates_from_frames(
+            self._frame_stream(
+                ranges,
+                select_interval_seconds=max(0.25, float(locator_interval_seconds)),
+                progress=progress,
+            ),
+            templates,
+            max_candidates=max_candidates,
+            progress=progress,
+        )
+        self.logger.debug(
+            "Video archive scan locator: %s candidates in %.3fs over %.3fs..%.3fs",
+            len(candidates),
+            time.perf_counter() - locator_started_at,
+            start_timestamp,
+            end_timestamp,
+        )
+        if not candidates:
+            if progress is not None and progress.is_cancel_requested():
+                progress.mark_cancelled()
+            return None
+
+        dense_started_at = time.perf_counter()
+        if progress is not None:
+            progress.set_stage(
+                "Scanning archive frames",
+                window_start_seconds=float(start_timestamp),
+                window_end_seconds=float(end_timestamp),
+            )
+        result = self._scan_frame_stream(
+            self._frame_stream(ranges, progress=progress),
+            candidates,
+            progress=progress,
+        )
+        if progress is not None and progress.is_cancel_requested():
+            progress.mark_cancelled()
+            return None
+        matches = tuple(
+            VideoScanMatch(
+                timestamp=match.timestamp,
+                score=match.score,
+                relative_seconds=match.relative_seconds,
+                frame=match.frame,
+            )
+            for match in result.matches
+        )
+        if result.scanned_frames <= 0 or not matches:
+            self.logger.debug(
+                "Video archive scan rejected in %.3fs: frames=%s best=%.3f",
+                time.perf_counter() - total_started_at,
+                result.scanned_frames,
+                result.score,
+            )
+            return None
+        if progress is not None:
+            progress.stage = "Finished"
+            progress.current_seconds = float(end_timestamp)
+            progress.scanned_frames = result.scanned_frames
+            progress.best_score = matches[0].score
+            progress.done = True
+            progress.completed_at = time.time()
+        self.logger.debug(
+            "Video archive scan matched in %.3fs: dense %.3fs score=%.3f frames=%s",
+            time.perf_counter() - total_started_at,
+            time.perf_counter() - dense_started_at,
+            matches[0].score,
+            result.scanned_frames,
+        )
+        return VideoScanResult(scanned_frames=result.scanned_frames, matches=matches)
+
+    def _frames_command(
+        self,
+        video_path: Path,
+        *,
+        start_seconds: float = 0.0,
+        duration_seconds: float | None = None,
+        select_interval_seconds: float | None = None,
+    ) -> list[str]:
+        filters: list[str] = []
+        range_filter: str | None = None
+        if start_seconds > 0 or duration_seconds is not None:
+            if duration_seconds is None:
+                range_filter = f"gte(t\\,{start_seconds:.6f})"
+            else:
+                end_seconds = start_seconds + duration_seconds
+                range_filter = f"between(t\\,{start_seconds:.6f}\\,{end_seconds:.6f})"
+        if select_interval_seconds is not None:
+            interval = max(0.25, select_interval_seconds)
+            interval_filter = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})"
+            filters.append(
+                f"select={range_filter}*({interval_filter})"
+                if range_filter is not None else
+                f"select={interval_filter}"
+            )
+        elif range_filter is not None:
+            filters.append(f"select={range_filter}")
+        filters.extend([f"scale={self.width}:{self.height}", "showinfo"])
+        return [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "info",
+            "-i", str(video_path),
+            "-map", "0:v:0",
+            "-vf", ",".join(filters),
+            "-fps_mode", "passthrough",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "pipe:1",
+        ]
+
+    def _templates(self, image: Image.Image) -> list[MatLike]:
+        import cv2
+        import numpy as np
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        source = np.array(image)
+        source_h, source_w = source.shape[:2]
+        if source_h < 8 or source_w < 8:
+            return []
+
+        templates: list[MatLike] = []
+        seen_sizes: set[tuple[int, int]] = set()
+        frame_pixels = self.width * self.height
+        reverse_template_count = 0
+        reverse_template_limit = 3
+
+        def add_template(width: int, height: int) -> None:
+            nonlocal reverse_template_count
+
+            if width < 8 or height < 8:
+                return
+            if width * height > frame_pixels * 4:
+                return
+            can_match_frame = width <= self.width and height <= self.height
+            can_contain_frame = width >= self.width and height >= self.height
+            if not can_match_frame and not can_contain_frame:
+                return
+            if can_contain_frame and not can_match_frame:
+                if reverse_template_count >= reverse_template_limit:
+                    return
+                reverse_template_count += 1
+            if (width, height) in seen_sizes:
+                return
+            seen_sizes.add((width, height))
+            interpolation = cv2.INTER_AREA if width <= source_w and height <= source_h else cv2.INTER_LINEAR
+            resized = cv2.resize(source, (width, height), interpolation=interpolation)
+            if not math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
+                templates.append(resized)
+
+        dynamic_scales: list[float] = []
+        source_aspect = source_w / source_h
+        archive_aspect = self.width / self.height
+        full_frame_like = (
+            source_w >= self.width
+            and source_h >= self.height
+            and abs(source_aspect - archive_aspect) / archive_aspect <= 0.08
+        )
+        if source_w > self.width or source_h > self.height:
+            fit_scale = min(self.width / source_w, self.height / source_h)
+            dynamic_scales.extend([
+                fit_scale,
+                self.width / source_w,
+                self.height / source_h,
+                fit_scale * 0.98,
+                fit_scale * 1.02,
+            ])
+            add_template(self.width, self.height)
+            if full_frame_like:
+                return templates
+
+        scales = (
+            [2.0, 1.75, 1.5, 1.25, 1.0, 0.9, 0.8, 0.75, 2 / 3, 0.6, 0.55, 0.5, 0.45, 0.4, 1 / 3, 0.25, 0.2]
+            if source_w < self.width and source_h < self.height else
+            [1.0, 0.75, 0.5, *dynamic_scales, 0.45, 0.4, 1 / 3, 0.25, 0.2]
+        )
+        for scale in scales:
+            add_template(int(round(source_w * scale)), int(round(source_h * scale)))
+        return templates
+
+    def _frame_stream(
+        self,
+        ranges: list[_PreparedScanRange],
+        *,
+        select_interval_seconds: float | None = None,
+        progress: ScanProgress | None = None,
+    ) -> Iterator[_ScanFrame]:
+        frame_size = self.width * self.height * 3
+        for scan_range in ranges:
+            if progress is not None and progress.is_cancel_requested():
+                return
+            process = subprocess.Popen(
+                self._frames_command(
+                    scan_range.video_path,
+                    start_seconds=scan_range.start_seconds,
+                    duration_seconds=scan_range.duration_seconds,
+                    select_interval_seconds=select_interval_seconds,
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if progress is not None:
+                progress.set_process(process)
+            assert process.stdout is not None
+            assert process.stderr is not None
+
+            timestamp_queue: queue.Queue[float | None] = queue.Queue()
+            stderr_chunks: list[bytes] = []
+
+            def read_stderr() -> None:
+                assert process.stderr is not None
+                while True:
+                    line = process.stderr.readline()
+                    if not line:
+                        break
+                    stderr_chunks.append(line)
+                    match = SHOWINFO_RE.search(line.decode(errors="replace"))
+                    if match is None:
+                        continue
+                    with contextlib.suppress(ValueError):
+                        timestamp_queue.put(
+                            scan_range.archive_start_timestamp
+                            + float(match.group("time"))
+                        )
+                timestamp_queue.put(None)
+
+            stderr_thread = threading.Thread(
+                target=read_stderr,
+                name="BogobotVideoScanStderr",
+                daemon=True,
+            )
+            stderr_thread.start()
+            try:
+                while True:
+                    if progress is not None and progress.is_cancel_requested():
+                        with contextlib.suppress(OSError):
+                            process.terminate()
+                        break
+                    data = process.stdout.read(frame_size)
+                    if not data or len(data) != frame_size:
+                        break
+                    timestamp = timestamp_queue.get()
+                    if timestamp is None:
+                        break
+                    yield _ScanFrame(
+                        timestamp=timestamp,
+                        relative_seconds=timestamp - scan_range.archive_start_timestamp,
+                        data=bytes(data),
+                    )
+            finally:
+                if progress is not None:
+                    progress.set_process(None)
+                if process.stdout is not None:
+                    with contextlib.suppress(OSError):
+                        process.stdout.close()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
+                stderr_thread.join(timeout=5)
+                if process.returncode not in (0, None):
+                    message = b"".join(stderr_chunks).decode(errors="replace").strip()
+                    if message:
+                        self.logger.warning(f"Video archive frame stream failed: {message}")
+
+    def _candidates_from_frames(
+        self,
+        frames: Iterator[_ScanFrame],
+        templates: list[MatLike],
+        *,
+        max_candidates: int,
+        progress: ScanProgress | None = None,
+    ) -> list[_ScanCandidate]:
+        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
+        pending: dict[Future[dict[tuple[int, int, int, int], _ScanCandidate]], float] = {}
+        executor = ThreadPoolExecutor(max_workers=SCAN_THREADS, thread_name_prefix="BogobotVideoScanLocate")
+
+        def merge(new_candidates: dict[tuple[int, int, int, int], _ScanCandidate]) -> None:
+            for key, candidate in new_candidates.items():
+                existing = candidates.get(key)
+                if existing is None or existing.locator_score < candidate.locator_score:
+                    candidates[key] = candidate
+
+        def collect_one() -> None:
+            if not pending:
+                return
+            done, _pending = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            for future in done:
+                timestamp = pending.pop(future)
+                merge(future.result())
+                if progress is not None:
+                    progress.current_seconds = timestamp
+
+        try:
+            batch: list[bytes] = []
+            batch_timestamp = 0.0
+            for frame in frames:
+                if progress is not None and progress.is_cancel_requested():
+                    break
+                batch.append(frame.data)
+                batch_timestamp = frame.timestamp
+                if len(batch) < SCAN_BATCH_SIZE:
+                    continue
+                pending[executor.submit(self._candidate_batch, batch, templates)] = batch_timestamp
+                batch = []
+                while len(pending) >= SCAN_THREADS * 2:
+                    collect_one()
+            if batch and not (progress is not None and progress.is_cancel_requested()):
+                pending[executor.submit(self._candidate_batch, batch, templates)] = batch_timestamp
+            while pending and not (progress is not None and progress.is_cancel_requested()):
+                collect_one()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        if progress is not None and progress.is_cancel_requested():
+            return []
+        return sorted(candidates.values(), key=lambda candidate: candidate.locator_score, reverse=True)[:max(1, int(max_candidates))]
+
+    def _scan_frame_stream(
+        self,
+        frames: Iterator[_ScanFrame],
+        candidates: list[_ScanCandidate],
+        *,
+        progress: ScanProgress | None = None,
+    ) -> _ScanRangeResult:
+        started_at = time.perf_counter()
+        best_score = -1.0
+        top_matches = _TopScanMatches(SCAN_RESULT_LIMIT)
+        scanned_frames = 0
+        pending: dict[Future[list[float]], list[_ScanFrame]] = {}
+        executor = ThreadPoolExecutor(max_workers=SCAN_THREADS, thread_name_prefix="BogobotVideoScanScore")
+
+        def collect_one() -> None:
+            nonlocal best_score, scanned_frames
+
+            if not pending:
+                return
+            done, _pending = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            for future in done:
+                batch = pending.pop(future)
+                scores = future.result()
+                for frame, score in zip(batch, scores, strict=True):
+                    best_score = max(best_score, score)
+                    top_matches.insert(_ScanRangeMatch(
+                        score=score,
+                        timestamp=frame.timestamp,
+                        relative_seconds=frame.relative_seconds,
+                        frame=frame.data,
+                    ))
+                scanned_frames += len(scores)
+                if progress is not None and batch:
+                    progress.current_seconds = batch[-1].timestamp
+                    progress.scanned_frames = scanned_frames
+                    progress.best_score = best_score if best_score >= 0 else None
+
+        try:
+            batch: list[_ScanFrame] = []
+            for frame in frames:
+                if progress is not None and progress.is_cancel_requested():
+                    break
+                batch.append(frame)
+                if len(batch) < SCAN_BATCH_SIZE:
+                    continue
+                pending[executor.submit(self._frame_scores, [scan_frame.data for scan_frame in batch], candidates)] = batch
+                batch = []
+                while len(pending) >= SCAN_THREADS * 2:
+                    collect_one()
+            if batch and not (progress is not None and progress.is_cancel_requested()):
+                pending[executor.submit(self._frame_scores, [scan_frame.data for scan_frame in batch], candidates)] = batch
+            while pending and not (progress is not None and progress.is_cancel_requested()):
+                collect_one()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        if progress is not None and progress.is_cancel_requested():
+            return _ScanRangeResult(-1.0, scanned_frames, ())
+        self.logger.debug(
+            "Video archive scan pass: frames=%s time=%.3fs best=%.3f",
+            scanned_frames,
+            time.perf_counter() - started_at,
+            best_score,
+        )
+        return _ScanRangeResult(best_score, scanned_frames, top_matches.get_top_n())
+
+    def _candidate_batch(
+        self,
+        batch: list[bytes],
+        templates: list[MatLike],
+    ) -> dict[tuple[int, int, int, int], _ScanCandidate]:
+        import cv2
+        import numpy as np
+
+        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
+        for data in batch:
+            frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
+            for template in templates:
+                height, width = template.shape[:2]
+                if width <= self.width and height <= self.height:
+                    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
+                    x, y = max_loc
+                    candidate_template = template
+                elif width >= self.width and height >= self.height:
+                    result = cv2.matchTemplate(template, frame, cv2.TM_CCOEFF_NORMED)
+                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
+                    template_x, template_y = max_loc
+                    x = 0
+                    y = 0
+                    width = self.width
+                    height = self.height
+                    candidate_template = template[
+                        template_y:template_y + self.height,
+                        template_x:template_x + self.width,
+                    ]
+                else:
+                    continue
+                key = (x // 2, y // 2, width, height)
+                score = float(max_value)
+                existing = candidates.get(key)
+                if existing is not None and existing.locator_score >= score:
+                    continue
+                sample_step = self._sample_step(width, height)
+                candidates[key] = _ScanCandidate(
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    sample_step=sample_step,
+                    template=candidate_template[::sample_step, ::sample_step].copy(),
+                    locator_score=score,
+                )
+        return candidates
+
+    def _frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
+        import cv2
+        import numpy as np
+
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
+        best = -1.0
+        for candidate in candidates:
+            roi = frame[
+                candidate.y:candidate.y + candidate.height:candidate.sample_step,
+                candidate.x:candidate.x + candidate.width:candidate.sample_step,
+            ]
+            if roi.shape[:2] != candidate.template.shape[:2]:
+                continue
+            if math.isclose(float(roi.std()), 0.0, abs_tol=0.01):
+                continue
+            correlation_score = float(cv2.matchTemplate(
+                roi,
+                candidate.template,
+                cv2.TM_CCOEFF_NORMED,
+            )[0][0])
+            mean_abs_diff = float(np.abs(
+                roi.astype(np.int16) - candidate.template.astype(np.int16)
+            ).mean())
+            difference_score = 1.0 - math.sqrt(mean_abs_diff / 255.0)
+            best = max(best, (correlation_score + difference_score) / 2)
+        return best
+
+    def _frame_scores(
+        self,
+        batch: list[bytes],
+        candidates: list[_ScanCandidate],
+    ) -> list[float]:
+        return [self._frame_score(data, candidates) for data in batch]
+
+    def _sample_step(self, width: int, height: int) -> int:
+        if width == self.width and height == self.height:
+            return 1
+        return max(1, min(width, height) // 96)
 
 
 class VideoArchiver:
@@ -496,168 +1022,6 @@ class VideoArchiver:
             self.logger.warning("Could not extract video archive frame: no frame was written")
         return False
 
-    def scan_for_image(
-        self,
-        day: str,
-        image: Image.Image,
-        *,
-        locator_interval_seconds: float = 30.0,
-        max_candidates: int = 12,
-        requested_start_timestamp: float | None = None,
-        requested_end_timestamp: float | None = None,
-        progress: ScanProgress | None = None,
-        ) -> VideoScanResult | None:
-        total_started_at = time.perf_counter()
-
-        video_path = self.video_path_for_day(day)
-        if not video_path.exists():
-            return None
-
-        archive_start_timestamp = self._read_start_timestamp(day)
-        if archive_start_timestamp is None:
-            archive_start_timestamp = self._read_metadata_start_timestamp(video_path)
-        if archive_start_timestamp is None:
-            archive_start_timestamp = datetime.strptime(day, "%Y-%m-%d").timestamp()
-
-        locator_interval_seconds = max(0.25, float(locator_interval_seconds))
-        frame_size = self.width * self.height * 3
-        templates_started_at = time.perf_counter()
-        if progress is not None:
-            progress.set_stage("Preparing templates")
-        templates = self._scan_templates(image)
-        self.logger.debug(
-            "Video archive scan templates: %s templates in %.3fs",
-            len(templates),
-            time.perf_counter() - templates_started_at,
-        )
-        if not templates:
-            return None
-        if progress is not None and progress.is_cancel_requested():
-            progress.mark_cancelled()
-            return None
-
-        duration_started_at = time.perf_counter()
-        if progress is not None:
-            progress.set_stage("Reading archive duration")
-        duration = self._video_duration(video_path)
-        self.logger.debug(
-            "Video archive scan duration probe: %s in %.3fs",
-            f"{duration:.3f}s" if duration is not None else "unavailable",
-            time.perf_counter() - duration_started_at,
-        )
-        if duration is None:
-            return None
-        if progress is not None and progress.is_cancel_requested():
-            progress.mark_cancelled()
-            return None
-        scan_start_seconds = 0.0 if requested_start_timestamp is None else max(
-            0.0,
-            float(requested_start_timestamp) - archive_start_timestamp,
-        )
-        scan_end_seconds = duration if requested_end_timestamp is None else min(
-            duration,
-            max(0.0, float(requested_end_timestamp) - archive_start_timestamp),
-        )
-        if scan_end_seconds <= scan_start_seconds:
-            return None
-
-        locator_started_at = time.perf_counter()
-        if progress is not None:
-            progress.set_stage(
-                "Locating image",
-                window_start_seconds=scan_start_seconds,
-                window_end_seconds=scan_end_seconds,
-            )
-        candidates = self._scan_candidates(
-            video_path,
-            templates,
-            locator_interval_seconds=locator_interval_seconds,
-            max_candidates=max_candidates,
-            start_seconds=scan_start_seconds,
-            duration_seconds=scan_end_seconds - scan_start_seconds,
-            progress=progress,
-        )
-        self.logger.debug(
-            "Video archive scan locator: %s candidates in %.3fs over %.3fs..%.3fs",
-            len(candidates),
-            time.perf_counter() - locator_started_at,
-            scan_start_seconds,
-            scan_end_seconds,
-        )
-        if not candidates:
-            if progress is not None and progress.is_cancel_requested():
-                progress.mark_cancelled()
-            return None
-
-        dense_started_at = time.perf_counter()
-        if progress is not None:
-            progress.set_stage(
-                "Scanning archive frames",
-                window_start_seconds=scan_start_seconds,
-                window_end_seconds=scan_end_seconds,
-            )
-        result = self._scan_video_range(
-            video_path,
-            candidates,
-            scan_start_seconds,
-            scan_end_seconds - scan_start_seconds,
-            frame_size,
-            progress=progress,
-        )
-        if progress is not None and progress.is_cancel_requested():
-            progress.mark_cancelled()
-            return None
-        best_score = result.score
-        best_relative_seconds = result.relative_seconds
-        _best_frame = result.frame
-        scanned_frames = result.scanned_frames
-        dense_seconds = time.perf_counter() - dense_started_at
-        self.logger.debug(
-            "Video archive scan dense pass: %s frames in %.3fs; best %.3f at +%.3fs",
-            scanned_frames,
-            dense_seconds,
-            best_score,
-            best_relative_seconds,
-        )
-
-        if scanned_frames <= 0:
-            self.logger.debug(
-                "Video archive scan rejected in %.3fs: frames=%s best=%.3f",
-                time.perf_counter() - total_started_at,
-                scanned_frames,
-                best_score,
-            )
-            return None
-        if progress is not None:
-            progress.stage = "Finished"
-            progress.current_seconds = best_relative_seconds
-            progress.scanned_frames = scanned_frames
-            progress.best_score = best_score
-            progress.done = True
-            progress.completed_at = time.time()
-        self.logger.debug(
-            "Video archive scan matched in %.3fs: score=%.3f relative=%.3fs frames=%s",
-            time.perf_counter() - total_started_at,
-            best_score,
-            best_relative_seconds,
-            scanned_frames,
-        )
-        matches = tuple(
-            VideoScanMatch(
-                timestamp=archive_start_timestamp + match.relative_seconds,
-                score=match.score,
-                relative_seconds=match.relative_seconds,
-                frame=match.frame,
-            )
-            for match in result.matches
-        )
-        if not matches:
-            return None
-        return VideoScanResult(
-            scanned_frames=scanned_frames,
-            matches=matches,
-        )
-
     def scan_for_image_interval(
         self,
         image: Image.Image,
@@ -669,90 +1033,18 @@ class VideoArchiver:
         progress: ScanProgress | None = None,
     ) -> VideoScanResult | None:
         ranges = self._prepared_scan_ranges(start_timestamp, end_timestamp)
-        if not ranges:
-            return None
-
-        templates = self._scan_templates(image)
-        if not templates:
-            return None
-
-        frame_size = self.width * self.height * 3
-        locator_interval_seconds = max(0.25, float(locator_interval_seconds))
-        all_matches: list[VideoScanMatch] = []
-        scanned_frames = 0
-        best_score = -1.0
-
-        if progress is not None:
-            progress.set_stage(
-                "Scanning archive frames",
-                window_start_seconds=float(start_timestamp),
-                window_end_seconds=float(end_timestamp),
-            )
-
-        for scan_range in ranges:
-            if progress is not None and progress.is_cancel_requested():
-                progress.mark_cancelled()
-                return None
-
-            candidates = self._scan_candidates(
-                scan_range.video_path,
-                templates,
-                locator_interval_seconds=locator_interval_seconds,
-                max_candidates=max_candidates,
-                start_seconds=scan_range.start_seconds,
-                duration_seconds=scan_range.duration_seconds,
-                progress=progress,
-            )
-            if not candidates:
-                continue
-
-            result = self._scan_video_range(
-                scan_range.video_path,
-                candidates,
-                scan_range.start_seconds,
-                scan_range.duration_seconds,
-                frame_size,
-                progress=progress,
-                progress_timestamp_base=scan_range.archive_start_timestamp,
-            )
-            if progress is not None and progress.is_cancel_requested():
-                progress.mark_cancelled()
-                return None
-            if result.scanned_frames <= 0:
-                continue
-
-            scanned_frames += result.scanned_frames
-            for match in result.matches:
-                timestamp = scan_range.archive_start_timestamp + match.relative_seconds
-                if timestamp < start_timestamp or timestamp > end_timestamp:
-                    continue
-                all_matches.append(VideoScanMatch(
-                    timestamp=timestamp,
-                    score=match.score,
-                    relative_seconds=match.relative_seconds,
-                    frame=match.frame,
-                ))
-                best_score = max(best_score, match.score)
-            if progress is not None:
-                progress.current_seconds = min(float(end_timestamp), scan_range.end_timestamp)
-                progress.scanned_frames = scanned_frames
-                progress.best_score = best_score if best_score >= 0 else None
-
-        matches = tuple(
-            sorted(all_matches, key=lambda match: match.score, reverse=True)[:SCAN_RESULT_LIMIT]
-        )
-        if not matches:
-            return None
-        if progress is not None:
-            progress.stage = "Finished"
-            progress.current_seconds = float(end_timestamp)
-            progress.scanned_frames = scanned_frames
-            progress.best_score = matches[0].score
-            progress.done = True
-            progress.completed_at = time.time()
-        return VideoScanResult(
-            scanned_frames=scanned_frames,
-            matches=matches,
+        return VideoScanner(
+            width=self.width,
+            height=self.height,
+            logger=self.logger,
+        ).scan_for_image(
+            ranges,
+            image,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            locator_interval_seconds=locator_interval_seconds,
+            max_candidates=max_candidates,
+            progress=progress,
         )
 
     def _prepared_scan_ranges(
@@ -802,558 +1094,6 @@ class VideoArchiver:
             command.extend(["-pix_fmt", "yuvj420p"])
         command.append(str(output_path))
         return command
-
-    def _scan_frames_command(
-        self,
-        video_path: Path,
-        *,
-        start_seconds: float = 0.0,
-        duration_seconds: float | None = None,
-        select_interval_seconds: float | None = None,
-        show_frame_info: bool = False,
-    ) -> list[str]:
-        command = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", "info" if show_frame_info else "error",
-        ]
-        command.extend([
-            "-i", str(video_path),
-            "-map", "0:v:0",
-        ])
-        filters: list[str] = []
-        range_filter: str | None = None
-        if start_seconds > 0 or duration_seconds is not None:
-            if duration_seconds is None:
-                range_filter = f"gte(t\\,{start_seconds:.6f})"
-            else:
-                end_seconds = start_seconds + duration_seconds
-                range_filter = f"between(t\\,{start_seconds:.6f}\\,{end_seconds:.6f})"
-        if select_interval_seconds is not None:
-            interval = max(0.25, select_interval_seconds)
-            interval_filter = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})"
-            if range_filter is not None:
-                filters.append(f"select={range_filter}*({interval_filter})")
-            else:
-                filters.append(f"select={interval_filter}")
-        elif range_filter is not None:
-            filters.append(f"select={range_filter}")
-        filters.append(f"scale={self.width}:{self.height}")
-        if show_frame_info:
-            filters.append("showinfo")
-        command.extend([
-            "-vf", ",".join(filters),
-            "-fps_mode", "passthrough",
-            "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
-            "pipe:1",
-        ])
-        return command
-
-    def _scan_templates(self, image: Image.Image) -> list[MatLike]:
-        import cv2
-        import numpy as np
-
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        source = np.array(image)
-        source_h, source_w = source.shape[:2]
-        if source_h < 8 or source_w < 8:
-            return []
-
-        templates: list[MatLike] = []
-        seen_sizes: set[tuple[int, int]] = set()
-        frame_pixels = self.width * self.height
-        reverse_template_count = 0
-        reverse_template_limit = 3
-
-        def add_template(width: int, height: int) -> None:
-            nonlocal reverse_template_count
-
-            if width < 8 or height < 8:
-                return
-            if width * height > frame_pixels * 4:
-                return
-            can_match_frame = width <= self.width and height <= self.height
-            can_contain_frame = width >= self.width and height >= self.height
-            if not can_match_frame and not can_contain_frame:
-                return
-            if can_contain_frame and not can_match_frame:
-                if reverse_template_count >= reverse_template_limit:
-                    return
-                reverse_template_count += 1
-            if (width, height) in seen_sizes:
-                return
-            seen_sizes.add((width, height))
-            interpolation = cv2.INTER_AREA if width <= source_w and height <= source_h else cv2.INTER_LINEAR
-            resized = cv2.resize(source, (width, height), interpolation=interpolation)
-            if math.isclose(float(resized.std()), 0.0, abs_tol=0.01):
-                return
-            templates.append(resized)
-
-        dynamic_scales: list[float] = []
-        source_aspect = source_w / source_h
-        archive_aspect = self.width / self.height
-        full_frame_like = (
-            source_w >= self.width
-            and source_h >= self.height
-            and abs(source_aspect - archive_aspect) / archive_aspect <= 0.08
-        )
-        if source_w > self.width or source_h > self.height:
-            fit_scale = min(self.width / source_w, self.height / source_h)
-            width_fit_scale = self.width / source_w
-            height_fit_scale = self.height / source_h
-            dynamic_scales.extend([
-                fit_scale,
-                width_fit_scale,
-                height_fit_scale,
-                fit_scale * 0.98,
-                fit_scale * 1.02,
-            ])
-            add_template(self.width, self.height)
-            if full_frame_like:
-                return templates
-
-        if source_w < self.width and source_h < self.height:
-            scales = [
-                2.0,
-                1.75,
-                1.5,
-                1.25,
-                1.0,
-                0.9,
-                0.8,
-                0.75,
-                2 / 3,
-                0.6,
-                0.55,
-                0.5,
-                0.45,
-                0.4,
-                1 / 3,
-                0.25,
-                0.2,
-            ]
-        else:
-            scales = [
-                1.0,
-                0.75,
-                0.5,
-                *dynamic_scales,
-                0.45,
-                0.4,
-                1 / 3,
-                0.25,
-                0.2,
-            ]
-        for scale in scales:
-            width = int(round(source_w * scale))
-            height = int(round(source_h * scale))
-            add_template(width, height)
-        return templates
-
-    def _scan_candidates(
-        self,
-        video_path: Path,
-        templates: list[MatLike],
-        *,
-        locator_interval_seconds: float,
-        max_candidates: int,
-        start_seconds: float = 0.0,
-        duration_seconds: float | None = None,
-        progress: ScanProgress | None = None,
-    ) -> list[_ScanCandidate]:
-        frame_size = self.width * self.height * 3
-        process = subprocess.Popen(
-            self._scan_frames_command(
-                video_path,
-                start_seconds=start_seconds,
-                duration_seconds=duration_seconds,
-                select_interval_seconds=locator_interval_seconds,
-            ),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if progress is not None:
-            progress.set_process(process)
-        assert process.stdout is not None
-
-        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
-        pending: dict[Future[dict[tuple[int, int, int, int], _ScanCandidate]], None] = {}
-        executor = ThreadPoolExecutor(
-            max_workers=SCAN_THREADS,
-            thread_name_prefix="BogobotVideoScanLocate",
-        )
-
-        def merge_candidates(
-            new_candidates: dict[tuple[int, int, int, int], _ScanCandidate],
-        ) -> None:
-            for key, candidate in new_candidates.items():
-                existing = candidates.get(key)
-                if existing is not None and existing.locator_score >= candidate.locator_score:
-                    continue
-                candidates[key] = candidate
-
-        def collect_finished(done: set[Future[dict[tuple[int, int, int, int], _ScanCandidate]]]) -> None:
-            for future in done:
-                pending.pop(future)
-                merge_candidates(future.result())
-
-        def collect_one_finished() -> None:
-            if not pending:
-                return
-            done, _pending = wait(pending.keys(), return_when=FIRST_COMPLETED)
-            collect_finished(done)
-
-        try:
-            eof = False
-            while True:
-                if progress is not None and progress.is_cancel_requested():
-                    with contextlib.suppress(OSError):
-                        process.terminate()
-                    break
-                batch: list[bytes] = []
-                for _ in range(SCAN_BATCH_SIZE):
-                    data = process.stdout.read(frame_size)
-                    if not data:
-                        eof = True
-                        break
-                    if len(data) != frame_size:
-                        eof = True
-                        break
-                    batch.append(bytes(data))
-                if not batch:
-                    break
-                future = executor.submit(self._scan_candidate_batch, batch, templates)
-                pending[future] = None
-                while len(pending) >= SCAN_THREADS * 2:
-                    collect_one_finished()
-                if eof:
-                    break
-            while pending and not (progress is not None and progress.is_cancel_requested()):
-                collect_one_finished()
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-            if progress is not None:
-                progress.set_process(None)
-            if process.stdout is not None:
-                with contextlib.suppress(OSError):
-                    process.stdout.close()
-
-        if process.stderr is not None:
-            stderr = process.stderr.read()
-            process.stderr.close()
-        else:
-            stderr = b""
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=5)
-        if progress is not None and progress.is_cancel_requested():
-            return []
-        if process.returncode not in (0, None):
-            message = stderr.decode(errors="replace").strip()
-            if message:
-                self.logger.warning(f"Video archive scan locator failed: {message}")
-            return []
-
-        return sorted(
-            candidates.values(),
-            key=lambda candidate: candidate.locator_score,
-            reverse=True,
-        )[:max(1, int(max_candidates))]
-
-    def _scan_candidate_batch(
-        self,
-        batch: list[bytes],
-        templates: list[MatLike],
-    ) -> dict[tuple[int, int, int, int], _ScanCandidate]:
-        import cv2
-        import numpy as np
-
-        candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
-        for data in batch:
-            frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
-            for template in templates:
-                height, width = template.shape[:2]
-                if width <= self.width and height <= self.height:
-                    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
-                    x, y = max_loc
-                    candidate_template = template
-                elif width >= self.width and height >= self.height:
-                    result = cv2.matchTemplate(template, frame, cv2.TM_CCOEFF_NORMED)
-                    _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
-                    template_x, template_y = max_loc
-                    x = 0
-                    y = 0
-                    width = self.width
-                    height = self.height
-                    candidate_template = template[
-                        template_y:template_y + self.height,
-                        template_x:template_x + self.width,
-                    ]
-                else:
-                    continue
-                key = (x // 2, y // 2, width, height)
-                score = float(max_value)
-                existing = candidates.get(key)
-                if existing is not None and existing.locator_score >= score:
-                    continue
-                sample_step = self._scan_sample_step(width, height)
-                candidates[key] = _ScanCandidate(
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-                    sample_step=sample_step,
-                    template=candidate_template[::sample_step, ::sample_step].copy(),
-                    locator_score=score,
-                )
-        return candidates
-
-    def _scan_video_range(
-        self,
-        video_path: Path,
-        candidates: list[_ScanCandidate],
-        start_seconds: float,
-        duration_seconds: float | None,
-        frame_size: int,
-        *,
-        progress: ScanProgress | None = None,
-        progress_timestamp_base: float = 0.0,
-    ) -> _ScanRangeResult:
-        started_at = time.perf_counter()
-        process = subprocess.Popen(
-            self._scan_frames_command(
-                video_path,
-                start_seconds=start_seconds,
-                duration_seconds=duration_seconds,
-                show_frame_info=True,
-            ),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if progress is not None:
-            progress.set_process(process)
-        assert process.stdout is not None
-        assert process.stderr is not None
-
-        best_score = -1.0
-        best_relative_seconds = start_seconds
-        best_frame: bytes | None = None
-        best_frame_index = 0
-        top_matches = _TopScanMatches(SCAN_RESULT_LIMIT)
-        scanned_frames = 0
-        stderr_chunks: list[bytes] = []
-        stderr_lock = threading.Lock()
-        last_progress_at = 0.0
-        submitted_frames = 0
-        pending: dict[Future[list[float]], tuple[int, list[bytes]]] = {}
-        executor = ThreadPoolExecutor(
-            max_workers=SCAN_THREADS,
-            thread_name_prefix="BogobotVideoScanScore",
-        )
-
-        def read_stderr() -> None:
-            assert process.stderr is not None
-            while True:
-                chunk = process.stderr.read(65536)
-                if not chunk:
-                    return
-                with stderr_lock:
-                    stderr_chunks.append(chunk)
-
-        stderr_thread = threading.Thread(
-            target=read_stderr,
-            name="BogobotVideoScanStderr",
-            daemon=True,
-        )
-        stderr_thread.start()
-
-        def update_progress() -> None:
-            nonlocal last_progress_at
-
-            now = time.monotonic()
-            if now - last_progress_at < 1.0:
-                return
-            last_progress_at = now
-            with stderr_lock:
-                stderr = b"".join(stderr_chunks)
-            current_seconds = self._scan_latest_showinfo_time(stderr)
-            if progress is not None:
-                progress.current_seconds = (
-                    None
-                    if current_seconds is None else
-                    progress_timestamp_base + current_seconds
-                )
-                progress.scanned_frames = scanned_frames
-                progress.best_score = best_score if best_score >= 0 else None
-
-        def collect_finished(done: set[Future[list[float]]]) -> None:
-            nonlocal best_score, best_frame, best_frame_index, scanned_frames
-
-            for future in done:
-                start_index, batch = pending.pop(future)
-                scores = future.result()
-                for offset, score in enumerate(scores):
-                    frame_index = start_index + offset
-                    if score > best_score:
-                        best_score = score
-                        best_frame = batch[offset]
-                        best_frame_index = frame_index
-                    top_matches.insert(_ScanRangeMatch(
-                        score=score,
-                        frame_index=frame_index,
-                        relative_seconds=start_seconds,
-                        frame=batch[offset],
-                    ))
-                scanned_frames += len(scores)
-            update_progress()
-
-        def collect_one_finished() -> None:
-            if not pending:
-                return
-            done, _pending = wait(pending.keys(), return_when=FIRST_COMPLETED)
-            collect_finished(done)
-
-        try:
-            eof = False
-            while True:
-                if progress is not None and progress.is_cancel_requested():
-                    with contextlib.suppress(OSError):
-                        process.terminate()
-                    break
-                batch: list[bytes] = []
-                for _ in range(SCAN_BATCH_SIZE):
-                    data = process.stdout.read(frame_size)
-                    if not data:
-                        eof = True
-                        break
-                    if len(data) != frame_size:
-                        eof = True
-                        break
-                    batch.append(bytes(data))
-                if not batch:
-                    break
-                future = executor.submit(self._scan_frame_scores, batch, candidates)
-                pending[future] = (submitted_frames, batch)
-                submitted_frames += len(batch)
-                while len(pending) >= SCAN_THREADS * 2:
-                    collect_one_finished()
-                if eof:
-                    break
-            while pending and not (progress is not None and progress.is_cancel_requested()):
-                collect_one_finished()
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-            if progress is not None:
-                progress.set_process(None)
-            if process.stdout is not None:
-                with contextlib.suppress(OSError):
-                    process.stdout.close()
-
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=5)
-        stderr_thread.join(timeout=5)
-        with stderr_lock:
-            stderr = b"".join(stderr_chunks)
-        if progress is not None and progress.is_cancel_requested():
-            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None, ())
-        best_pts_time = self._scan_showinfo_time(stderr, best_frame_index)
-        if best_pts_time is not None:
-            best_relative_seconds = best_pts_time
-        matches = tuple(
-            _ScanRangeMatch(
-                score=match.score,
-                frame_index=match.frame_index,
-                relative_seconds=self._scan_showinfo_time(stderr, match.frame_index) or start_seconds,
-                frame=match.frame,
-            )
-            for match in top_matches.get_top_n()
-        )
-
-        if process.returncode not in (0, None):
-            message = stderr.decode(errors="replace").strip()
-            if message:
-                self.logger.warning(f"Video archive scan failed: {message}")
-            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None, ())
-        self.logger.debug(
-            "Video archive scan pass: +%.3fs duration=%s frames=%s time=%.3fs best=%.3f at +%.3fs",
-            start_seconds,
-            f"{duration_seconds:.3f}s" if duration_seconds is not None else "end",
-            scanned_frames,
-            time.perf_counter() - started_at,
-            best_score,
-            best_relative_seconds,
-        )
-        return _ScanRangeResult(
-            best_score,
-            best_relative_seconds,
-            scanned_frames,
-            best_frame,
-            matches,
-        )
-
-    def _scan_frame_score(self, data: bytes, candidates: list[_ScanCandidate]) -> float:
-        import cv2
-        import numpy as np
-
-        frame = np.frombuffer(data, dtype=np.uint8).reshape((self.height, self.width, 3))
-        best = -1.0
-        for candidate in candidates:
-            roi = frame[
-                candidate.y:candidate.y + candidate.height:candidate.sample_step,
-                candidate.x:candidate.x + candidate.width:candidate.sample_step,
-            ]
-            if roi.shape[:2] != candidate.template.shape[:2]:
-                continue
-            if math.isclose(float(roi.std()), 0.0, abs_tol=0.01):
-                continue
-            correlation_score = float(cv2.matchTemplate(
-                roi,
-                candidate.template,
-                cv2.TM_CCOEFF_NORMED,
-            )[0][0])
-            mean_abs_diff = float(np.abs(
-                roi.astype(np.int16) - candidate.template.astype(np.int16)
-            ).mean())
-            difference_score = 1.0 - math.sqrt(mean_abs_diff / 255.0)
-            score = (correlation_score + difference_score) / 2
-            best = max(best, score)
-        return best
-
-    def _scan_frame_scores(
-        self,
-        batch: list[bytes],
-        candidates: list[_ScanCandidate],
-    ) -> list[float]:
-        return [
-            self._scan_frame_score(data, candidates)
-            for data in batch
-        ]
-
-    def _scan_sample_step(self, width: int, height: int) -> int:
-        if width == self.width and height == self.height:
-            return 1
-        return max(1, min(width, height) // 96)
-
-    def _scan_showinfo_time(self, stderr: bytes, frame_index: int) -> float | None:
-        matches = self._scan_showinfo_matches(stderr)
-        if 0 <= frame_index < len(matches):
-            with contextlib.suppress(ValueError):
-                return float(matches[frame_index].group("time"))
-        return None
-
-    def _scan_latest_showinfo_time(self, stderr: bytes) -> float | None:
-        matches = self._scan_showinfo_matches(stderr)
-        if not matches:
-            return None
-        with contextlib.suppress(ValueError):
-            return float(matches[-1].group("time"))
-        return None
-
-    def _scan_showinfo_matches(self, stderr: bytes) -> list[re.Match[str]]:
-        text = stderr.decode(errors="replace")
-        return list(SHOWINFO_RE.finditer(text))
 
     def _video_duration(self, video_path: Path) -> float | None:
         result = subprocess.run(
