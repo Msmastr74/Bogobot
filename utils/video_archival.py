@@ -1,4 +1,5 @@
 import contextlib
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 import math
@@ -17,6 +18,8 @@ from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 
 
 SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>-?\d+(?:\.\d+)?)")
+SCAN_THREADS = 3
+SCAN_BATCH_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -774,6 +777,12 @@ class VideoArchiver:
         stderr_chunks: list[bytes] = []
         stderr_lock = threading.Lock()
         last_progress_at = 0.0
+        submitted_frames = 0
+        pending: dict[Future[list[float]], tuple[int, list[bytes]]] = {}
+        executor = ThreadPoolExecutor(
+            max_workers=SCAN_THREADS,
+            thread_name_prefix="BogobotVideoScanScore",
+        )
 
         def read_stderr() -> None:
             assert process.stderr is not None
@@ -791,34 +800,72 @@ class VideoArchiver:
         )
         stderr_thread.start()
 
+        def update_progress() -> None:
+            nonlocal last_progress_at
+
+            now = time.monotonic()
+            if now - last_progress_at < 1.0:
+                return
+            last_progress_at = now
+            with stderr_lock:
+                stderr = b"".join(stderr_chunks)
+            current_seconds = self._scan_latest_showinfo_time(stderr)
+            if progress is not None:
+                progress.current_seconds = current_seconds
+                progress.scanned_frames = scanned_frames
+                progress.best_score = best_score if best_score >= 0 else None
+
+        def collect_finished(done: set[Future[list[float]]]) -> None:
+            nonlocal best_score, best_frame, best_frame_index, scanned_frames
+
+            for future in done:
+                start_index, batch = pending.pop(future)
+                scores = future.result()
+                for offset, score in enumerate(scores):
+                    frame_index = start_index + offset
+                    if score > best_score:
+                        best_score = score
+                        best_frame = batch[offset]
+                        best_frame_index = frame_index
+                scanned_frames += len(scores)
+            update_progress()
+
+        def collect_one_finished() -> None:
+            if not pending:
+                return
+            done, _pending = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            collect_finished(done)
+
         try:
+            eof = False
             while True:
                 if progress is not None and progress.is_cancel_requested():
                     with contextlib.suppress(OSError):
                         process.terminate()
                     break
-                data = process.stdout.read(frame_size)
-                if not data:
+                batch: list[bytes] = []
+                for _ in range(SCAN_BATCH_SIZE):
+                    data = process.stdout.read(frame_size)
+                    if not data:
+                        eof = True
+                        break
+                    if len(data) != frame_size:
+                        eof = True
+                        break
+                    batch.append(bytes(data))
+                if not batch:
                     break
-                if len(data) != frame_size:
+                future = executor.submit(self._scan_frame_scores, batch, candidates)
+                pending[future] = (submitted_frames, batch)
+                submitted_frames += len(batch)
+                while len(pending) >= SCAN_THREADS * 2:
+                    collect_one_finished()
+                if eof:
                     break
-                score = self._scan_frame_score(data, candidates)
-                scanned_frames += 1
-                if score > best_score:
-                    best_score = score
-                    best_frame = bytes(data)
-                    best_frame_index = scanned_frames - 1
-                now = time.monotonic()
-                if now - last_progress_at >= 1.0:
-                    last_progress_at = now
-                    with stderr_lock:
-                        stderr = b"".join(stderr_chunks)
-                    current_seconds = self._scan_latest_showinfo_time(stderr)
-                    if progress is not None:
-                        progress.current_seconds = current_seconds
-                        progress.scanned_frames = scanned_frames
-                        progress.best_score = best_score if best_score >= 0 else None
+            while pending and not (progress is not None and progress.is_cancel_requested()):
+                collect_one_finished()
         finally:
+            executor.shutdown(wait=False, cancel_futures=True)
             if progress is not None:
                 progress.set_process(None)
             if process.stdout is not None:
@@ -868,6 +915,16 @@ class VideoArchiver:
             score = 1.0 - math.sqrt(mean_abs_diff / 255.0)
             best = max(best, score)
         return best
+
+    def _scan_frame_scores(
+        self,
+        batch: list[bytes],
+        candidates: list[_ScanCandidate],
+    ) -> list[float]:
+        return [
+            self._scan_frame_score(data, candidates)
+            for data in batch
+        ]
 
     def _scan_sample_step(self, width: int, height: int) -> int:
         return max(1, min(width, height) // 96)
