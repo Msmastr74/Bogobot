@@ -512,15 +512,17 @@ async def setup(bot: "BotCore"):
 class AISchedulesView(discord.ui.LayoutView):
     def __init__(self, channel_id: int, schedules: list[Schedule[AISchedule]]) -> None:
         super().__init__(timeout=None)
-        if not schedules:
-            self.add_item(discord.ui.TextDisplay(
-                "There are no scheduled AI activities configured for this channel."
-            ))
-            return
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(f"### Scheduled AI Activities for <#{channel_id}>:"),
+            discord.ui.Separator(),
+        )
 
-        self.add_item(discord.ui.TextDisplay(
-            f"### Scheduled AI Activities for <#{channel_id}>:"
-        ))
+        if not schedules:
+            container.add_item(discord.ui.TextDisplay(
+                "No AI activities are scheduled for this channel."
+            ))
+            self.add_item(container)
+            return
 
         now = discord.utils.utcnow()
         for idx, item in enumerate(schedules, start=1):
@@ -543,11 +545,13 @@ class AISchedulesView(discord.ui.LayoutView):
             next_run = calculate_next_time(payload, now)
             next_run_str = f"<t:{int(next_run.timestamp())}:F>" if next_run else "*Never (Expired/Invalid)*"
 
-            self.add_item(discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"**{idx}. ID:** `{schedule_id}`\n"
-                    f"⚙️ **Config:** {rule_summary}\n"
-                    f"🎯 **Context:** {purpose_text}\n"
-                    f"⏰ **Next Run:** {next_run_str}\n"
-                )
+            if idx > 1:
+                container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(
+                f"**{idx}. ID:** `{schedule_id}`\n"
+                f"⚙️ **Config:** {rule_summary}\n"
+                f"🎯 **Context:** {purpose_text}\n"
+                f"⏰ **Next Run:** {next_run_str}\n"
             ))
+
+        self.add_item(container)

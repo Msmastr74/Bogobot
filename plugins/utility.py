@@ -122,6 +122,7 @@ class AnnounceView(discord.ui.LayoutView):
             if message:
                 children.append(discord.ui.TextDisplay(message))
             if attachments_container:
+                children.append(discord.ui.Separator())
                 children.extend(attachment_components)
             self.add_item(discord.ui.Container(
                 *children,

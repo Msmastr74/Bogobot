@@ -17,9 +17,10 @@ class BogonameView(discord.ui.LayoutView):
             discord.ui.Separator(),
             discord.ui.TextDisplay(f"**Original Name**\n{discord.utils.escape_markdown(original_name)}"),
             discord.ui.TextDisplay(f"**Bogoed name**\n{discord.utils.escape_markdown(new_name)}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"-# <t:{int(time.time())}:f>"),
             accent_colour=discord.Colour.random()
         ))
-        self.add_item(discord.ui.TextDisplay(f"-# <t:{int(time.time())}:f>"))
 
 EMOJI_ALIAS_RE = re.compile(r":([A-Za-z0-9_]+):")
 
