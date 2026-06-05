@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, Literal
 from utils.discord import count_characters
 from utils.type import T
+import abc
 
 import discord
 
@@ -63,7 +64,7 @@ class SectionRead(Generic[T]):
     state: T
 
 
-class PaginatedView(discord.ui.LayoutView, Generic[T]):
+class PaginatedView(discord.ui.LayoutView, abc.ABC, Generic[T]):
     def __init__(
         self,
         *,
@@ -76,11 +77,13 @@ class PaginatedView(discord.ui.LayoutView, Generic[T]):
         self.previous_page_state: T | None = None
         self.next_page_state: T | None = None
 
+    @abc.abstractmethod
     async def next_section(self, state: T) -> SectionRead[T] | None:
-        raise NotImplementedError
+        pass
 
+    @abc.abstractmethod
     async def previous_section(self, state: T) -> SectionRead[T] | None:
-        raise NotImplementedError
+        pass
 
     def page_allowed_mentions(self) -> discord.AllowedMentions | None:
         return None

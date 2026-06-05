@@ -11,8 +11,8 @@ from bogobot_core import BotCore
 from utils.edit_coalescer import MessageEditCoalescer
 
 MessagePayload = Mapping[str, Any]
+UpdatePayload = MessagePayload
 PayloadFactory = Callable[[], MessagePayload | Awaitable[MessagePayload]]
-UpdateFactory = Callable[[], MessagePayload | None | Awaitable[MessagePayload | None]]
 
 async def _resolve(value: Awaitable[T] | T) -> T:
     if inspect.isawaitable(value):
@@ -28,13 +28,11 @@ class PersistentChannelMonitor:
         storage_key: str,
         display_name: str,
         initial_payload: PayloadFactory,
-        update_payload: UpdateFactory,
     ):
         self.bot = bot
         self.storage_key = storage_key
         self.display_name = display_name
         self.initial_payload = initial_payload
-        self.update_payload = update_payload
         self.tracker = Tracker[int, int](
             load=self._load_messages,
             save=self._save_messages,
@@ -147,15 +145,11 @@ class PersistentChannelMonitor:
             response=True,
         )
 
-    async def tick(self) -> None:
+    async def update(self, payload: UpdatePayload) -> None:
         await self.tracker.prune_stale()
         stored_messages = await self.tracker.items()
 
         if not stored_messages:
-            return
-
-        payload = await _resolve(self.update_payload())
-        if payload is None:
             return
 
         for channel_id, message_id in list(stored_messages.items()):

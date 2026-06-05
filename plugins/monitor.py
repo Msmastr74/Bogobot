@@ -37,7 +37,7 @@ async def setup(bot: BotCore):
     def initial_payload() -> MonitorPayload:
         return {"view": MonitorView("Initializing...")}
 
-    async def update_payload() -> MonitorPayload | None:
+    async def build_payload() -> MonitorPayload | None:
         global num_matrix
 
         if not pending_values:
@@ -68,7 +68,6 @@ async def setup(bot: BotCore):
         storage_key="monitor_messages",
         display_name="Monitor",
         initial_payload=initial_payload,
-        update_payload=update_payload,
     )
     stream_monitor.command(
         manage,
@@ -81,7 +80,9 @@ async def setup(bot: BotCore):
         nonlocal initialized
         await stream_monitor.initialize()
         initialized = True
-        await stream_monitor.tick()
+        payload = await build_payload()
+        if payload is not None:
+            await stream_monitor.update(payload)
 
     @bot.new_value_callback
     async def new_value(
@@ -91,4 +92,6 @@ async def setup(bot: BotCore):
     ):
         pending_values.append(value)
         if initialized:
-            await stream_monitor.tick()
+            payload = await build_payload()
+            if payload is not None:
+                await stream_monitor.update(payload)

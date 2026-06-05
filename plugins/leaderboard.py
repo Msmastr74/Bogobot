@@ -196,7 +196,6 @@ async def setup(bot: BotCore):
         storage_key="leaderboard_monitor_messages",
         display_name="Leaderboard monitor",
         initial_payload=monitor_payload,
-        update_payload=monitor_payload,
     )
     leaderboard_monitor.command(
         manage,
@@ -206,7 +205,7 @@ async def setup(bot: BotCore):
 
     @tasks.loop(seconds=LEADERBOARD_MONITOR_INTERVAL_SECONDS)
     async def update_leaderboard_monitor():
-        await leaderboard_monitor.tick()
+        await leaderboard_monitor.update(await monitor_payload())
 
     @bot.init_callback
     async def init():

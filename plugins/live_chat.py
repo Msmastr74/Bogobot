@@ -129,14 +129,13 @@ async def setup(bot: BotCore):
 
         log.info(f"pytchat reconnect scheduled in {delay:.1f}s")
 
-    async def update_payload() -> LiveChatPayload | None:
+    async def build_payload() -> LiveChatPayload | None:
         global chat
 
         now = time.monotonic()
 
-        # Non-blocking retry delay
         if now < next_retry_at:
-            return {"view": LiveChatView(format_chat_buffer())}
+            return None
 
         try:
             if chat is None or not chat.is_alive():
@@ -148,7 +147,7 @@ async def setup(bot: BotCore):
 
             chat_buffer.extend(chat_data.items)
 
-            return  {
+            return {
                 "view": LiveChatView(format_chat_buffer())
             }
 
@@ -158,18 +157,19 @@ async def setup(bot: BotCore):
             terminate_chat()
             schedule_retry()
 
-            return {"view": LiveChatView(format_chat_buffer())}
+            return None
     
     @tasks.loop(seconds=5)
     async def update_chat_monitor():
-        await chat_monitor.tick()
+        payload = await build_payload()
+        if payload is not None:
+            await chat_monitor.update(payload)
     
     chat_monitor = PersistentChannelMonitor(
         bot,
         storage_key="live_chat_monitor_messages",
         display_name="Live Chat Monitor",
         initial_payload=initial_payload,
-        update_payload=update_payload,
     )
     chat_monitor.command(
         manage,

@@ -378,7 +378,7 @@ async def setup(bot: BotCore) -> None:
 
     @bot.new_value_callback
     async def on_new_value(sort_state: list[tuple[bool, int]], correct_count: int, timestamp: float):
-        await stats_monitor.tick()
+        await stats_monitor.update(stats_payload())
 
     @bot.new_frame_callback
     def on_new_frame(frame: Image.Image):
@@ -449,7 +449,6 @@ async def setup(bot: BotCore) -> None:
         storage_key="stats_monitor_messages",
         display_name="Stats monitor",
         initial_payload=stats_payload,
-        update_payload=stats_payload,
     )
     stats_monitor.command(
         manage,

@@ -247,14 +247,6 @@ async def setup(bot: BotCore):
             ), files
 
         if message_id is not None:
-            if attachments:
-                await bot.discord.send(
-                    contents="Announcement edits cannot include new attachments.",
-                    response=True,
-                    ephemeral=True,
-                )
-                return False
-
             channel_id = interaction.channel_id
             if channel_id is None:
                 await bot.discord.send(
@@ -283,11 +275,12 @@ async def setup(bot: BotCore):
                 )
                 return False
 
+            files = await create_announcement_files(attachments)
             view = AnnounceView(
                 title=title,
                 message=message,
                 message_container=message_container,
-                attachment_files=[(attachment, attachment) for attachment in fetched.attachments],
+                attachment_files=files,
                 attachments_container=attachments_container,
                 accent_colour=accent_colour,
             )
@@ -295,7 +288,7 @@ async def setup(bot: BotCore):
                 await target.edit(
                     content=None,
                     embeds=[],
-                    attachments=fetched.attachments,
+                    attachments=[file for _, file in files],
                     view=view
                 )
             except (discord.NotFound, discord.Forbidden):
@@ -305,6 +298,9 @@ async def setup(bot: BotCore):
                     ephemeral=True,
                 )
                 return False
+            finally:
+                for _, file in files:
+                    file.close()
             return True
 
         try:
@@ -457,6 +453,19 @@ async def setup(bot: BotCore):
         perm_requirement=3,
         defer=False
     )
+    @app_commands.describe(
+        message_id="Edit this bot message. Uploaded attachments replace all existing files; omit attachments to clear files.",
+        attachment_1="File 1. When editing, uploaded files replace all existing files.",
+        attachment_2="File 2. When editing, uploaded files replace all existing files.",
+        attachment_3="File 3. When editing, uploaded files replace all existing files.",
+        attachment_4="File 4. When editing, uploaded files replace all existing files.",
+        attachment_5="File 5. When editing, uploaded files replace all existing files.",
+        attachment_6="File 6. When editing, uploaded files replace all existing files.",
+        attachment_7="File 7. When editing, uploaded files replace all existing files.",
+        attachment_8="File 8. When editing, uploaded files replace all existing files.",
+        attachment_9="File 9. When editing, uploaded files replace all existing files.",
+        attachment_10="File 10. When editing, uploaded files replace all existing files.",
+    )
     async def announce(
         interaction: discord.Interaction,
         title: str | None = None,
@@ -492,13 +501,6 @@ async def setup(bot: BotCore):
             )
             if attachment is not None
         ]
-        if message_id is not None and attachments:
-            await bot.discord.send(
-                contents="Announcement edits cannot include new attachments.",
-                response=True,
-                ephemeral=True
-            )
-            return
         if message is None:
             await interaction.response.send_modal(
                 AnnounceModal(
