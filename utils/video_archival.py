@@ -1,5 +1,5 @@
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import math
 import logging
@@ -49,7 +49,11 @@ class ScanProgress:
     scanned_frames: int = 0
     best_score: float | None = None
     done: bool = False
+    cancel_requested: bool = False
+    cancelled: bool = False
     completed_at: float | None = None
+    _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     @property
     def elapsed_seconds(self) -> float:
@@ -103,6 +107,34 @@ class ScanProgress:
             self.window_start_seconds = window_start_seconds
         if window_end_seconds is not None:
             self.window_end_seconds = window_end_seconds
+
+    def request_cancel(self) -> None:
+        with self._lock:
+            self.cancel_requested = True
+            process = self._process
+        self.stage = "Cancelling scan"
+        if process is not None and process.poll() is None:
+            with contextlib.suppress(OSError):
+                process.terminate()
+
+    def is_cancel_requested(self) -> bool:
+        with self._lock:
+            return self.cancel_requested
+
+    def set_process(self, process: subprocess.Popen[bytes] | None) -> None:
+        with self._lock:
+            self._process = process
+            should_cancel = self.cancel_requested and process is not None
+        if should_cancel and process is not None and process.poll() is None:
+            with contextlib.suppress(OSError):
+                process.terminate()
+
+    def mark_cancelled(self) -> None:
+        self.stage = "Cancelled"
+        self.done = True
+        self.cancelled = True
+        self.completed_at = time.time()
+        self.set_process(None)
 
 
 @dataclass(frozen=True)
@@ -398,6 +430,9 @@ class VideoArchiver:
         )
         if not templates:
             return None
+        if progress is not None and progress.is_cancel_requested():
+            progress.mark_cancelled()
+            return None
 
         duration_started_at = time.perf_counter()
         if progress is not None:
@@ -409,6 +444,9 @@ class VideoArchiver:
             time.perf_counter() - duration_started_at,
         )
         if duration is None:
+            return None
+        if progress is not None and progress.is_cancel_requested():
+            progress.mark_cancelled()
             return None
         scan_start_seconds = 0.0 if requested_start_timestamp is None else max(
             0.0,
@@ -435,6 +473,7 @@ class VideoArchiver:
             max_candidates=max_candidates,
             start_seconds=scan_start_seconds,
             duration_seconds=scan_end_seconds - scan_start_seconds,
+            progress=progress,
         )
         self.logger.debug(
             "Video archive scan locator: %s candidates in %.3fs over %.3fs..%.3fs",
@@ -444,6 +483,8 @@ class VideoArchiver:
             scan_end_seconds,
         )
         if not candidates:
+            if progress is not None and progress.is_cancel_requested():
+                progress.mark_cancelled()
             return None
 
         dense_started_at = time.perf_counter()
@@ -461,6 +502,9 @@ class VideoArchiver:
             frame_size,
             progress=progress,
         )
+        if progress is not None and progress.is_cancel_requested():
+            progress.mark_cancelled()
+            return None
         best_score = result.score
         best_relative_seconds = result.relative_seconds
         best_frame = result.frame
@@ -615,6 +659,7 @@ class VideoArchiver:
         max_candidates: int,
         start_seconds: float = 0.0,
         duration_seconds: float | None = None,
+        progress: ScanProgress | None = None,
     ) -> list[_ScanCandidate]:
         import cv2
         import numpy as np
@@ -630,11 +675,17 @@ class VideoArchiver:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        if progress is not None:
+            progress.set_process(process)
         assert process.stdout is not None
 
         candidates: dict[tuple[int, int, int, int], _ScanCandidate] = {}
         try:
             while True:
+                if progress is not None and progress.is_cancel_requested():
+                    with contextlib.suppress(OSError):
+                        process.terminate()
+                    break
                 data = process.stdout.read(frame_size)
                 if not data:
                     break
@@ -662,6 +713,8 @@ class VideoArchiver:
                         locator_score=score,
                     )
         finally:
+            if progress is not None:
+                progress.set_process(None)
             if process.stdout is not None:
                 with contextlib.suppress(OSError):
                     process.stdout.close()
@@ -671,7 +724,10 @@ class VideoArchiver:
             process.stderr.close()
         else:
             stderr = b""
-        process.wait(timeout=5)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5)
+        if progress is not None and progress.is_cancel_requested():
+            return []
         if process.returncode not in (0, None):
             message = stderr.decode(errors="replace").strip()
             if message:
@@ -705,6 +761,8 @@ class VideoArchiver:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        if progress is not None:
+            progress.set_process(process)
         assert process.stdout is not None
         assert process.stderr is not None
 
@@ -735,6 +793,10 @@ class VideoArchiver:
 
         try:
             while True:
+                if progress is not None and progress.is_cancel_requested():
+                    with contextlib.suppress(OSError):
+                        process.terminate()
+                    break
                 data = process.stdout.read(frame_size)
                 if not data:
                     break
@@ -757,14 +819,19 @@ class VideoArchiver:
                         progress.scanned_frames = scanned_frames
                         progress.best_score = best_score if best_score >= 0 else None
         finally:
+            if progress is not None:
+                progress.set_process(None)
             if process.stdout is not None:
                 with contextlib.suppress(OSError):
                     process.stdout.close()
 
-        process.wait(timeout=5)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5)
         stderr_thread.join(timeout=5)
         with stderr_lock:
             stderr = b"".join(stderr_chunks)
+        if progress is not None and progress.is_cancel_requested():
+            return _ScanRangeResult(-1.0, start_seconds, scanned_frames, None)
         best_pts_time = self._scan_showinfo_time(stderr, best_frame_index)
         if best_pts_time is not None:
             best_relative_seconds = best_pts_time

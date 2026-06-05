@@ -65,6 +65,32 @@ class ScanView(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=None)
 
+        progress_items: list[discord.ui.Item] = []
+        if progress.done:
+            progress_items.extend([
+                discord.ui.TextDisplay("### Scan Progress"),
+                discord.ui.TextDisplay(self._progress_text(progress)),
+            ])
+        else:
+            cancel_button = discord.ui.Button(
+                label="Cancel Scan" if not progress.cancel_requested else "Cancelling...",
+                style=discord.ButtonStyle.secondary,
+                disabled=progress.cancel_requested,
+            )
+
+            async def cancel_scan(interaction: discord.Interaction) -> None:
+                progress.request_cancel()
+                cancel_button.label = "Cancelling..."
+                cancel_button.disabled = True
+                await interaction.response.edit_message(view=self)
+
+            cancel_button.callback = cancel_scan
+            progress_items.append(discord.ui.Section(
+                discord.ui.TextDisplay("### Scan Progress"),
+                discord.ui.TextDisplay(self._progress_text(progress)),
+                accessory=cancel_button,
+            ))
+
         container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay(f"## Scan of <t:{int(day_timestamp)}:D>"),
@@ -79,8 +105,7 @@ class ScanView(discord.ui.LayoutView):
                 ),
             ),
             discord.ui.Separator(),
-            discord.ui.TextDisplay("### Scan Progress"),
-            discord.ui.TextDisplay(self._progress_text(progress)),
+            *progress_items,
         )
 
         if progress.done and result is not None:
@@ -93,6 +118,9 @@ class ScanView(discord.ui.LayoutView):
                         description="Matched archive frame",
                     )
                 ))
+        elif progress.done and progress.cancelled:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay("Scan cancelled."))
         elif progress.done:
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.TextDisplay(
@@ -1308,9 +1336,9 @@ async def setup(bot: BotCore):
             if scan_started:
                 archive_scan_last_finished_at = time.monotonic()
         if result is None:
-            progress.stage = "Finished"
-            progress.done = True
-            progress.completed_at = time.time()
+            if not progress.done:
+                progress.done = True
+                progress.completed_at = time.time()
             await scan_message.edit(
                 view=ScanView(
                     day_timestamp=day_timestamp,
@@ -1320,7 +1348,8 @@ async def setup(bot: BotCore):
                 ),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-            await send_scan_completed_ping()
+            if not progress.cancelled:
+                await send_scan_completed_ping()
             return
 
         if progress.completed_at is None:
