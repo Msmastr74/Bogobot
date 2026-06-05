@@ -74,7 +74,7 @@ class _AdaptiveScanThreadBudget:
 
     @property
     def pending_limit(self) -> int:
-        return max(1, self.active_workers * 2)
+        return self.active_workers
 
     def _sample_active_workers(self) -> int:
         load_average = self._load_average()
