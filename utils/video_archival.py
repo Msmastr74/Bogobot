@@ -31,6 +31,7 @@ SCAN_DENSE_PROGRESS_WEIGHT = 0.6
 SCAN_TEMPLATE_SCALE_MAX = 2.0
 SCAN_TEMPLATE_SCALE_MIN = 0.2
 SCAN_TEMPLATE_SCALE_STEP = 0.01
+SCAN_LOCATOR_SIZE = 60
 SCAN_LOCATOR_NORMAL_SCALES_PER_SAMPLE = 10
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
@@ -692,6 +693,7 @@ class VideoScanner:
 
             timestamp_queue: queue.Queue[float | None] = queue.Queue()
             stderr_chunks: list[bytes] = []
+            terminated = False
 
             def read_stderr() -> None:
                 assert process.stderr is not None
@@ -699,9 +701,9 @@ class VideoScanner:
                     line = process.stderr.readline()
                     if not line:
                         break
-                    stderr_chunks.append(line)
                     match = SHOWINFO_RE.search(line.decode(errors="replace"))
                     if match is None:
+                        stderr_chunks.append(line)
                         continue
                     with contextlib.suppress(ValueError):
                         timestamp_queue.put(
@@ -719,6 +721,7 @@ class VideoScanner:
             try:
                 while True:
                     if progress is not None and progress.is_cancel_requested():
+                        terminated = True
                         with contextlib.suppress(OSError):
                             process.terminate()
                         break
@@ -742,7 +745,7 @@ class VideoScanner:
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=5)
                 stderr_thread.join(timeout=5)
-                if process.returncode not in (0, None):
+                if not terminated and process.returncode not in (0, None):
                     message = b"".join(stderr_chunks).decode(errors="replace").strip()
                     if message:
                         self.logger.warning(f"Video archive frame stream failed: {message}")
@@ -793,6 +796,28 @@ class VideoScanner:
                 collect_one()
             pending[executor.submit(self._candidate_batch, batch, source, scales)] = batch_timestamp
 
+        def submit_discovery_batches(first_frames: list[_ScanFrame]) -> None:
+            if not first_frames:
+                return
+            first_schedule = self._first_locator_batch_scale_indices(
+                len(first_frames),
+                len(scales),
+            )
+            first_batch = [
+                (frame.data, scale_indices)
+                for frame, scale_indices in zip(first_frames, first_schedule, strict=True)
+                if scale_indices
+            ]
+            if not first_batch:
+                return
+
+            worker_count = max(1, min(thread_budget.active_workers, len(first_batch)))
+            chunk_size = max(1, math.ceil(len(first_batch) / worker_count))
+            for offset in range(0, len(first_batch), chunk_size):
+                chunk = first_batch[offset:offset + chunk_size]
+                timestamp_index = min(offset + len(chunk) - 1, len(first_frames) - 1)
+                submit_batch(chunk, first_frames[timestamp_index].timestamp)
+
         try:
             frame_iter = iter(frames)
             first_frames: list[_ScanFrame] = []
@@ -800,21 +825,11 @@ class VideoScanner:
                 if progress is not None and progress.is_cancel_requested():
                     break
                 first_frames.append(frame)
-                if len(first_frames) >= SCAN_BATCH_SIZE:
+                if len(first_frames) >= SCAN_LOCATOR_SIZE:
                     break
 
             if first_frames and not (progress is not None and progress.is_cancel_requested()):
-                first_schedule = self._first_locator_batch_scale_indices(
-                    len(first_frames),
-                    len(scales),
-                )
-                first_batch = [
-                    (frame.data, scale_indices)
-                    for frame, scale_indices in zip(first_frames, first_schedule, strict=True)
-                    if scale_indices
-                ]
-                if first_batch:
-                    submit_batch(first_batch, first_frames[-1].timestamp)
+                submit_discovery_batches(first_frames)
                 while pending and not (progress is not None and progress.is_cancel_requested()):
                     collect_one()
 
