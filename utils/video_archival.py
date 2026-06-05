@@ -32,10 +32,10 @@ SCAN_TEMPLATE_SCALE_MAX = 2.0
 SCAN_TEMPLATE_SCALE_MIN = 0.2
 SCAN_TEMPLATE_SCALE_STEP = 0.01
 SCAN_LOCATOR_SIZE = 60
-SCAN_LOCATOR_NORMAL_SCALES_PER_SAMPLE = 10
+SCAN_LOCATOR_SCALE_EVALUATIONS = 2
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
-SCAN_MAX_CANDIDATES = 12
+SCAN_MAX_CANDIDATES = 4
 
 
 class _AdaptiveScanThreadBudget:
@@ -298,6 +298,7 @@ class ScanProgress:
 
 @dataclass(frozen=True)
 class _ScanCandidate:
+    locator_key: tuple[int, ...]
     template_id: int
     x: int
     y: int
@@ -374,10 +375,10 @@ class _TopScanCandidates:
     def __init__(self, limit: int):
         self.limit = max(1, int(limit))
         self._next_index = 0
-        self._heap: list[tuple[float, int, tuple[int, int, int, int, int], _ScanCandidate]] = []
-        self._by_key: dict[tuple[int, int, int, int, int], _ScanCandidate] = {}
+        self._heap: list[tuple[float, int, tuple[int, ...], _ScanCandidate]] = []
+        self._by_key: dict[tuple[int, ...], _ScanCandidate] = {}
 
-    def insert(self, key: tuple[int, int, int, int, int], candidate: _ScanCandidate) -> None:
+    def insert(self, key: tuple[int, ...], candidate: _ScanCandidate) -> None:
         existing = self._by_key.get(key)
         if existing is not None and existing.locator_score >= candidate.locator_score:
             return
@@ -417,14 +418,8 @@ class _TopScanCandidates:
         heapq.heapify(self._heap)
         self._next_index = len(self._heap)
 
-    def _key(self, candidate: _ScanCandidate) -> tuple[int, int, int, int, int]:
-        return (
-            candidate.template_id,
-            candidate.x // 2,
-            candidate.y // 2,
-            candidate.width,
-            candidate.height,
-        )
+    def _key(self, candidate: _ScanCandidate) -> tuple[int, ...]:
+        return candidate.locator_key
 
 
 @dataclass(frozen=True)
@@ -625,28 +620,31 @@ class VideoScanner:
         if sample_count <= 0 or scale_count <= 0:
             return []
 
-        tries_per_scale = min(2, sample_count)
-        assignments = scale_count * tries_per_scale
+        scale_evaluations = scale_count * SCAN_LOCATOR_SCALE_EVALUATIONS
         scales_per_sample = min(
             scale_count,
-            math.ceil(assignments / sample_count),
+            max(1, math.ceil(scale_evaluations / sample_count)),
         )
         scheduled: list[tuple[int, ...]] = []
-        assignment_index = 0
-        for _sample_index in range(sample_count):
+        scale_index = 0
+        for sample_index in range(sample_count):
             sample_scales: list[int] = []
             seen_scales: set[int] = set()
             while (
                 len(sample_scales) < scales_per_sample
-                and assignment_index < assignments
+                and scale_index < scale_evaluations
+                and len(seen_scales) < scale_count
             ):
-                scale_index = assignment_index % scale_count
-                assignment_index += 1
-                if scale_index in seen_scales:
+                candidate_scale_index = scale_index % scale_count
+                scale_index += 1
+                if candidate_scale_index in seen_scales:
                     continue
-                seen_scales.add(scale_index)
-                sample_scales.append(scale_index)
+                seen_scales.add(candidate_scale_index)
+                sample_scales.append(candidate_scale_index)
             scheduled.append(tuple(sample_scales))
+            if scale_index >= scale_evaluations:
+                scheduled.extend(() for _ in range(sample_count - sample_index - 1))
+                break
         return scheduled
 
     def _candidate_scale_indices(
@@ -663,7 +661,7 @@ class VideoScanner:
         ))
         if scale_indices:
             return scale_indices
-        return tuple(range(min(scale_count, SCAN_LOCATOR_NORMAL_SCALES_PER_SAMPLE)))
+        return tuple(range(min(scale_count, SCAN_MAX_CANDIDATES)))
 
     def _frame_stream(
         self,
@@ -979,13 +977,16 @@ class VideoScanner:
                 template = template_for_scale(scale_index)
                 if template is None:
                     continue
-                height, width = template.shape[:2]
-                if width <= self.width and height <= self.height:
+                template_height, template_width = template.shape[:2]
+                if template_width <= self.width and template_height <= self.height:
                     result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
                     _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
                     x, y = max_loc
+                    width = template_width
+                    height = template_height
+                    key = (x // 2, y // 2, width, height)
                     candidate_template = template
-                elif width >= self.width and height >= self.height:
+                elif template_width >= self.width and template_height >= self.height:
                     result = cv2.matchTemplate(template, frame, cv2.TM_CCOEFF_NORMED)
                     _min_value, max_value, _min_loc, max_loc = cv2.minMaxLoc(result)
                     template_x, template_y = max_loc
@@ -993,13 +994,20 @@ class VideoScanner:
                     y = 0
                     width = self.width
                     height = self.height
+                    key = (
+                        template_x // 2,
+                        template_y // 2,
+                        template_width,
+                        template_height,
+                        self.width,
+                        self.height,
+                    )
                     candidate_template = template[
                         template_y:template_y + self.height,
                         template_x:template_x + self.width,
                     ]
                 else:
                     continue
-                key = (scale_index, x // 2, y // 2, width, height)
                 score = float(max_value)
                 sample_step = self._sample_step(width, height)
                 sampled_template = candidate_template[::sample_step, ::sample_step].copy()
@@ -1008,6 +1016,7 @@ class VideoScanner:
                 candidates.insert(
                     key,
                     _ScanCandidate(
+                        locator_key=key,
                         template_id=scale_index,
                         x=x,
                         y=y,
