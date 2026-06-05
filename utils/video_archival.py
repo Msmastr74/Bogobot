@@ -235,6 +235,9 @@ class VideoArchiver:
                 last_frame_at=self._last_frame_at,
             )
 
+    def active_until_for_day(self, day: str) -> float | None:
+        return self._recorded_until_for_day(day, self.video_path_for_day(day))
+
     def video_path_for_timestamp(self, timestamp: float) -> Path:
         day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
         return self.video_path_for_day(day)
@@ -244,6 +247,19 @@ class VideoArchiver:
         if final_path.exists():
             return final_path
         return self.directory / f"{day}.ts"
+
+    def _recorded_until_for_day(self, day: str, video_path: Path) -> float | None:
+        if not video_path.exists():
+            return None
+        start_timestamp = self._read_start_timestamp(day)
+        if start_timestamp is None:
+            start_timestamp = self._read_metadata_start_timestamp(video_path)
+        if start_timestamp is None:
+            return None
+        duration = self._video_duration(video_path)
+        if duration is None:
+            return None
+        return start_timestamp + duration
 
     def finalize_old_recordings(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)

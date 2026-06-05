@@ -57,6 +57,7 @@ class ScanView(discord.ui.LayoutView):
         self,
         *,
         day_timestamp: float,
+        active_until_timestamp: float | None = None,
         input_media: str | discord.File,
         progress: ScanProgress,
         result: VideoScanResult | None = None,
@@ -66,7 +67,10 @@ class ScanView(discord.ui.LayoutView):
 
         container = discord.ui.Container(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"## Scan of <t:{int(day_timestamp)}:D>"),
+                discord.ui.TextDisplay(self._title(
+                    day_timestamp,
+                    active_until_timestamp,
+                )),
                 accessory=discord.ui.Thumbnail(
                     input_media,
                     description="Input image",
@@ -97,6 +101,16 @@ class ScanView(discord.ui.LayoutView):
             container.add_item(discord.ui.TextDisplay(self._completed_text(progress)))
 
         self.add_item(container)
+
+    def _title(
+        self,
+        day_timestamp: float,
+        active_until_timestamp: float | None,
+    ) -> str:
+        title = f"## Scan of <t:{int(day_timestamp)}:D>"
+        if active_until_timestamp is None:
+            return title
+        return f"{title}\n> up to <t:{round(active_until_timestamp)}:T>"
 
     def _progress_text(self, progress: ScanProgress) -> str:
         lines = [
@@ -1173,6 +1187,7 @@ async def setup(bot: BotCore):
             return
 
         day_timestamp = datetime.strptime(day, "%Y-%m-%d").timestamp()
+        active_until_timestamp = video_archiver.active_until_for_day(day)
         archive_scan_running = True
         scan_started = False
         try:
@@ -1203,6 +1218,7 @@ async def setup(bot: BotCore):
         scan_message = await bot.discord.send(
             view=ScanView(
                 day_timestamp=day_timestamp,
+                active_until_timestamp=active_until_timestamp,
                 input_media=input_file,
                 progress=progress,
             ),
@@ -1237,6 +1253,7 @@ async def setup(bot: BotCore):
                 await scan_message.edit(
                     view=ScanView(
                         day_timestamp=day_timestamp,
+                        active_until_timestamp=active_until_timestamp,
                         input_media=input_media,
                         progress=progress,
                     ),
@@ -1271,6 +1288,7 @@ async def setup(bot: BotCore):
             await scan_message.edit(
                 view=ScanView(
                     day_timestamp=day_timestamp,
+                    active_until_timestamp=active_until_timestamp,
                     input_media=input_media,
                     progress=progress,
                 ),
@@ -1305,6 +1323,7 @@ async def setup(bot: BotCore):
             await scan_message.edit(
                 view=ScanView(
                     day_timestamp=day_timestamp,
+                    active_until_timestamp=active_until_timestamp,
                     input_media=input_media,
                     progress=progress,
                     result=result,
