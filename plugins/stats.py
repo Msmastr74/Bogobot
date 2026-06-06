@@ -13,6 +13,7 @@ from utils.schemas import BogostreamApiStats
 
 BOGOSTREAM_STATS_API_URL = "https://bogo.swapjs.dev/api/stats"
 BOGOSTREAM_STATS_API_INTERVAL_SECONDS = 1.0
+MILESTONE_ROUND_TO_PREFIX = [1, 2, 3, 5]
 
 STAT_SUFFIX_POWERS = {
     "": 0,
@@ -258,8 +259,21 @@ async def setup(bot: BotCore):
         if number <= 0:
             return None
 
-        power = 10 ** (len(str(number)) - 1)
-        return f"{number // power * power:,}"
+        rounded = 0
+        for exponent in range(len(str(number))):
+            power = 10 ** exponent
+            for prefix in MILESTONE_ROUND_TO_PREFIX:
+                prefix = int(prefix)
+                if prefix <= 0:
+                    continue
+
+                candidate = prefix * power
+                if rounded < candidate <= number:
+                    rounded = candidate
+
+        if rounded <= 0:
+            return None
+        return f"{rounded:,}"
 
     def round_stat_down_to_int(value: object) -> str | None:
         number = parse_number(value)
