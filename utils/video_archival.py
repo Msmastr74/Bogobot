@@ -624,10 +624,22 @@ class VideoScanner:
         if np.all(np.diff(selected_frame_indices) == 1):
             return f"select=between(n\\,{first_index}\\,{last_index})"
 
-        return "select=" + "+".join(
-            f"eq(n\\,{int(index)})"
+        return "select=" + self._frame_index_select_tree([
+            int(index)
             for index in selected_frame_indices
-        )
+        ])
+
+    def _frame_index_select_tree(self, indices: list[int]) -> str:
+        if not indices:
+            return "0"
+        if len(indices) == 1:
+            return f"eq(n\\,{indices[0]})"
+
+        mid = len(indices) // 2
+        pivot = indices[mid]
+        left_side = self._frame_index_select_tree(indices[:mid])
+        right_side = self._frame_index_select_tree(indices[mid:])
+        return f"if(lt(n\\,{pivot})\\,{left_side}\\,{right_side})"
 
     def _selected_frame_indices(
         self,
