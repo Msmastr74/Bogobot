@@ -589,29 +589,15 @@ class VideoScanner:
         decode_start_seconds: float | None = None,
     ) -> list[str]:
         filters: list[str] = []
-        range_filter: str | None = None
         seek_seconds, decode_start_seconds, decode_duration_seconds = self._seek_plan(
             start_seconds,
             duration_seconds,
             decode_start_seconds=decode_start_seconds,
         )
-        if start_seconds > 0 or duration_seconds is not None:
-            if duration_seconds is None:
-                range_filter = f"gte(t\\,{decode_start_seconds:.6f})"
-            else:
-                end_seconds = decode_start_seconds + duration_seconds
-                range_filter = f"between(t\\,{decode_start_seconds:.6f}\\,{end_seconds:.6f})"
         if select_interval_seconds is not None:
             interval = max(0.25, select_interval_seconds)
             interval_filter = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})"
-            filters.append(
-                f"select={range_filter}*({interval_filter})"
-                if range_filter is not None else
-                f"select={interval_filter}"
-            )
-        elif range_filter is not None:
-            filters.append(f"select={range_filter}")
-        filters.insert(0, "setpts=PTS-STARTPTS")
+            filters.append(f"select={interval_filter}")
         filters.extend([f"scale={self.width}:{self.height}", "showinfo"])
         command = [
             "ffmpeg",
@@ -830,6 +816,13 @@ class VideoScanner:
                         break
                     timestamp = timestamp_queue.get()
                     if timestamp is None:
+                        break
+                    if timestamp < scan_range.start_timestamp:
+                        continue
+                    if timestamp > scan_range.end_timestamp:
+                        terminated = True
+                        with contextlib.suppress(OSError):
+                            process.terminate()
                         break
                     yield _ScanFrame(
                         timestamp=timestamp,
@@ -1669,7 +1662,7 @@ class VideoArchiver:
         else:
             seek_seconds = max(0.0, min(relative_seconds, decode_start_seconds))
         decode_seconds = relative_seconds - seek_seconds
-        select_filter = f"setpts=PTS-STARTPTS,select=gte(t\\,{decode_seconds:.6f})"
+        select_filter = f"select=gte(t\\,{decode_seconds:.6f})"
         command = [
             "ffmpeg",
             "-hide_banner",
