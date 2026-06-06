@@ -1,5 +1,5 @@
 import contextlib
-import bisect
+from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -15,13 +15,14 @@ import subprocess
 import threading
 import time
 
+import numpy as np
+from numpy.typing import NDArray
 from PIL import Image
 from cv2.typing import MatLike
 
 from utils.logger_pipe import PipeLogger, log_subprocess_pipe
 
 
-SHOWINFO_RE = re.compile(r"n:\s*(?P<index>\d+)\s+pts:\s*\S+\s+pts_time:(?P<time>-?\d+(?:\.\d+)?)")
 SCAN_MAX_THREAD_CAP = 8
 SCAN_THREAD_HEADROOM = 1.0
 SCAN_THREAD_SAMPLE_SECONDS = 2.0
@@ -40,6 +41,8 @@ SCAN_FRAME_STREAM_PREROLL_SECONDS = 180.0
 SCAN_BATCH_SIZE = 64
 SCAN_RESULT_LIMIT = 8
 SCAN_MAX_CANDIDATES = 4
+FRAME_TIMELINE_CACHE_SIZE = 4
+FrameTimeline = NDArray[np.float64]
 
 
 class _AdaptiveScanThreadBudget:
@@ -330,6 +333,7 @@ class _PreparedScanRange:
     start_timestamp: float
     end_timestamp: float
     decode_start_timestamp: float | None = None
+    timeline_pts: FrameTimeline = field(default_factory=lambda: np.array([], dtype=np.float64))
 
     @property
     def start_seconds(self) -> float:
@@ -589,28 +593,36 @@ class VideoScanner:
         decode_start_seconds: float | None = None,
     ) -> list[str]:
         filters: list[str] = []
-        seek_seconds, decode_start_seconds, decode_duration_seconds = self._seek_plan(
-            start_seconds,
-            duration_seconds,
-            decode_start_seconds=decode_start_seconds,
-        )
+        range_filter: str | None = None
+        input_duration_seconds: float | None = None
+        if start_seconds > 0 or duration_seconds is not None:
+            if duration_seconds is None:
+                range_filter = f"gte(t\\,{start_seconds:.6f})"
+            else:
+                end_seconds = start_seconds + max(0.0, duration_seconds)
+                range_filter = f"between(t\\,{start_seconds:.6f}\\,{end_seconds:.6f})"
+                input_duration_seconds = end_seconds + 1.0
         if select_interval_seconds is not None:
             interval = max(0.25, select_interval_seconds)
             interval_filter = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})"
-            filters.append(f"select={interval_filter}")
-        filters.extend([f"scale={self.width}:{self.height}", "showinfo"])
+            filters.append(
+                f"select={range_filter}*({interval_filter})"
+                if range_filter is not None else
+                f"select={interval_filter}"
+            )
+        elif range_filter is not None:
+            filters.append(f"select={range_filter}")
+        filters.append(f"scale={self.width}:{self.height}")
         command = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "info",
+            "-loglevel", "error",
         ]
-        if seek_seconds > 0:
-            command.extend(["-ss", f"{seek_seconds:.6f}"])
+        if input_duration_seconds is not None:
+            command.extend(["-t", f"{input_duration_seconds:.6f}"])
         command.extend([
             "-i", str(video_path),
         ])
-        if decode_duration_seconds is not None:
-            command.extend(["-t", f"{decode_duration_seconds:.6f}"])
         command.extend([
             "-map", "0:v:0",
             "-vf", ",".join(filters),
@@ -620,6 +632,32 @@ class VideoScanner:
             "pipe:1",
         ])
         return command
+
+    def _selected_timestamps(
+        self,
+        scan_range: _PreparedScanRange,
+        select_interval_seconds: float | None,
+    ) -> Iterator[float]:
+        timeline_pts = scan_range.timeline_pts
+        if timeline_pts.size == 0:
+            return
+
+        start_seconds = scan_range.start_seconds
+        end_seconds = scan_range.start_seconds + scan_range.duration_seconds
+        interval = (
+            None
+            if select_interval_seconds is None else
+            max(0.25, select_interval_seconds)
+        )
+        start_index = int(np.searchsorted(timeline_pts, start_seconds - 0.000001, side="left"))
+        previous_selected: float | None = None
+        for pts in timeline_pts[start_index:]:
+            if pts > end_seconds + 0.000001:
+                break
+            if interval is not None and previous_selected is not None and pts - previous_selected < interval:
+                continue
+            previous_selected = pts
+            yield scan_range.archive_start_timestamp + float(pts)
 
     def _seek_plan(
         self,
@@ -755,12 +793,7 @@ class VideoScanner:
         for scan_range in ranges:
             if progress is not None and progress.is_cancel_requested():
                 return
-            seek_seconds, _decode_start_seconds, _decode_duration_seconds = self._seek_plan(
-                scan_range.start_seconds,
-                scan_range.duration_seconds,
-                decode_start_seconds=scan_range.decode_start_seconds,
-            )
-            timestamp_base = scan_range.archive_start_timestamp + seek_seconds
+            timestamps = self._selected_timestamps(scan_range, select_interval_seconds)
             process = subprocess.Popen(
                 self._frames_command(
                     scan_range.video_path,
@@ -777,33 +810,7 @@ class VideoScanner:
             assert process.stdout is not None
             assert process.stderr is not None
 
-            timestamp_queue: queue.Queue[float | None] = queue.Queue()
-            stderr_chunks: list[bytes] = []
             terminated = False
-
-            def read_stderr() -> None:
-                assert process.stderr is not None
-                while True:
-                    line = process.stderr.readline()
-                    if not line:
-                        break
-                    match = SHOWINFO_RE.search(line.decode(errors="replace"))
-                    if match is None:
-                        stderr_chunks.append(line)
-                        continue
-                    with contextlib.suppress(ValueError):
-                        timestamp_queue.put(
-                            timestamp_base
-                            + float(match.group("time"))
-                        )
-                timestamp_queue.put(None)
-
-            stderr_thread = threading.Thread(
-                target=read_stderr,
-                name="BogobotVideoScanStderr",
-                daemon=True,
-            )
-            stderr_thread.start()
             try:
                 while True:
                     if progress is not None and progress.is_cancel_requested():
@@ -814,8 +821,11 @@ class VideoScanner:
                     data = process.stdout.read(frame_size)
                     if not data or len(data) != frame_size:
                         break
-                    timestamp = timestamp_queue.get()
+                    timestamp = next(timestamps, None)
                     if timestamp is None:
+                        terminated = True
+                        with contextlib.suppress(OSError):
+                            process.terminate()
                         break
                     if timestamp < scan_range.start_timestamp:
                         continue
@@ -832,14 +842,23 @@ class VideoScanner:
             finally:
                 if progress is not None:
                     progress.set_process(None)
+                if process.poll() is None:
+                    terminated = True
+                    with contextlib.suppress(OSError):
+                        process.terminate()
                 if process.stdout is not None:
                     with contextlib.suppress(OSError):
                         process.stdout.close()
+                stderr = b""
+                if process.stderr is not None:
+                    with contextlib.suppress(OSError):
+                        stderr = process.stderr.read()
+                    with contextlib.suppress(OSError):
+                        process.stderr.close()
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=5)
-                stderr_thread.join(timeout=5)
                 if not terminated and process.returncode not in (0, None):
-                    message = b"".join(stderr_chunks).decode(errors="replace").strip()
+                    message = stderr.decode(errors="replace").strip()
                     if message:
                         self.logger.warning(f"Video archive frame stream failed: {message}")
 
@@ -1261,7 +1280,7 @@ class VideoArchiver:
         self._recorded_frames = 0
         self._dropped_frames = 0
         self._last_frame_at: float | None = None
-        self._frame_timeline_cache: dict[Path, tuple[int, int, list[float]]] = {}
+        self._frame_timeline_cache: OrderedDict[Path, tuple[int, int, FrameTimeline]] = OrderedDict()
 
     @property
     def enabled(self) -> bool:
@@ -1555,13 +1574,13 @@ class VideoArchiver:
             return ()
         archive_start_timestamp, _archive_end_timestamp = bounds
         timeline_pts = self._cached_frame_timeline_pts(video_path)
-        if not timeline_pts:
+        if timeline_pts.size == 0:
             return ()
 
         target_relative_seconds = max(0.0, target_timestamp - archive_start_timestamp)
         target_frame_index = max(
             0,
-            bisect.bisect_right(timeline_pts, target_relative_seconds) - 1,
+            int(np.searchsorted(timeline_pts, target_relative_seconds, side="right")) - 1,
         )
         start_frame_index = max(0, target_frame_index - before)
         end_frame_index = min(len(timeline_pts) - 1, target_frame_index + after + 1)
@@ -1571,9 +1590,10 @@ class VideoArchiver:
             day=day,
             video_path=video_path,
             archive_start_timestamp=archive_start_timestamp,
-            start_timestamp=archive_start_timestamp + timeline_pts[start_frame_index],
-            end_timestamp=archive_start_timestamp + timeline_pts[end_frame_index] + 0.001,
-            decode_start_timestamp=archive_start_timestamp + timeline_pts[decode_frame_index],
+            start_timestamp=archive_start_timestamp + float(timeline_pts[start_frame_index]),
+            end_timestamp=archive_start_timestamp + float(timeline_pts[end_frame_index]) + 0.001,
+            decode_start_timestamp=archive_start_timestamp + float(timeline_pts[decode_frame_index]),
+            timeline_pts=timeline_pts,
         )
         return VideoScanner(
             width=self.width,
@@ -1597,6 +1617,9 @@ class VideoArchiver:
             bounds = self.recorded_bounds_for_day(archive_range.day)
             if bounds is None:
                 continue
+            timeline_pts = self._cached_frame_timeline_pts(video_path)
+            if timeline_pts.size == 0:
+                continue
             decode_start_timestamp = self._decode_start_timestamp_for_target(
                 video_path,
                 bounds[0],
@@ -1609,6 +1632,7 @@ class VideoArchiver:
                 start_timestamp=archive_range.start_timestamp,
                 end_timestamp=archive_range.end_timestamp,
                 decode_start_timestamp=decode_start_timestamp,
+                timeline_pts=timeline_pts,
             ))
         return ranges
 
@@ -1619,32 +1643,36 @@ class VideoArchiver:
         target_timestamp: float,
     ) -> float | None:
         timeline_pts = self._cached_frame_timeline_pts(video_path)
-        if not timeline_pts:
+        if timeline_pts.size == 0:
             return None
 
         target_relative_seconds = max(0.0, target_timestamp - archive_start_timestamp)
         target_frame_index = max(
             0,
-            bisect.bisect_right(timeline_pts, target_relative_seconds) - 1,
+            int(np.searchsorted(timeline_pts, target_relative_seconds, side="right")) - 1,
         )
         decode_frame_index = max(0, target_frame_index - self.keyint * 2)
-        return archive_start_timestamp + timeline_pts[decode_frame_index]
+        return archive_start_timestamp + float(timeline_pts[decode_frame_index])
 
-    def _cached_frame_timeline_pts(self, video_path: Path) -> list[float]:
+    def _cached_frame_timeline_pts(self, video_path: Path) -> FrameTimeline:
         try:
             stat = video_path.stat()
         except OSError:
-            return []
+            return np.array([], dtype=np.float64)
 
         cache_key = video_path.resolve()
         size = int(stat.st_size)
         mtime_ns = int(stat.st_mtime_ns)
         cache_value = self._frame_timeline_cache.get(cache_key)
         if cache_value is not None and cache_value[0] == size and cache_value[1] == mtime_ns:
+            self._frame_timeline_cache.move_to_end(cache_key)
             return cache_value[2]
 
         timeline_pts = self._frame_timeline_pts(self._read_frame_pts(video_path))
         self._frame_timeline_cache[cache_key] = (size, mtime_ns, timeline_pts)
+        self._frame_timeline_cache.move_to_end(cache_key)
+        while len(self._frame_timeline_cache) > FRAME_TIMELINE_CACHE_SIZE:
+            self._frame_timeline_cache.popitem(last=False)
         return timeline_pts
 
     def _extract_frame_command(
@@ -1700,13 +1728,13 @@ class VideoArchiver:
 
         frame_pts = self._read_frame_pts(video_path)
         timeline_pts = self._frame_timeline_pts(frame_pts)
-        if not timeline_pts:
+        if timeline_pts.size == 0:
             return None
-        return timeline_pts[-1]
+        return float(timeline_pts[-1])
 
-    def _frame_timeline_pts(self, frame_pts: list[tuple[int, float]]) -> list[float]:
+    def _frame_timeline_pts(self, frame_pts: list[tuple[int, float]]) -> FrameTimeline:
         if not frame_pts:
-            return []
+            return np.array([], dtype=np.float64)
         segment_base = 0.0
         segment_first_pts = frame_pts[0][1]
         previous_pts = segment_first_pts
@@ -1720,7 +1748,7 @@ class VideoArchiver:
             previous_pts = pts
             previous_timeline_pts = timeline_pt
             timeline_pts.append(timeline_pt)
-        return timeline_pts
+        return np.asarray(timeline_pts, dtype=np.float64)
 
     def repair_recording_timestamps(self, ts_path: Path) -> bool:
         if ts_path.suffix != ".ts" or not ts_path.exists():
