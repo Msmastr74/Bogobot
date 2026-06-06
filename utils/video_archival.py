@@ -43,6 +43,7 @@ SCAN_RESULT_LIMIT = 8
 SCAN_MAX_CANDIDATES = 4
 FRAME_TIMELINE_CACHE_SIZE = 4
 FrameTimeline = NDArray[np.float64]
+FrameIndices = NDArray[np.int64]
 
 
 class _AdaptiveScanThreadBudget:
@@ -587,32 +588,13 @@ class VideoScanner:
         self,
         video_path: Path,
         *,
-        start_seconds: float = 0.0,
-        duration_seconds: float | None = None,
-        select_interval_seconds: float | None = None,
-        decode_start_seconds: float | None = None,
+        selected_frame_indices: FrameIndices,
+        input_duration_seconds: float | None = None,
     ) -> list[str]:
-        filters: list[str] = []
-        range_filter: str | None = None
-        input_duration_seconds: float | None = None
-        if start_seconds > 0 or duration_seconds is not None:
-            if duration_seconds is None:
-                range_filter = f"gte(t\\,{start_seconds:.6f})"
-            else:
-                end_seconds = start_seconds + max(0.0, duration_seconds)
-                range_filter = f"between(t\\,{start_seconds:.6f}\\,{end_seconds:.6f})"
-                input_duration_seconds = end_seconds + 1.0
-        if select_interval_seconds is not None:
-            interval = max(0.25, select_interval_seconds)
-            interval_filter = f"isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})"
-            filters.append(
-                f"select={range_filter}*({interval_filter})"
-                if range_filter is not None else
-                f"select={interval_filter}"
-            )
-        elif range_filter is not None:
-            filters.append(f"select={range_filter}")
-        filters.append(f"scale={self.width}:{self.height}")
+        filters = [
+            self._frame_index_select_filter(selected_frame_indices),
+            f"scale={self.width}:{self.height}",
+        ]
         command = [
             "ffmpeg",
             "-hide_banner",
@@ -633,14 +615,28 @@ class VideoScanner:
         ])
         return command
 
-    def _selected_timestamps(
+    def _frame_index_select_filter(self, selected_frame_indices: FrameIndices) -> str:
+        if selected_frame_indices.size == 0:
+            return "select=0"
+
+        first_index = int(selected_frame_indices[0])
+        last_index = int(selected_frame_indices[-1])
+        if np.all(np.diff(selected_frame_indices) == 1):
+            return f"select=between(n\\,{first_index}\\,{last_index})"
+
+        return "select=" + "+".join(
+            f"eq(n\\,{int(index)})"
+            for index in selected_frame_indices
+        )
+
+    def _selected_frame_indices(
         self,
         scan_range: _PreparedScanRange,
         select_interval_seconds: float | None,
-    ) -> Iterator[float]:
+    ) -> FrameIndices:
         timeline_pts = scan_range.timeline_pts
         if timeline_pts.size == 0:
-            return
+            return np.array([], dtype=np.int64)
 
         start_seconds = scan_range.start_seconds
         end_seconds = scan_range.start_seconds + scan_range.duration_seconds
@@ -650,14 +646,19 @@ class VideoScanner:
             max(0.25, select_interval_seconds)
         )
         start_index = int(np.searchsorted(timeline_pts, start_seconds - 0.000001, side="left"))
+        end_index = int(np.searchsorted(timeline_pts, end_seconds + 0.000001, side="right"))
+        if interval is None:
+            return np.arange(start_index, end_index, dtype=np.int64)
+
+        selected: list[int] = []
         previous_selected: float | None = None
-        for pts in timeline_pts[start_index:]:
-            if pts > end_seconds + 0.000001:
-                break
-            if interval is not None and previous_selected is not None and pts - previous_selected < interval:
+        for index in range(start_index, end_index):
+            pts = float(timeline_pts[index])
+            if previous_selected is not None and pts - previous_selected < interval:
                 continue
             previous_selected = pts
-            yield scan_range.archive_start_timestamp + float(pts)
+            selected.append(index)
+        return np.asarray(selected, dtype=np.int64)
 
     def _seek_plan(
         self,
@@ -793,14 +794,19 @@ class VideoScanner:
         for scan_range in ranges:
             if progress is not None and progress.is_cancel_requested():
                 return
-            timestamps = self._selected_timestamps(scan_range, select_interval_seconds)
+            selected_frame_indices = self._selected_frame_indices(scan_range, select_interval_seconds)
+            if selected_frame_indices.size == 0:
+                continue
+            selected_timestamps = (
+                scan_range.archive_start_timestamp
+                + scan_range.timeline_pts[selected_frame_indices]
+            )
+            timestamp_index = 0
             process = subprocess.Popen(
                 self._frames_command(
                     scan_range.video_path,
-                    start_seconds=scan_range.start_seconds,
-                    duration_seconds=scan_range.duration_seconds,
-                    select_interval_seconds=select_interval_seconds,
-                    decode_start_seconds=scan_range.decode_start_seconds,
+                    selected_frame_indices=selected_frame_indices,
+                    input_duration_seconds=float(scan_range.timeline_pts[int(selected_frame_indices[-1])]) + 1.0,
                 ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -821,12 +827,13 @@ class VideoScanner:
                     data = process.stdout.read(frame_size)
                     if not data or len(data) != frame_size:
                         break
-                    timestamp = next(timestamps, None)
-                    if timestamp is None:
+                    if timestamp_index >= selected_timestamps.size:
                         terminated = True
                         with contextlib.suppress(OSError):
                             process.terminate()
                         break
+                    timestamp = float(selected_timestamps[timestamp_index])
+                    timestamp_index += 1
                     if timestamp < scan_range.start_timestamp:
                         continue
                     if timestamp > scan_range.end_timestamp:
