@@ -3,7 +3,7 @@ import bisect
 from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 import heapq
 import math
 import logging
@@ -1355,7 +1355,7 @@ class VideoArchiver:
         end_timestamp: float,
     ) -> list[VideoArchiveRange]:
         ranges: list[VideoArchiveRange] = []
-        for day in self.recorded_days():
+        for day in self._days_in_interval(start_timestamp, end_timestamp):
             bounds = self.recorded_bounds_for_day(day)
             if bounds is None:
                 continue
@@ -1369,6 +1369,24 @@ class VideoArchiver:
                     end_timestamp=range_end_timestamp,
                 ))
         return ranges
+
+    def _days_in_interval(self, start_timestamp: float, end_timestamp: float) -> Iterator[str]:
+        start_day = datetime.fromtimestamp(start_timestamp).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        end_day = datetime.fromtimestamp(end_timestamp).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        current_day = start_day
+        while current_day <= end_day:
+            yield current_day.strftime("%Y-%m-%d")
+            current_day += timedelta(days=1)
 
     def recorded_days(self) -> list[str]:
         days: set[str] = set()
@@ -1508,6 +1526,8 @@ class VideoArchiver:
         locator_interval_seconds: float = 30.0,
         progress: ScanProgress | None = None,
     ) -> VideoScanResult | None:
+        if progress is not None:
+            progress.set_stage("Preparing archive timeline")
         ranges = self._prepared_scan_ranges(start_timestamp, end_timestamp)
         return VideoScanner(
             width=self.width,
