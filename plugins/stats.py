@@ -208,7 +208,7 @@ async def setup(bot: BotCore):
             if stat_value:
                 await bot.milestones.update(milestone_name, stat_value, timestamp=frame_timestamp, img=img)
 
-        shuffles_sec = round_stat_down_to_power(stats.get("shuffles_sec"))
+        shuffles_sec = round_stat_down_to_digit(stats.get("shuffles_sec"))
         if shuffles_sec:
             await update_non_decreasing_milestone(
                 "Shuffles each second record",
@@ -274,6 +274,18 @@ async def setup(bot: BotCore):
         if rounded <= 0:
             return None
         return f"{rounded:,}"
+
+    def round_stat_down_to_digit(value: object) -> str | None:
+        number = parse_number(value)
+        if number is None:
+            return None
+
+        number = int(number)
+        if number <= 0:
+            return None
+
+        power = 10 ** (len(str(number)) - 1)
+        return f"{number // power * power:,}"
 
     def round_stat_down_to_int(value: object) -> str | None:
         number = parse_number(value)
