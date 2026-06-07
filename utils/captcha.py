@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 SECRET_KEY = secrets.token_bytes(32)
-
+NUM_DISTRACTORS = 6
 
 @dataclass
 class CaptchaChallenge:
@@ -114,7 +114,7 @@ class OcclusionPathCaptchaGenerator:
 
         true_path = self._cubic_bezier_points(p0, p1, p2, p3, steps=140)
 
-        for _ in range(10):
+        for _ in range(NUM_DISTRACTORS):
             self._draw_distractor_curve(draw, exits, path_shade)
 
         draw.line(true_path, fill=(path_shade, path_shade, path_shade), width=1)

@@ -142,18 +142,9 @@ class VerifyCaptchaView(discord.ui.LayoutView):
         self.cooldowns = cooldowns
         self.session = session
 
-        answer_button = discord.ui.Button(
-            label="Answer",
-            style=discord.ButtonStyle.primary,
-        )
-        answer_button.callback = self.answer
-
         self.add_item(discord.ui.Container(
-            discord.ui.Section(
-                discord.ui.TextDisplay("## Verification Captcha"),
-                discord.ui.TextDisplay(session.challenge.prompt),
-                accessory=answer_button,
-            ),
+            discord.ui.TextDisplay("## Verification Captcha"),
+            discord.ui.TextDisplay(session.challenge.prompt),
             discord.ui.Separator(),
             discord.ui.MediaGallery(
                 discord.MediaGalleryItem(
@@ -162,48 +153,21 @@ class VerifyCaptchaView(discord.ui.LayoutView):
                 )
             ),
         ))
-
-    async def answer(self, interaction: discord.Interaction) -> None:
-        if is_expired(self.session.challenge):
-            await interaction.response.send_message(
-                "That captcha expired. Please try verification again.",
-                ephemeral=True,
+        for label in "ABCDEF":
+            button = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
             )
-            return
+            button.callback = self._answer_callback(label)
+            self.add_item(button)
 
-        if self.session.attempts >= self.session.challenge.max_attempts:
-            await interaction.response.send_message(
-                "That captcha has no attempts left. Please try verification again later.",
-                ephemeral=True,
-            )
-            return
+    def _answer_callback(self, answer: str):
+        async def callback(interaction: discord.Interaction) -> None:
+            await self.answer(interaction, answer)
 
-        await interaction.response.send_modal(
-            VerifyCaptchaModal(
-                cooldowns=self.cooldowns,
-                session=self.session,
-            )
-        )
+        return callback
 
-
-class VerifyCaptchaModal(discord.ui.Modal, title="Verification Captcha"):
-    def __init__(
-        self,
-        *,
-        cooldowns: MutableMapping[int, VerifyCooldown],
-        session: VerifyCaptchaSession,
-    ) -> None:
-        super().__init__()
-        self.cooldowns = cooldowns
-        self.session = session
-        self.answer = discord.ui.TextInput(
-            required=True,
-            max_length=32,
-            placeholder="A, B, C, D, E, or F",
-        )
-        self.add_item(discord.ui.Label(text="Exit letter", component=self.answer))
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+    async def answer(self, interaction: discord.Interaction, answer: str) -> None:
         member = interaction.user
         guild = interaction.guild
         if guild is None or not isinstance(member, discord.Member):
@@ -233,8 +197,15 @@ class VerifyCaptchaModal(discord.ui.Modal, title="Verification Captcha"):
             )
             return
 
+        if self.session.attempts >= self.session.challenge.max_attempts:
+            await interaction.response.send_message(
+                "That captcha has no attempts left. Please try verification again later.",
+                ephemeral=True,
+            )
+            return
+
         self.session.attempts += 1
-        if not verify_answer(self.session.challenge, self.answer.value):
+        if not verify_answer(self.session.challenge, answer):
             await interaction.response.send_message(
                 "That captcha answer was not correct. Please try verification again after the cooldown.",
                 ephemeral=True,
