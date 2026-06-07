@@ -335,7 +335,7 @@ class ApiStatsContributorsGroup(StatsSchemaWithSectionCount):
 
 
 class ApiStatsTimingGroup(StatsSchema):
-    with StatsSchema.filter(uptime=StatsFilter(uptime_filter)):
+    with StatsSchema.filter(uptime=StatsFilter(uptime_filter, cache=uptime_filter)):
         uptime: int | None = Field(None, title="Uptime [STREAM]", validation_alias=AliasPath("uptime_since"))
     with StatsSchema.filter(elapsed_time=StatsFilter(cache=False)):
         elapsed_time: str = Field("", title="Elapsed Time [STATIC]")
