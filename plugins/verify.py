@@ -7,7 +7,7 @@ import discord
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.captcha import CaptchaChallenge, OcclusionPathCaptchaGenerator, is_expired, verify_answer
+from utils.captcha import LABELS, CaptchaChallenge, OcclusionPathCaptchaGenerator, is_expired, verify_answer
 
 
 VERIFIED_ROLE_NAME = "Verified"
@@ -143,7 +143,7 @@ class VerifyCaptchaView(discord.ui.LayoutView):
         self.session = session
 
         button_rows: list[discord.ui.ActionRow] = []
-        for label in "ABCDEF":
+        for label in LABELS:
             if len(button_rows) < 1 or len(button_rows[-1].children) >= 5:
                 button_rows.append(discord.ui.ActionRow())
             button = discord.ui.Button(

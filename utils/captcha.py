@@ -11,7 +11,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 SECRET_KEY = secrets.token_bytes(32)
-NUM_DISTRACTORS = 6
+LABELS = list("ABCDEFGHIJ")
+NUM_DISTRACTORS = len(LABELS)
 
 @dataclass
 class CaptchaChallenge:
@@ -91,11 +92,10 @@ class OcclusionPathCaptchaGenerator:
         self._draw_background(draw)
         path_shade = random.randint(85, 145)
 
-        labels = list("ABCDEF")
         exit_ys = self._spread_positions(6, 80, self.height - 80)
         random.shuffle(exit_ys)
 
-        exits = [(label, self.width - 90, y) for label, y in zip(labels, exit_ys)]
+        exits = [(label, self.width - 90, y) for label, y in zip(LABELS, exit_ys)]
         correct_label, end_x, end_y = random.choice(exits)
 
         start = (80, random.randint(110, self.height - 110))
