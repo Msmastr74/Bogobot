@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 SECRET_KEY = secrets.token_bytes(32)
 LABELS = list("ABCDEFGH")
 NUM_DISTRACTORS = len(LABELS) - 1
+MIN_START_DISTANCE = 48
 
 @dataclass
 class CaptchaChallenge:
@@ -113,6 +114,7 @@ class OcclusionPathCaptchaGenerator:
         p3 = end
 
         true_path = self._cubic_bezier_points(p0, p1, p2, p3, steps=140)
+        used_starts: list[tuple[int, int]] = [start]
 
         wrong_exits = [exit_point for exit_point in exits if exit_point[0] != correct_label]
         distractor_exits = [
@@ -121,7 +123,7 @@ class OcclusionPathCaptchaGenerator:
         ]
         random.shuffle(distractor_exits)
         for exit_point in distractor_exits:
-            self._draw_distractor_curve(draw, exit_point, path_shade)
+            self._draw_distractor_curve(draw, exit_point, path_shade, used_starts)
 
         draw.line(true_path, fill=(path_shade, path_shade, path_shade), width=1)
 
@@ -151,16 +153,12 @@ class OcclusionPathCaptchaGenerator:
         draw: ImageDraw.ImageDraw,
         exit_point: tuple[str, int, int],
         path_shade: int,
+        used_starts: list[tuple[int, int]],
     ) -> None:
         _, end_x, end_y = exit_point
 
-        p0 = (
-            self._grid_jitter([55, 90, 125, 160], 10),
-            self._grid_jitter(
-                self._diagonal_y_lanes(end_y, 60, self.height - 60),
-                12,
-            ),
-        )
+        p0 = self._distractor_start(end_y, used_starts)
+        used_starts.append(p0)
 
         p3 = (end_x, end_y)
         p1 = (
@@ -176,6 +174,46 @@ class OcclusionPathCaptchaGenerator:
         draw.line(pts, fill=(path_shade, path_shade, path_shade), width=1)
         sx, sy = p0
         draw.ellipse((sx - 8, sy - 8, sx + 8, sy + 8), fill=(35, 35, 35))
+
+    def _distractor_start(
+        self,
+        target_y: int,
+        used_starts: list[tuple[int, int]],
+    ) -> tuple[int, int]:
+        def candidate() -> tuple[int, int]:
+            return (
+                self._grid_jitter([55, 90, 125, 160], 10),
+                self._grid_jitter(
+                    self._diagonal_y_lanes(target_y, 60, self.height - 60),
+                    12,
+                ),
+            )
+
+        best = candidate()
+        best_distance = self._nearest_start_distance(best, used_starts)
+        for _ in range(64):
+            current = candidate()
+            current_distance = self._nearest_start_distance(current, used_starts)
+            if current_distance >= MIN_START_DISTANCE:
+                return current
+            if current_distance > best_distance:
+                best = current
+                best_distance = current_distance
+        return best
+
+    def _nearest_start_distance(
+        self,
+        point: tuple[int, int],
+        used_starts: list[tuple[int, int]],
+    ) -> float:
+        if not used_starts:
+            return float("inf")
+
+        px, py = point
+        return min(
+            ((px - ux) ** 2 + (py - uy) ** 2) ** 0.5
+            for ux, uy in used_starts
+        )
 
     def _grid_jitter(self, values: list[int], jitter: int) -> int:
         return random.choice(values) + random.randint(-jitter, jitter)
