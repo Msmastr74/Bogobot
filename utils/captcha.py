@@ -155,8 +155,11 @@ class OcclusionPathCaptchaGenerator:
         _, end_x, end_y = exit_point
 
         p0 = (
-            random.randint(40, 180),
-            self._diagonal_y_from(end_y, 60, self.height - 60),
+            self._grid_jitter([55, 90, 125, 160], 10),
+            self._grid_jitter(
+                self._diagonal_y_lanes(end_y, 60, self.height - 60),
+                12,
+            ),
         )
 
         p3 = (end_x, end_y)
@@ -173,6 +176,24 @@ class OcclusionPathCaptchaGenerator:
         draw.line(pts, fill=(path_shade, path_shade, path_shade), width=1)
         sx, sy = p0
         draw.ellipse((sx - 8, sy - 8, sx + 8, sy + 8), fill=(35, 35, 35))
+
+    def _grid_jitter(self, values: list[int], jitter: int) -> int:
+        return random.choice(values) + random.randint(-jitter, jitter)
+
+    def _diagonal_y_lanes(
+        self,
+        target_y: int,
+        low: int,
+        high: int,
+        min_delta: int = 120,
+    ) -> list[int]:
+        return [
+            y
+            for y in (80, 140, 220, 300, 380, 460)
+            if low <= y <= high and abs(y - target_y) >= min_delta
+        ] or [
+            self._diagonal_y_from(target_y, low, high, min_delta),
+        ]
 
     def _diagonal_y_from(
         self,
