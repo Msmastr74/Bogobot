@@ -172,6 +172,8 @@ class OcclusionPathCaptchaGenerator:
 
         pts = self._cubic_bezier_points(p0, p1, p2, p3, steps=140)
         draw.line(pts, fill=(path_shade, path_shade, path_shade), width=1)
+        sx, sy = p0
+        draw.ellipse((sx - 8, sy - 8, sx + 8, sy + 8), fill=(35, 35, 35))
 
     def _draw_occluders(self, draw: ImageDraw.ImageDraw) -> None:
         blocks = [
