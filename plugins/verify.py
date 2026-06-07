@@ -144,7 +144,7 @@ class VerifyCaptchaView(discord.ui.LayoutView):
 
         button_rows: list[discord.ui.ActionRow] = []
         for label in LABELS:
-            if len(button_rows) < 1 or len(button_rows[-1].children) >= 5:
+            if len(button_rows) < 1 or len(button_rows[-1].children) >= 4:
                 button_rows.append(discord.ui.ActionRow())
             button = discord.ui.Button(
                 label=label,

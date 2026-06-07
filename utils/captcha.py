@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 SECRET_KEY = secrets.token_bytes(32)
-LABELS = list("ABCDEFGHIJ")
+LABELS = list("ABCDEFGH")
 NUM_DISTRACTORS = len(LABELS)
 
 @dataclass
@@ -170,9 +170,24 @@ class OcclusionPathCaptchaGenerator:
 
     def _draw_occluders(self, draw: ImageDraw.ImageDraw) -> None:
         blocks = [
-            (300, 75, 635, 185),
-            (260, 210, 675, 335),
-            (305, 360, 635, 490),
+            (
+                300 + random.randint(-25, 25),
+                75 + random.randint(-10, 10),
+                635 + random.randint(-25, 25),
+                185 + random.randint(-10, 10),
+            ),
+            (
+                260 + random.randint(-25, 25),
+                210 + random.randint(-10, 10),
+                675 + random.randint(-25, 25),
+                335 + random.randint(-10, 10),
+            ),
+            (
+                305 + random.randint(-25, 25),
+                360 + random.randint(-10, 10),
+                635 + random.randint(-25, 25),
+                490 + random.randint(-10, 10),
+            ),
         ]
 
         for x0, y0, x1, y1 in blocks:
@@ -189,10 +204,10 @@ class OcclusionPathCaptchaGenerator:
             )
 
         for _ in range(4):
-            x = random.randint(285, 610)
-            y = random.randint(80, self.height - 120)
-            w = random.randint(70, 135)
-            h = random.randint(30, 60)
+            x = random.randint(250, 500)
+            y = random.randint(80, self.height - 80)
+            w = random.randint(50, 100)
+            h = random.randint(50, 100)
             fill = random.randint(190, 218)
 
             draw.rounded_rectangle(
