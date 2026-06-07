@@ -85,6 +85,10 @@ def duration_filter(seconds: int | str | None, _model: 'Schema') -> str:
     days, hours = divmod(hours, 24)
     return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
 
+def uptime_filter(since: int | None, _model: 'Schema') -> str:
+    since = int(since / 1000) if since is not None else None
+    return duration_filter(since, _model)
+
 def best_filter(value: Any, model: 'StatsSchemaWithSectionCount') -> str:
     return f"{value}/{model.section_count}"
 
@@ -330,8 +334,8 @@ class ApiStatsContributorsGroup(StatsSchemaWithSectionCount):
 
 
 class ApiStatsTimingGroup(StatsSchema):
-    with StatsSchema.filter(uptime=StatsFilter(duration_filter)):
-        uptime: int | None = Field(None, title="Uptime [STREAM]", validation_alias=AliasPath("engine", "uptime_s"))
+    with StatsSchema.filter(uptime=StatsFilter(uptime_filter)):
+        uptime: int | None = Field(None, title="Uptime [STREAM]", validation_alias=AliasPath("uptime_since"))
     with StatsSchema.filter(elapsed_time=StatsFilter(cache=False)):
         elapsed_time: str = Field("", title="Elapsed Time [STATIC]")
 
