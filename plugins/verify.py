@@ -142,6 +142,17 @@ class VerifyCaptchaView(discord.ui.LayoutView):
         self.cooldowns = cooldowns
         self.session = session
 
+        button_rows: list[discord.ui.ActionRow] = []
+        for label in "ABCDEF":
+            if len(button_rows) < 1 or len(button_rows[-1].children) >= 5:
+                button_rows.append(discord.ui.ActionRow())
+            button = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
+            )
+            button.callback = self._answer_callback(label)
+            button_rows[-1].add_item(button)
+
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay("## Verification Captcha"),
             discord.ui.TextDisplay(session.challenge.prompt),
@@ -152,14 +163,9 @@ class VerifyCaptchaView(discord.ui.LayoutView):
                     description="Verification captcha",
                 )
             ),
+            discord.ui.Separator(),
+            *button_rows,
         ))
-        for label in "ABCDEF":
-            button = discord.ui.Button(
-                label=label,
-                style=discord.ButtonStyle.secondary,
-            )
-            button.callback = self._answer_callback(label)
-            self.add_item(button)
 
     def _answer_callback(self, answer: str):
         async def callback(interaction: discord.Interaction) -> None:
