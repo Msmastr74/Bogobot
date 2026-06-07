@@ -1,5 +1,6 @@
 import sys
 import datetime
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -86,7 +87,7 @@ def duration_filter(seconds: int | str | None, _model: 'Schema') -> str:
     return f"{days:02}:{hours:02}:{minutes:02}:{seconds:02}"
 
 def uptime_filter(since: int | None, _model: 'Schema') -> str:
-    since = int(since / 1000) if since is not None else None
+    since = int(round(time.time() - since / 1000)) if since is not None else None
     return duration_filter(since, _model)
 
 def best_filter(value: Any, model: 'StatsSchemaWithSectionCount') -> str:
