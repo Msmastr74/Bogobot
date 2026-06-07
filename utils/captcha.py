@@ -92,7 +92,7 @@ class OcclusionPathCaptchaGenerator:
         self._draw_background(draw)
         path_shade = random.randint(85, 145)
 
-        exit_ys = self._spread_positions(6, 80, self.height - 80)
+        exit_ys = self._spread_positions(len(LABELS), 20, self.height - 20)
         random.shuffle(exit_ys)
 
         exits = [(label, self.width - 90, y) for label, y in zip(LABELS, exit_ys)]
