@@ -147,18 +147,11 @@ class OcclusionPathCaptchaGenerator:
         path_shade: int,
     ) -> None:
         _, end_x, end_y = random.choice(exits)
-        start_side = random.choice(("left", "middle"))
 
-        if start_side == "left":
-            p0 = (
-                random.randint(40, 180),
-                random.randint(60, self.height - 60),
-            )
-        else:
-            p0 = (
-                random.randint(260, 560),
-                random.randint(70, self.height - 70),
-            )
+        p0 = (
+            random.randint(40, 180),
+            random.randint(60, self.height - 60),
+        )
 
         p3 = (end_x, end_y)
         p1 = (
