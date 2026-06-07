@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 SECRET_KEY = secrets.token_bytes(32)
 LABELS = list("ABCDEFGH")
-NUM_DISTRACTORS = len(LABELS)
+NUM_DISTRACTORS = len(LABELS) - 1
 
 @dataclass
 class CaptchaChallenge:
@@ -98,7 +98,7 @@ class OcclusionPathCaptchaGenerator:
         exits = [(label, self.width - 90, y) for label, y in zip(LABELS, exit_ys)]
         correct_label, end_x, end_y = random.choice(exits)
 
-        start = (80, random.randint(110, self.height - 110))
+        start = (80, self._diagonal_y_from(end_y, 110, self.height - 110))
         end = (end_x, end_y)
 
         p0 = start
@@ -114,8 +114,14 @@ class OcclusionPathCaptchaGenerator:
 
         true_path = self._cubic_bezier_points(p0, p1, p2, p3, steps=140)
 
-        for _ in range(NUM_DISTRACTORS):
-            self._draw_distractor_curve(draw, exits, path_shade)
+        wrong_exits = [exit_point for exit_point in exits if exit_point[0] != correct_label]
+        distractor_exits = [
+            wrong_exits[index % len(wrong_exits)]
+            for index in range(NUM_DISTRACTORS)
+        ]
+        random.shuffle(distractor_exits)
+        for exit_point in distractor_exits:
+            self._draw_distractor_curve(draw, exit_point, path_shade)
 
         draw.line(true_path, fill=(path_shade, path_shade, path_shade), width=1)
 
@@ -143,14 +149,14 @@ class OcclusionPathCaptchaGenerator:
     def _draw_distractor_curve(
         self,
         draw: ImageDraw.ImageDraw,
-        exits: list[tuple[str, int, int]],
+        exit_point: tuple[str, int, int],
         path_shade: int,
     ) -> None:
-        _, end_x, end_y = random.choice(exits)
+        _, end_x, end_y = exit_point
 
         p0 = (
             random.randint(40, 180),
-            random.randint(60, self.height - 60),
+            self._diagonal_y_from(end_y, 60, self.height - 60),
         )
 
         p3 = (end_x, end_y)
@@ -167,6 +173,27 @@ class OcclusionPathCaptchaGenerator:
         draw.line(pts, fill=(path_shade, path_shade, path_shade), width=1)
         sx, sy = p0
         draw.ellipse((sx - 8, sy - 8, sx + 8, sy + 8), fill=(35, 35, 35))
+
+    def _diagonal_y_from(
+        self,
+        target_y: int,
+        low: int,
+        high: int,
+        min_delta: int = 120,
+    ) -> int:
+        ranges: list[tuple[int, int]] = []
+        upper_high = target_y - min_delta
+        lower_low = target_y + min_delta
+
+        if upper_high >= low:
+            ranges.append((low, min(upper_high, high)))
+        if lower_low <= high:
+            ranges.append((max(lower_low, low), high))
+        if not ranges:
+            return random.randint(low, high)
+
+        start, end = random.choice(ranges)
+        return random.randint(start, end)
 
     def _draw_occluders(self, draw: ImageDraw.ImageDraw) -> None:
         blocks = [
