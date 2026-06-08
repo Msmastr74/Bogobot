@@ -412,12 +412,15 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
             return
 
         await self.protector.save_config()
-        await interaction.edit_original_response(
-            view=RaidConfigView(
-                protector=self.protector,
-                guild=self.guild,
-            ),
-        )
+        
+        if interaction.message:
+            await interaction.message.edit(
+                view=RaidConfigView(
+                    protector=self.protector,
+                    guild=self.guild,
+                ),
+            )
+        await interaction.response.send_message("Updated raid settings.")
 
     def _parse_assignments(
         self,

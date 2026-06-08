@@ -960,9 +960,11 @@ async def setup(bot: 'BotCore'):
         async def on_submit(self, interaction: discord.Interaction) -> None:
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
-            await interaction.edit_original_response(
-                view=AIManagementView(),
-            )
+            if interaction.message:
+                await interaction.message.edit(
+                    view=AIManagementView(),
+                )
+            await interaction.response.send_message("Updated custom instructions.")
 
     class AIBreaksModal(discord.ui.Modal, title="AI Breaks"):
         def __init__(self) -> None:
@@ -997,9 +999,11 @@ async def setup(bot: 'BotCore'):
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
-            await interaction.edit_original_response(
-                view=AIManagementView(),
-            )
+            if interaction.message:
+                await interaction.message.edit(
+                    view=AIManagementView(),
+                )
+            await interaction.response.send_message("Updated AI break settings.")
 
     @manage.command(
         name="ai",
