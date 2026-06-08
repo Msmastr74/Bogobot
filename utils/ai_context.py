@@ -5,7 +5,7 @@ import json
 from logging import Logger, getLogger
 import re
 import sqlite3
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import discord
 
@@ -19,7 +19,6 @@ ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
 _OPEN_TAG_NAMESPACE_RE = re.compile(rf"<\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
 _CLOSE_TAG_NAMESPACE_RE = re.compile(rf"<\s*/\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
-
 
 def system_tag(name: str) -> str:
     return f"{SYSTEM_NAMESPACE}:{name}"
@@ -67,12 +66,14 @@ class AIContext:
         history_enabled: bool = True,
         history_path: str = DEFAULT_HISTORY_PATH,
         history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
+        user_permission_level: Callable[[int], int] | None = None,
         logger: Logger | None = None,
     ):
         self.normalize_discord = normalize_discord
         self.history_enabled = history_enabled
         self.history_path = history_path
         self.history_char_budget = max(0, int(history_char_budget))
+        self.user_permission_level = user_permission_level
         self.logger = logger or getLogger("Bogobot.AI.Context")
 
     def configure(
@@ -82,6 +83,7 @@ class AIContext:
         history_enabled: bool | None = None,
         history_path: str | None = None,
         history_char_budget: int | None = None,
+        user_permission_level: Callable[[int], int] | None = None,
         logger: Logger | None = None,
     ) -> None:
         if normalize_discord is not None:
@@ -92,6 +94,8 @@ class AIContext:
             self.history_path = history_path
         if history_char_budget is not None:
             self.history_char_budget = max(0, int(history_char_budget))
+        if user_permission_level is not None:
+            self.user_permission_level = user_permission_level
         if logger is not None:
             self.logger = logger
 
@@ -400,6 +404,7 @@ class AIContext:
         interaction_line = "interaction: true\n" if interaction else ""
         interaction_text = f"from interaction: {self._format_interaction_metadata(interaction_data)}\n" if interaction_data is not None else ""
         timestamp = created_at.astimezone(timezone.utc).isoformat()
+        perm_level = self._user_permission_level_name(user.id)
         content = content.strip()
         return (
             f"{open_system_tag('attached_metadata')}\n"
@@ -408,9 +413,24 @@ class AIContext:
             f"{interaction_text}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
+            f"perm_level: {perm_level}\n"
             f"{close_system_tag('attached_metadata')}\n"
             f"{content}"
         )
+
+    def _user_permission_level(self, user_id: int) -> int:
+        if self.user_permission_level is None:
+            return 0
+        try:
+            return int(self.user_permission_level(user_id))
+        except Exception:
+            self.logger.exception(f"Could not resolve AI metadata permission level for user {user_id}.")
+            return 0
+
+    def _user_permission_level_name(self, user_id: int) -> str:
+        from plugins.accounts import NAMES
+        level = self._user_permission_level(user_id)
+        return NAMES.get(level, f"level_{level}")
     
     def _format_interaction_metadata(self, meta: discord.MessageInteractionMetadata):
         all_data = {

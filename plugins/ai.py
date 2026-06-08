@@ -148,6 +148,7 @@ def setup_ai(bot: "BotCore"):
         history_char_budget=ai_config.history.char_budget,
         logger=bot.logger.getChild("AI"),
     )
+    ai_core.context.configure(user_permission_level=bot.authorization_level)
     if ai_core.enabled and ai_config.api_key:
         os.environ[ai_core.api_key_env] = ai_config.api_key
     return ai_core
@@ -558,7 +559,8 @@ def ai_break_config(bot: 'BotCore') -> AIBreakConfig:
 
 def ai_enabled(bot: 'BotCore') -> bool:
     return ai_config.enabled
-
+def banned(bot: 'BotCore', user: discord.User | discord.Member):
+    return bot.authorization_level(user.id) < 0
 
 class ContextRequestExecutor:
     def __init__(self, bot: "BotCore"):
@@ -893,7 +895,7 @@ async def setup(bot: 'BotCore'):
             self.add_item(discord.ui.Container(
                 discord.ui.TextDisplay("## AI"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"### Base System Prompt\n{prompt_preview(instruction_text_base())}"),
+                discord.ui.TextDisplay(f"### Base Instructions\n{prompt_preview(instruction_text_base())}"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"### Custom Instructions\n{custom}"),
                 discord.ui.ActionRow(edit_button),
@@ -947,7 +949,10 @@ async def setup(bot: 'BotCore'):
                 label="Custom prompt portion",
                 style=discord.TextStyle.paragraph,
                 required=False,
-                default=ai_config.custom_instruction_text[:4000],
+                default=truncate_text_to_character_limit(
+                    ai_config.custom_instruction_text,
+                    4000
+                ),
                 max_length=4000,
             )
             self.add_item(self.custom_instruction_text)
@@ -1037,7 +1042,7 @@ async def setup(bot: 'BotCore'):
         if await bot.notifications.has_subscription(LIVE_CHAT_SUB, message.channel.id):
             return
         
-        if not ai_enabled(bot):
+        if not ai_enabled(bot) or banned(bot, message.author):
             return
 
         text = mentioned_message_text(bot, message)
