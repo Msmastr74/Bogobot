@@ -10,7 +10,7 @@ from utils import groups
 from utils import security_roles
 
 
-RaidAction = Literal["config", "status", "on", "off"]
+RaidAction = Literal["config", "status", "on", "off", "activate", "deactivate"]
 RaidMode = Literal["quiet", "fixed", "manual"]
 
 DEFAULT_MODE: RaidMode = "quiet"
@@ -487,16 +487,16 @@ class RaidProtector:
             self.config.alert_channel_id = alert_channel.id
         await self.save_config()
 
-    async def manual_on(self, guild_id: int) -> None:
+    async def manual_activate(self, guild_id: int) -> None:
         state = self.state_for(guild_id)
         self._activate(state, "manual activation")
-        await self.alert(guild_id, "Raid protection manually enabled.", self.score(guild_id), [])
+        await self.alert(guild_id, "Raid mode manually activated.", self.score(guild_id), [])
 
-    async def manual_off(self, guild_id: int) -> None:
+    async def manual_deactivate(self, guild_id: int) -> None:
         state = self.state_for(guild_id)
         state.active = False
         state.expires_at = None
-        await self.alert(guild_id, "Raid protection manually disabled.", self.score(guild_id), [])
+        await self.alert(guild_id, "Raid mode manually deactivated.", self.score(guild_id), [])
 
     async def on_member_join(self, member: discord.Member | discord.User) -> None:
         if not isinstance(member, discord.Member):
@@ -514,9 +514,6 @@ class RaidProtector:
         ))
         self.trim(now)
 
-        if not self.config.enabled or self.config.alert_channel_id is None:
-            return
-
         state = self.state_for(member.guild.id)
         await self.maybe_expire(member.guild.id, now)
 
@@ -531,6 +528,9 @@ class RaidProtector:
                     self.score(member.guild.id),
                     quarantined,
                 )
+            return
+
+        if not self.config.enabled or self.config.alert_channel_id is None:
             return
 
         score = self.score(member.guild.id)
@@ -569,16 +569,16 @@ class RaidProtector:
         ))
         self.trim(now)
 
-        if not self.config.enabled or self.config.alert_channel_id is None:
-            return
-
         state = self.state_for(member.guild.id)
         await self.maybe_expire(member.guild.id, now)
-        score = self.score(member.guild.id)
         if state.active:
             self._activate(state, "active suspicious message")
             return
 
+        if not self.config.enabled or self.config.alert_channel_id is None:
+            return
+
+        score = self.score(member.guild.id)
         if self.is_triggered(score):
             state.last_suspicious_at = now
             self._activate(state, "early message trigger")
@@ -899,23 +899,50 @@ async def setup(bot: BotCore) -> None:
                     return
                 protector.config.alert_channel_id = alert_channel.id
             await protector.save_config()
-            await protector.manual_on(guild.id)
             await bot.discord.send(
-                "Raid protection enabled.",
+                "Raid protection automation enabled.",
                 response=True,
                 ephemeral=True,
             )
             return
 
         if action == "off":
-            state = protector.state_for(guild.id)
             protector.config.enabled = False
-            state.active = False
-            state.expires_at = None
             await protector.save_config()
-            await protector.manual_off(guild.id)
             await bot.discord.send(
-                "Raid protection disabled.",
+                "Raid protection automation disabled.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if action == "activate":
+            if protector.config.alert_channel_id is None:
+                await bot.discord.send(
+                    "Raid protection needs an alert channel first: `/manage raid action:config alert_channel:#channel`.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            if security_roles.quarantine_role(bot, guild) is None:
+                await bot.discord.send(
+                    "Raid protection needs a configured quarantine role first: `/manage raid action:config`.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            await protector.manual_activate(guild.id)
+            await bot.discord.send(
+                "Raid mode activated.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if action == "deactivate":
+            await protector.manual_deactivate(guild.id)
+            await bot.discord.send(
+                "Raid mode deactivated.",
                 response=True,
                 ephemeral=True,
             )
