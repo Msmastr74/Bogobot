@@ -14,12 +14,13 @@ RaidAction = Literal["config", "status", "on", "off"]
 RaidMode = Literal["quiet", "fixed", "manual"]
 
 DEFAULT_MODE: RaidMode = "quiet"
-DEFAULT_WINDOW_SECONDS = 90.0
-DEFAULT_QUIET_SECONDS = 300.0
-DEFAULT_FIXED_SECONDS = 600.0
+DEFAULT_WINDOW_SECONDS = 600.0
+DEFAULT_QUIET_SECONDS = 900.0
+DEFAULT_FIXED_SECONDS = 900.0
 DEFAULT_EARLY_MESSAGE_WINDOW_SECONDS = 600.0
-DEFAULT_TRIGGER_SCORE = 14
-DEFAULT_TRIGGER_JOIN_COUNT = 8
+DEFAULT_TRIGGER_SCORE = 16
+DEFAULT_TRIGGER_JOIN_COUNT = 10
+EARLY_MESSAGE_SCORE = 2
 
 ACCOUNT_AGE_1_DAY = 24 * 60 * 60
 ACCOUNT_AGE_7_DAYS = 7 * ACCOUNT_AGE_1_DAY
@@ -307,7 +308,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
                 f"window_seconds={config.window_seconds:g} "
                 f"early_message_window_seconds={config.early_message_window_seconds:g}"
             ),
-            placeholder="window_seconds=90 early_message_window_seconds=600",
+            placeholder="window_seconds=600 early_message_window_seconds=600",
             max_length=120,
         )
         self.expiry = discord.ui.TextInput(
@@ -317,7 +318,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
                 f"quiet_seconds={config.quiet_seconds:g} "
                 f"fixed_seconds={config.fixed_seconds:g}"
             ),
-            placeholder="quiet_seconds=300 fixed_seconds=600",
+            placeholder="quiet_seconds=900 fixed_seconds=900",
             max_length=100,
         )
         self.triggers = discord.ui.TextInput(
@@ -327,7 +328,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
                 f"trigger_score={config.trigger_score} "
                 f"trigger_join_count={config.trigger_join_count}"
             ),
-            placeholder="trigger_score=14 trigger_join_count=8",
+            placeholder="trigger_score=16 trigger_join_count=10",
             max_length=100,
         )
         for item in (
@@ -548,7 +549,7 @@ class RaidProtector:
         if not isinstance(message.author, discord.Member):
             return
         member = message.author
-        if self.should_skip_member(member):
+        if self.should_skip_message_member(member):
             return
 
         now = time.monotonic()
@@ -600,6 +601,13 @@ class RaidProtector:
             security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
         )
 
+    def should_skip_message_member(self, member: discord.Member) -> bool:
+        return (
+            member.bot or
+            self.bot.is_authorized(member.id, 1) or
+            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
+        )
+
     def trim(self, now: float) -> None:
         keep_since = now - max(
             self.config.window_seconds,
@@ -645,7 +653,7 @@ class RaidProtector:
         joins = self.window_join_events(guild_id, now)
         messages = self.window_message_events(guild_id, now)
         cluster_user_ids = self.creation_cluster_user_ids(joins)
-        total = len(messages) * 2
+        total = len(messages) * EARLY_MESSAGE_SCORE
         for event in joins:
             total += 1 + self.account_age_score(event.created_at)
             if event.user_id in cluster_user_ids:
