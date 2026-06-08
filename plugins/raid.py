@@ -102,8 +102,8 @@ class RaidStatusView(discord.ui.LayoutView):
             discord.ui.Separator(),
             discord.ui.TextDisplay(
                 "\n".join([
-                    f"Enabled: `{config.enabled}`",
-                    f"Active: `{state.active}`",
+                    f"Automation enabled: `{config.enabled}`",
+                    f"Raid mode active: `{state.active}`",
                     f"Mode: `{config.mode}`",
                     f"Alert channel: {alert_channel}",
                     f"Current score: `{score.score}`",
@@ -198,7 +198,7 @@ class RaidConfigView(discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "\n".join([
                     "### Settings",
-                    f"Enabled: `{config.enabled}`",
+                    f"Automation enabled: `{config.enabled}`",
                     f"Mode: `{config.mode}`",
                     f"Alert channel: {alert_channel_text}",
                     f"Window seconds: `{config.window_seconds:g}`",
@@ -490,13 +490,13 @@ class RaidProtector:
     async def manual_on(self, guild_id: int) -> None:
         state = self.state_for(guild_id)
         self._activate(state, "manual activation")
-        await self.alert(guild_id, "Raid mode manually enabled.", self.score(guild_id), [])
+        await self.alert(guild_id, "Raid protection manually enabled.", self.score(guild_id), [])
 
     async def manual_off(self, guild_id: int) -> None:
         state = self.state_for(guild_id)
         state.active = False
         state.expires_at = None
-        await self.alert(guild_id, "Raid mode manually disabled.", self.score(guild_id), [])
+        await self.alert(guild_id, "Raid protection manually disabled.", self.score(guild_id), [])
 
     async def on_member_join(self, member: discord.Member | discord.User) -> None:
         if not isinstance(member, discord.Member):
@@ -901,7 +901,7 @@ async def setup(bot: BotCore) -> None:
             await protector.save_config()
             await protector.manual_on(guild.id)
             await bot.discord.send(
-                "Raid mode enabled.",
+                "Raid protection enabled.",
                 response=True,
                 ephemeral=True,
             )
