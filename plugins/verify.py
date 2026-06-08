@@ -8,10 +8,9 @@ import discord
 from bogobot_core import BotCore
 from utils import groups
 from utils.captcha import LABELS, CaptchaChallenge, OcclusionPathCaptchaGenerator, is_expired, verify_answer
+from utils import security_roles
 
 
-VERIFIED_ROLE_NAME = "Verified"
-QUARANTINED_ROLE_NAME = "Quarantined"
 VERIFY_COOLDOWN_SECONDS = 60.0
 VERIFY_CAPTCHA_TIMEOUT_SECONDS = 120.0
 VERIFY_BUTTON_CUSTOM_ID = "bogobot:verify"
@@ -29,32 +28,16 @@ class VerifyCaptchaSession:
     attempts: int = 0
 
 
-def _find_role(member: discord.Member, name: str) -> discord.Role | None:
-    return discord.utils.get(member.roles, name=name)
-
-
-def _has_role(member: discord.Member, name: str) -> bool:
-    return _find_role(member, name) is not None
-
-
-async def _get_or_create_verified_role(guild: discord.Guild) -> discord.Role:
-    role = discord.utils.get(guild.roles, name=VERIFIED_ROLE_NAME)
-    if role is not None:
-        return role
-    return await guild.create_role(
-        name=VERIFIED_ROLE_NAME,
-        reason="Bogobot verification role setup",
-    )
-
-
 class VerifyPanelView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
+        bot: BotCore,
         cooldowns: MutableMapping[int, VerifyCooldown],
         generator: OcclusionPathCaptchaGenerator,
     ) -> None:
         super().__init__(timeout=None)
+        self.bot = bot
         self.cooldowns = cooldowns
         self.generator = generator
 
@@ -69,8 +52,7 @@ class VerifyPanelView(discord.ui.LayoutView):
             discord.ui.Section(
                 discord.ui.TextDisplay("## Verification"),
                 discord.ui.TextDisplay(
-                    "Click the button and answer the captcha to receive the "
-                    f"`{VERIFIED_ROLE_NAME}` role."
+                    "Click the button and answer the captcha to verify."
                 ),
                 accessory=verify_button,
             )
@@ -81,6 +63,15 @@ class VerifyPanelView(discord.ui.LayoutView):
         if interaction.guild is None or not isinstance(member, discord.Member):
             await interaction.response.send_message(
                 "Verification only works inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        verified_role = security_roles.verified_role(self.bot, interaction.guild)
+        quarantine_role = security_roles.quarantine_role(self.bot, interaction.guild)
+        if verified_role is None or quarantine_role is None:
+            await interaction.response.send_message(
+                "Verification roles are not configured.",
                 ephemeral=True,
             )
             return
@@ -116,6 +107,7 @@ class VerifyPanelView(discord.ui.LayoutView):
         )
         await interaction.response.send_message(
             view=VerifyCaptchaView(
+                bot=self.bot,
                 cooldowns=self.cooldowns,
                 session=VerifyCaptchaSession(challenge=challenge),
             ),
@@ -124,9 +116,9 @@ class VerifyPanelView(discord.ui.LayoutView):
         )
 
     def _blocked_message(self, member: discord.Member) -> str | None:
-        if _has_role(member, VERIFIED_ROLE_NAME):
+        if security_roles.has_role_id(member, security_roles.verified_role_id(self.bot)):
             return "You are already verified."
-        if _has_role(member, QUARANTINED_ROLE_NAME):
+        if security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot)):
             return "You cannot verify while quarantined."
         return None
 
@@ -135,10 +127,12 @@ class VerifyCaptchaView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
+        bot: BotCore,
         cooldowns: MutableMapping[int, VerifyCooldown],
         session: VerifyCaptchaSession,
     ) -> None:
         super().__init__(timeout=None)
+        self.bot = bot
         self.cooldowns = cooldowns
         self.session = session
 
@@ -183,13 +177,22 @@ class VerifyCaptchaView(discord.ui.LayoutView):
             )
             return
 
-        if _has_role(member, VERIFIED_ROLE_NAME):
+        verified_role = security_roles.verified_role(self.bot, guild)
+        quarantine_role = security_roles.quarantine_role(self.bot, guild)
+        if verified_role is None or quarantine_role is None:
+            await interaction.response.send_message(
+                "Verification roles are not configured.",
+                ephemeral=True,
+            )
+            return
+
+        if security_roles.has_role_id(member, verified_role.id):
             await interaction.response.send_message(
                 "You are already verified.",
                 ephemeral=True,
             )
             return
-        if _has_role(member, QUARANTINED_ROLE_NAME):
+        if security_roles.has_role_id(member, quarantine_role.id):
             await interaction.response.send_message(
                 "You cannot verify while quarantined.",
                 ephemeral=True,
@@ -219,14 +222,13 @@ class VerifyCaptchaView(discord.ui.LayoutView):
             return
 
         try:
-            verified_role = await _get_or_create_verified_role(guild)
             await member.add_roles(
                 verified_role,
                 reason="Bogobot verification captcha passed",
             )
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"I cannot create or assign the `{VERIFIED_ROLE_NAME}` role.",
+                f"I cannot assign {verified_role.mention}.",
                 ephemeral=True,
             )
             return
@@ -238,7 +240,7 @@ class VerifyCaptchaView(discord.ui.LayoutView):
             return
 
         await interaction.response.send_message(
-            f"You are now verified with the `{VERIFIED_ROLE_NAME}` role.",
+            f"You are now verified with {verified_role.mention}.",
             ephemeral=True,
         )
         self.cooldowns.pop(member.id, None)
@@ -250,14 +252,40 @@ async def setup(bot: BotCore) -> None:
         expires_in_seconds=int(VERIFY_CAPTCHA_TIMEOUT_SECONDS),
     )
     manage = groups.manage(bot)
-    bot.add_view(VerifyPanelView(cooldowns=cooldowns, generator=generator))
+    bot.add_view(VerifyPanelView(bot=bot, cooldowns=cooldowns, generator=generator))
 
     @manage.command(
         name="create_verification",
         description="Create a persistent verification message",
         perm_requirement=2,
     )
-    async def create_verification(interaction: discord.Interaction) -> None:
+    async def create_verification(
+        interaction: discord.Interaction,
+        verified_role: discord.Role,
+        quarantine_role: discord.Role,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await bot.discord.send(
+                "Verification can only be created in a server.",
+                ephemeral=True,
+                response=True,
+            )
+            return
+        if verified_role.guild.id != guild.id or quarantine_role.guild.id != guild.id:
+            await bot.discord.send(
+                "Verification roles must be from this server.",
+                ephemeral=True,
+                response=True,
+            )
+            return
+        if verified_role.id == quarantine_role.id:
+            await bot.discord.send(
+                "Verified and quarantine roles must be different.",
+                ephemeral=True,
+                response=True,
+            )
+            return
         if not hasattr(interaction.channel, "send"):
             await bot.discord.send(
                 "The bot cannot send messages in this channel!",
@@ -265,9 +293,14 @@ async def setup(bot: BotCore) -> None:
                 response=True
             )
             return
+        await security_roles.set_roles(
+            bot,
+            verified=verified_role,
+            quarantine=quarantine_role,
+        )
         channel = cast('discord.abc.MessageableChannel', interaction.channel)
         await channel.send(
-            view=VerifyPanelView(cooldowns=cooldowns, generator=generator),
+            view=VerifyPanelView(bot=bot, cooldowns=cooldowns, generator=generator),
         )
         await bot.discord.send(
             "Successfully sent a persistent verification prompt.",

@@ -12,7 +12,7 @@ from requests import Response
 from discord.mentions import AllowedMentions
 from discord.poll import Poll
 from discord.ui.view import BaseView
-from pydantic import Field, field_validator
+from pydantic import AliasPath, Field, field_validator
 
 from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.ai_context import ContextRequest, close_system_tag, open_system_tag
@@ -45,9 +45,9 @@ MAX_REPLY_CHARS = 2000
 
 
 class AIHistoryConfig(Schema):
-    enabled: bool = True
-    path: str = "ai_history.sqlite3"
-    char_budget: int = 10_000
+    enabled: bool = Field(True, validation_alias=AliasPath("history", "enabled"))
+    path: str = Field("ai_history.sqlite3", validation_alias=AliasPath("history", "path"))
+    char_budget: int = Field(10_000, validation_alias=AliasPath("history", "char_budget"))
 
     @field_validator("path", mode="before")
     @classmethod
@@ -61,9 +61,9 @@ class AIHistoryConfig(Schema):
 
 
 class AIBreakConfig(Schema):
-    enabled: bool = True
-    active_minutes: float = 20
-    break_minutes: float = 10
+    enabled: bool = Field(True, validation_alias=AliasPath("breaks", "enabled"))
+    active_minutes: float = Field(20, validation_alias=AliasPath("breaks", "active_minutes"))
+    break_minutes: float = Field(10, validation_alias=AliasPath("breaks", "break_minutes"))
 
     @field_validator("active_minutes", "break_minutes", mode="before")
     @classmethod
@@ -79,8 +79,8 @@ class AIConfig(Schema):
     base_url: str | None = None
     request_interval_seconds: float = 60.0
     normalize_discord: bool = True
-    history: AIHistoryConfig = Field(default_factory=AIHistoryConfig)
-    breaks: AIBreakConfig = Field(default_factory=AIBreakConfig)
+    history: AIHistoryConfig = Field(default_factory=lambda: AIHistoryConfig.model_validate({}))
+    breaks: AIBreakConfig = Field(default_factory=lambda: AIBreakConfig.model_validate({}))
 
     @field_validator("model", "api_key_env", mode="before")
     @classmethod
