@@ -43,7 +43,10 @@ User-edited settings:
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 - `archive`: Optional archive configuration object. See below for fields.
+- `verification`: Shared Discord role configuration for verification and raid protection. It stores `verified_role_id` and `quarantine_role_id`, usually through `/manage create_verification` or `/manage raid action:config`.
+- `raid_protection`: Raid protection settings. It stores `enabled`, `alert_channel_id`, `mode`, detection windows, expiry windows, and trigger thresholds.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
+- `cbogo_path`: Path to the collaborative bogosort puzzle-state JSON file. Defaults to `cbogo.json`.
 - `fps`: Frames received per second.
 - `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, and implementation notes.
 
@@ -248,16 +251,20 @@ Current plugin responsibilities:
 - `code_sandbox.py`: `/python` and `/javascript` WASI sandbox commands.
 - `fun.py`: bot status bogoname loop and `/bogo name`.
 - `get_stats.py`: `/get_stats`, `/get_sort`, and `/manage stats_monitor`.
+- `info.py`: `/help` command inventory and per-command signature display.
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `live_chat.py`: `/manage live_chat` YouTube live-chat monitor.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
+- `raid.py`: raid burst detection, quarantine enforcement, and `/manage raid`.
 - `ai.py`: @mention and `/ai` dispatch, command execution, passive context request handling, and AI response history.
 - `ai_activity.py`: scheduled or manual AI activity triggers.
 - `stats.py`: Bogostream API/OCR stats cache updates, sort-state events, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
+- `verify.py`: persistent captcha verification prompt and shared verified/quarantine role setup.
 - `utils/accounts.py`: Account storage, permission checks, and account annotations.
+- `utils/security_roles.py`: Shared verified/quarantine role config helpers.
 - `utils/transformers.py`: Slash-command transformers such as `ColourTransformer` and `IntTransformer`.
 
 ## Admin Commands
@@ -270,6 +277,11 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage leaderboard_monitor start|stop|resend`: Creates, removes, or resends a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes. `resend` sends the replacement first, then deletes the old message.
 - `/manage stats_monitor start|stop|resend`: Creates, removes, or resends a persistent stream-stats monitor in the current channel. It uses the same data as `/get_stats` and updates when new stream stats are available.
 - `/manage live_chat start|stop|resend`: Creates, removes, or resends a persistent YouTube live-chat monitor in the current channel. It reads from the configured `TARGET_VIDEO_ID` through `pytchat` and retries with backoff.
+- `/manage create_verification verified_role quarantine_role`: Saves the shared verified/quarantine roles and sends a persistent verification prompt in the current channel. Users click the persistent button, solve one captcha attempt, and receive the configured verified role. Quarantined users cannot verify.
+- `/manage raid config [alert_channel]`: Shows an ephemeral raid-protection config panel. The panel can set shared verified/quarantine roles, alert channel, mode, detection windows, expiry windows, and trigger thresholds. Opening or editing config does not enable automation.
+- `/manage raid status`: Shows automation state, active raid-mode state, rolling score, recent joins/messages, alert channel, expiry, and recent quarantines.
+- `/manage raid on|off`: Enables or disables automatic raid detection only. These actions do not manually activate or deactivate raid mode.
+- `/manage raid activate|deactivate`: Manually activates or deactivates raid mode. Active raid mode quarantines future non-exempt joiners even if automatic detection is off.
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
@@ -283,6 +295,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/archive view [value]`: Shows archived monitor values with a public paginated view.
 - `/archive retrieve time`: Extracts a visual archive frame card for the target timestamp, with four archive frames before and after when available. `time` accepts epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.
 - `/archive scan image [end] [start] [window]`: Searches the visual archive for an attached image crop and returns the matching epoch/Discord timestamp plus the matched frame. `start` and `end` accept only absolute values: `now`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`. `window` is a relative duration such as `30s`, `15min`, `12h`, or `1day`; scans are capped at 24 hours. Only one scan may run at a time, and scans have a 30-second cooldown after finishing.
+- `/leaderboard a b`: Shows an arbitrary sortoff leaderboard rank range from 1 to 100.
 - `/top`, `/bottom`, `/middle`: Shows leaderboard slices using `LayoutView` messages.
 - `/get_stats`: Shows the current stream stats cache using a `LayoutView` message.
 - `/get_sort`: Shows the latest color-extracted sort state from the currently cached video frame, including that frame image when available. This intentionally follows the delayed YouTube video instead of the fresher API state.
@@ -294,9 +307,11 @@ Several management commands use an explicit action parameter instead of separate
 - `/milestone_info milestone_name [ephemeral]`: Shows the current milestone value and recent in-memory history, with recent frame images when available. API-mode history usually has no images.
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
+- `/help [command]`: Shows bot command help. When `command` is provided, shows a slash-style command signature and description for that command.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/sort`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexicographic` modes.
 - `/bogo roll|bogo|shuffle|choice|name|sort|sort-list|sort-listr|sort-lexicographic`: Dice roll, text bogo, shuffle/choice, name bogo, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
+- `/bogoscramble [text] [attachment1..attachment10] [rows] [columns]`: Scrambles text and image/media attachments. Message context menus provide normal and custom Bogoscramble entry points for existing messages.
 - `/cbogo [run|info|leaderboard|reset|reset_last_user] [target]`: Advances the original collaborative community bogosort puzzle, shows puzzle info, shows leaderboards, or resets the puzzle. `reset` requires mod rank.
 - `/bogotree [run|info|leaderboard|reset] [target]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `leaderboard` shows per-user calls, simulated steps, and best score, optionally forcing `target` into each leaderboard section; `reset` requires mod rank.
 

@@ -47,6 +47,7 @@ Go into `config.json` and provide the main credentials:
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
  * `archive`: Optional archive configuration object. It contains compact monitor archive settings and optional visual archive settings, including appendable daily `.ts` recording and old-day remuxing to `mkv`, `mp4`, or `ts`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
+ * `cbogo_path`: Optional collaborative bogosort puzzle storage path. Defaults to `cbogo.json`.
  * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, and prompt/context notes.
 
 `DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup and provider examples.
@@ -106,12 +107,14 @@ Bogobot implements several slash commands for stream management and data retriev
  * /archive view: Shows archived monitor values.
  * /archive retrieve: Shows a visual archive frame card by epoch or Discord timestamp.
  * /archive scan: Searches a bounded visual archive window for an attached image crop and returns the matching timestamp.
- * /top, /bottom, /middle: Shows sortoff leaderboard slices.
+ * /leaderboard, /top, /bottom, /middle: Shows sortoff leaderboard ranges and slices.
  * /manage monitor: Starts, stops, or resends a persistent tracking system for stream serial numbers.
  * /manage leaderboard_monitor: Starts, stops, or resends a persistent top leaderboard message.
  * /manage stats_monitor: Starts, stops, or resends a persistent stream-stats message.
  * /manage live_chat: Starts, stops, or resends a persistent YouTube live-chat monitor.
  * /manage video_archive: Starts, stops, restarts, or shows status for visual stream archive recording.
+ * /manage create_verification: Creates a persistent captcha verification prompt and configures shared verified/quarantine roles.
+ * /manage raid: Configures raid protection, toggles automatic detection, or manually activates/deactivates raid mode.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /milestone_info: Shows recent milestone history; OCR/manual entries may include frame images, while API-mode milestones usually do not.
  * /manage announce: Sends a simple bot-authored announcement.
@@ -119,10 +122,12 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage state: Stops or restarts the bot process.
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
+ * /help: Shows bot command help, or a command signature when given a command name.
  * /avatar and /ping: Small Discord utility commands.
  * /python and /javascript: Execute code in WASI-backed sandboxes, with modal input for longer programs or uploaded source files.
  * /ai_activity: Schedule, trigger, list, or remove AI activity triggers for a channel.
  * /bogo and friends: Grouped roll, shuffle, choice, text bogo, name bogo, and small bogosort utilities, plus top-level /sort and random number helpers.
+ * /bogoscramble: Scrambles text and media attachments; message context-menu variants are also available.
  * /cbogo: Runs the original collaborative community bogosort puzzle.
  * /bogotree: Advances or resets a collaborative random equalization puzzle.
  * /accounts: Shows account info, manages permission ranks, lists users, and bans/unbans accounts.

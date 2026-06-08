@@ -501,7 +501,7 @@ class RaidProtector:
     async def on_member_join(self, member: discord.Member | discord.User) -> None:
         if not isinstance(member, discord.Member):
             return
-        if self.should_skip_member(member):
+        if self.should_skip_join_record(member):
             return
 
         now = time.monotonic()
@@ -603,6 +603,13 @@ class RaidProtector:
             member.bot or
             self.bot.is_authorized(member.id, 1) or
             security_roles.has_role_id(member, security_roles.verified_role_id(self.bot)) or
+            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
+        )
+
+    def should_skip_join_record(self, member: discord.Member) -> bool:
+        return (
+            member.bot or
+            self.bot.is_authorized(member.id, 1) or
             security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
         )
 
