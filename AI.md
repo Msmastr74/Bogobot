@@ -14,6 +14,7 @@ Responses currently use a fixed 1024-token generation budget.
     "base_url": null,
     "api_key_env": "OPENAI_API_KEY",
     "api_key": "...",
+    "custom_instruction_text": "",
     "request_interval_seconds": 60,
     "normalize_discord": true,
     "history": {
@@ -36,6 +37,7 @@ Fields:
 - `base_url`: Optional OpenAI-compatible API base URL. Leave unset for the OpenAI default client endpoint.
 - `api_key_env`: Environment variable containing the API key. Defaults to `OPENAI_API_KEY`.
 - `api_key`: Optional API key copied into `api_key_env` at startup.
+- `custom_instruction_text`: Optional admin-controlled instruction text appended after the base Bogobot instructions. Defaults to an empty string.
 - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to `60`; use `0` for local providers.
 - `normalize_discord`: Annotates Discord mentions and channels with readable names before sending context to the model. Defaults to `true`.
 - `history.enabled`: Enables per-channel short-term AI history. Defaults to `true`.
@@ -44,6 +46,21 @@ Fields:
 - `breaks.enabled`: Enables AI break periods. Defaults to `true`.
 - `breaks.active_minutes`: Minutes AI stays active before a break. Defaults to `20`.
 - `breaks.break_minutes`: Minutes AI ignores mentions and `/ai` while on break. Defaults to `10`.
+
+## Runtime Management
+
+`/manage ai` opens an ephemeral Components v2 panel for admin-level AI controls. It shows the base instructions, the configured custom instructions, the current AI enabled state, and break timing.
+
+The panel can:
+
+- Turn AI mentions and `/ai` on or off by updating `ai.enabled`.
+- Edit `ai.custom_instruction_text`.
+- Turn scheduled AI breaks on or off by updating `ai.breaks.enabled`.
+- Edit `ai.breaks.active_minutes` and `ai.breaks.break_minutes`.
+
+Changing break settings restarts the break timer immediately. Disabling breaks clears the current break state and restores the bot presence to online.
+
+For security, `/manage ai` does not expose or edit API keys, provider URLs, model names, request interval, or history settings. AI history remains config-file only because changing history paths or budgets from Discord would allow unsafe runtime data movement or retention changes.
 
 ## Local Ollama
 
@@ -71,6 +88,7 @@ Example config:
     "model": "bogobot-ministral",
     "base_url": "http://localhost:11434/v1",
     "api_key": "ollama",
+    "custom_instruction_text": "",
     "request_interval_seconds": 0,
     "normalize_discord": true,
     "history": {
@@ -97,6 +115,7 @@ Groq can be used through its OpenAI-compatible API. A longer request interval is
     "base_url": "https://api.groq.com/openai/v1",
     "api_key_env": "GROQ_API_KEY",
     "api_key": "...",
+    "custom_instruction_text": "",
     "request_interval_seconds": 60,
     "normalize_discord": true,
     "history": {
@@ -123,6 +142,7 @@ Gemini/Gemma models can be used through Google's OpenAI-compatible endpoint.
     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
     "api_key_env": "GEMINI_API_KEY",
     "api_key": "...",
+    "custom_instruction_text": "",
     "request_interval_seconds": 30,
     "normalize_discord": true,
     "history": {
@@ -153,6 +173,7 @@ Example attached metadata:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
+perm_level: owner
 </{SYSTEM_TAG}:attached_metadata>
 ```
 
@@ -164,6 +185,7 @@ Reply context is sent as a separate assistant-role message:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
+perm_level: owner
 </{SYSTEM_TAG}:attached_metadata>
 previous bot message
 </{SYSTEM_TAG}:replied_to>
@@ -193,6 +215,8 @@ Each rolling channel history message is wrapped before being sent to the model. 
 hello
 </{SYSTEM_TAG}:message_history>
 ```
+
+`perm_level` is derived from the bot account system and is emitted as a rank name: `basic`, `authorized`, `mod`, `admin`, or `owner`.
 
 ```xml
 <{SYSTEM_TAG}:message_history>

@@ -48,9 +48,9 @@ Go into `config.json` and provide the main credentials:
  * `archive`: Optional archive configuration object. It contains compact monitor archive settings and optional visual archive settings, including appendable daily `.ts` recording and old-day remuxing to `mkv`, `mp4`, or `ts`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
  * `cbogo_path`: Optional collaborative bogosort puzzle storage path. Defaults to `cbogo.json`.
- * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, and prompt/context notes.
+ * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, `/manage ai`, and prompt/context notes.
 
-`DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup and provider examples.
+`DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup, runtime management, and provider examples.
 
 If `local_config.json` exists, `main.py` uses that instead of `config.json`.
 This is useful for local testing without changing the main config file.
@@ -113,6 +113,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage stats_monitor: Starts, stops, or resends a persistent stream-stats message.
  * /manage live_chat: Starts, stops, or resends a persistent YouTube live-chat monitor.
  * /manage video_archive: Starts, stops, restarts, or shows status for visual stream archive recording.
+ * /manage ai: Toggles AI, edits custom instructions, and tunes scheduled AI breaks without exposing history or provider secrets.
  * /manage create_verification: Creates a persistent captcha verification prompt and configures shared verified/quarantine roles.
  * /manage raid: Configures raid protection, toggles automatic detection, or manually activates/deactivates raid mode.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.

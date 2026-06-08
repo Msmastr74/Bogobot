@@ -48,7 +48,7 @@ User-edited settings:
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `cbogo_path`: Path to the collaborative bogosort puzzle-state JSON file. Defaults to `cbogo.json`.
 - `fps`: Frames received per second.
-- `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, and implementation notes.
+- `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, `/manage ai`, and implementation notes.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
@@ -257,7 +257,7 @@ Current plugin responsibilities:
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
 - `monitor.py`: `/manage monitor`.
 - `raid.py`: raid burst detection, quarantine enforcement, and `/manage raid`.
-- `ai.py`: @mention and `/ai` dispatch, command execution, passive context request handling, and AI response history.
+- `ai.py`: @mention and `/ai` dispatch, `/manage ai`, command execution, passive context request handling, and AI response history.
 - `ai_activity.py`: scheduled or manual AI activity triggers.
 - `stats.py`: Bogostream API/OCR stats cache updates, sort-state events, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
@@ -277,6 +277,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage leaderboard_monitor start|stop|resend`: Creates, removes, or resends a persistent top-leaderboard monitor in the current channel. It uses the same data as `/top` and refreshes about every two minutes. `resend` sends the replacement first, then deletes the old message.
 - `/manage stats_monitor start|stop|resend`: Creates, removes, or resends a persistent stream-stats monitor in the current channel. It uses the same data as `/get_stats` and updates when new stream stats are available.
 - `/manage live_chat start|stop|resend`: Creates, removes, or resends a persistent YouTube live-chat monitor in the current channel. It reads from the configured `TARGET_VIDEO_ID` through `pytchat` and retries with backoff.
+- `/manage ai`: Shows an ephemeral AI management panel. Admins can toggle AI on/off, edit `ai.custom_instruction_text`, toggle scheduled AI breaks, and edit break active/break minutes. The command intentionally does not expose API keys, provider URLs, model settings, request interval, or AI history settings; history remains config-file only for safety.
 - `/manage create_verification verified_role quarantine_role`: Saves the shared verified/quarantine roles and sends a persistent verification prompt in the current channel. Users click the persistent button, solve one captcha attempt, and receive the configured verified role. Quarantined users cannot verify.
 - `/manage raid config [alert_channel]`: Shows an ephemeral raid-protection config panel. The panel can set shared verified/quarantine roles, alert channel, mode, detection windows, expiry windows, and trigger thresholds. Opening or editing config does not enable automation.
 - `/manage raid status`: Shows automation state, active raid-mode state, rolling score, recent joins/messages, alert channel, expiry, and recent quarantines.
