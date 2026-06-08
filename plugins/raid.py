@@ -264,6 +264,11 @@ class RaidConfigView(discord.ui.LayoutView):
 
     async def set_alert_channel(self, interaction: discord.Interaction) -> None:
         selected = self.channel_select.values[0]
+        try:
+            selected = await selected.fetch()
+        except Exception as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
         if not isinstance(selected, discord.TextChannel):
             await interaction.response.send_message(
                 "`Alert channel` must be a text channel in this server.",
