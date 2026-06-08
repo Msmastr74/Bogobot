@@ -407,7 +407,7 @@ class AICore(Generic[ContextT, ActionT]):
     ) -> tuple[str, list[_ToolCall]]:
         reply_message_text = reply_message.strip() if reply_message is not None else ""
         has_reply_message = bool(reply_message_text)
-        system_prompt = self._system_prompt(actions)
+        system_prompt = self.system_prompt()
         tools = [self._tool_schema(action) for action in actions]
         tools.append(self._context_request_tool_schema())
         messages: list[Any] = [
@@ -452,15 +452,14 @@ class AICore(Generic[ContextT, ActionT]):
         self.logger.debug(f"raw tool calls:\n{raw_tool_calls}")
         return content, self._parse_native_tool_calls(raw_tool_calls)
 
-    def _system_prompt(
+    def system_prompt(
         self,
-        actions: list[_AIAction[ContextT, ActionT]],
     ) -> str:
         mention_passage = 'Discord users or members are in the format <@id "User Name"> or <@!id "User Name">. Discord roles are in the format <@&id "Role Name">. Discord channels are in the format <#id "Channel Name">.'
         if not self.normalize_discord:
             mention_passage = 'Discord users or members are in the format <@id> or <@!id>. Discord roles are in the format <@&id>. Discord channels are in the format <#id>.'
         return (
-            f"{ai_plugin.INSTRUCTION_TEXT}\n"
+            f"{ai_plugin.instruction_text()}\n"
             f"{mention_passage}\n"
             "## Commands\n"
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "

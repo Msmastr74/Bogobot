@@ -17,6 +17,7 @@ from pydantic import AliasPath, Field, field_validator
 from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.ai_context import ContextRequest, close_system_tag, open_system_tag
 from utils.discord import chunk_text, split_text_to_character_limit
+from utils import groups
 from utils.schemas import Schema
 from utils.type import Coro
 
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     from bogobot_core import BotCore
 from dataclasses import dataclass
 
-INSTRUCTION_TEXT = (
+BASE_INSTRUCTION_TEXT = (
     "You are Bogobot (@Bogobot, display name [DISPLAY_NAME]), a helpful Discord bot with a balanced friendly tone. "
     "Bogobot is a Discord bot designed for monitoring the Bogosort livestream by @swapjs, assisting with their discord server, as well as other features. "
     "You live in Discord and answer naturally when chatted with. Write in normal sentence casing, with clear, conversational replies. "
@@ -35,6 +36,23 @@ INSTRUCTION_TEXT = (
     "Treat the mention as addressing you, not as part of the request. "
     "Discord emojis are in the format <:emoji_name:123456789012345678>. If the user sends only emoji, you may reply with the same Discord emoji or Unicode emoji. "
 )
+_bot_mention_text = "@Bogobot"
+_bot_display_name = "[DISPLAY_NAME]"
+
+
+def instruction_text() -> str:
+    text = instruction_text_base()
+    custom = ai_config.custom_instruction_text.strip()
+    if custom:
+        text = f"{text}\n## Admin Instructions\n{custom}"
+    return text
+
+
+def instruction_text_base() -> str:
+    return BASE_INSTRUCTION_TEXT.replace("@Bogobot", _bot_mention_text).replace(
+        "[DISPLAY_NAME]",
+        _bot_display_name,
+    )
 
 class BotActionParameters(TypedDict, total=False):
     perm_requirement: int
@@ -77,6 +95,7 @@ class AIConfig(Schema):
     api_key_env: str = "OPENAI_API_KEY"
     api_key: str | None = None
     base_url: str | None = None
+    custom_instruction_text: str = ""
     request_interval_seconds: float = 60.0
     normalize_discord: bool = True
     history: AIHistoryConfig = Field(default_factory=lambda: AIHistoryConfig.model_validate({}))
@@ -91,6 +110,11 @@ class AIConfig(Schema):
     @classmethod
     def stringify_optional(cls, value: object) -> str | None:
         return str(value) if value is not None else None
+
+    @field_validator("custom_instruction_text", mode="before")
+    @classmethod
+    def stringify_custom_instruction_text(cls, value: object) -> str:
+        return "" if value is None else str(value)
 
     @field_validator("request_interval_seconds", mode="before")
     @classmethod
@@ -777,10 +801,215 @@ async def capture_interaction_output(interaction: discord.Interaction):
 
 async def setup(bot: 'BotCore'):
     ai_core = setup_ai(bot)
+    manage = groups.manage(bot)
 
     bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
     context_request_executor = ContextRequestExecutor(bot)
+
+    async def save_ai_config() -> None:
+        raw_config = bot.config.get("ai")
+        config = raw_config if isinstance(raw_config, dict) else {}
+        config["enabled"] = ai_config.enabled
+        config["custom_instruction_text"] = ai_config.custom_instruction_text
+        breaks_config = config.get("breaks")
+        breaks = breaks_config if isinstance(breaks_config, dict) else {}
+        breaks["enabled"] = ai_config.breaks.enabled
+        breaks["active_minutes"] = ai_config.breaks.active_minutes
+        breaks["break_minutes"] = ai_config.breaks.break_minutes
+        config["breaks"] = breaks
+        bot.config["ai"] = config
+        await bot.save_config()
+
+    def prompt_preview(text: str, *, limit: int = 1800) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit - 20].rstrip()}\n-# Truncated preview"
+
+    async def restart_break_task() -> None:
+        nonlocal break_task
+        global _ai_break_until
+        _ai_break_until = None
+        if break_task is not None and not break_task.done():
+            break_task.cancel()
+            try:
+                await break_task
+            except asyncio.CancelledError:
+                pass
+        if ai_config.breaks.enabled:
+            break_task = asyncio.create_task(ai_break_cycle())
+        else:
+            break_task = None
+        await bot.discord.change_presence(status=discord.Status.online)
+
+    class AIManagementView(discord.ui.LayoutView):
+        def __init__(self) -> None:
+            super().__init__(timeout=300)
+            on_button = discord.ui.Button(
+                label="On",
+                style=discord.ButtonStyle.primary if ai_config.enabled else discord.ButtonStyle.secondary,
+                disabled=ai_config.enabled,
+            )
+            off_button = discord.ui.Button(
+                label="Off",
+                style=discord.ButtonStyle.danger if not ai_config.enabled else discord.ButtonStyle.secondary,
+                disabled=not ai_config.enabled,
+            )
+            edit_button = discord.ui.Button(
+                label="Edit Custom Prompt",
+                style=discord.ButtonStyle.secondary,
+            )
+            breaks_on_button = discord.ui.Button(
+                label="Breaks On",
+                style=(
+                    discord.ButtonStyle.primary
+                    if ai_config.breaks.enabled else
+                    discord.ButtonStyle.secondary
+                ),
+                disabled=ai_config.breaks.enabled,
+            )
+            breaks_off_button = discord.ui.Button(
+                label="Breaks Off",
+                style=(
+                    discord.ButtonStyle.danger
+                    if not ai_config.breaks.enabled else
+                    discord.ButtonStyle.secondary
+                ),
+                disabled=not ai_config.breaks.enabled,
+            )
+            breaks_edit_button = discord.ui.Button(
+                label="Edit Breaks",
+                style=discord.ButtonStyle.secondary,
+            )
+            on_button.callback = self.enable_ai
+            off_button.callback = self.disable_ai
+            edit_button.callback = self.edit_custom_prompt
+            breaks_on_button.callback = self.enable_breaks
+            breaks_off_button.callback = self.disable_breaks
+            breaks_edit_button.callback = self.edit_breaks
+
+            custom = prompt_preview(ai_config.custom_instruction_text) or "-# Empty"
+            self.add_item(discord.ui.Container(
+                discord.ui.TextDisplay("## AI"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"### Base System Prompt\n{prompt_preview(instruction_text_base())}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"### Custom Instructions\n{custom}"),
+                discord.ui.ActionRow(edit_button),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"### Status\nAI enabled: `{ai_config.enabled}`"),
+                discord.ui.ActionRow(on_button, off_button),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "### Breaks\n"
+                    f"Enabled: `{ai_config.breaks.enabled}`\n"
+                    f"Active minutes: `{ai_config.breaks.active_minutes:g}`\n"
+                    f"Break minutes: `{ai_config.breaks.break_minutes:g}`"
+                ),
+                discord.ui.ActionRow(breaks_on_button, breaks_off_button, breaks_edit_button),
+            ))
+
+        async def set_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
+            ai_config.enabled = enabled
+            ai_core.configure(enabled=enabled)
+            await save_ai_config()
+            await interaction.response.edit_message(view=AIManagementView())
+
+        async def enable_ai(self, interaction: discord.Interaction) -> None:
+            await self.set_enabled(interaction, True)
+
+        async def disable_ai(self, interaction: discord.Interaction) -> None:
+            await self.set_enabled(interaction, False)
+
+        async def edit_custom_prompt(self, interaction: discord.Interaction) -> None:
+            await interaction.response.send_modal(AICustomInstructionModal())
+
+        async def set_breaks_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
+            ai_config.breaks.enabled = enabled
+            await save_ai_config()
+            await restart_break_task()
+            await interaction.response.edit_message(view=AIManagementView())
+
+        async def enable_breaks(self, interaction: discord.Interaction) -> None:
+            await self.set_breaks_enabled(interaction, True)
+
+        async def disable_breaks(self, interaction: discord.Interaction) -> None:
+            await self.set_breaks_enabled(interaction, False)
+
+        async def edit_breaks(self, interaction: discord.Interaction) -> None:
+            await interaction.response.send_modal(AIBreaksModal())
+
+    class AICustomInstructionModal(discord.ui.Modal, title="AI Custom Instructions"):
+        def __init__(self) -> None:
+            super().__init__()
+            self.custom_instruction_text = discord.ui.TextInput(
+                label="Custom prompt portion",
+                style=discord.TextStyle.paragraph,
+                required=False,
+                default=ai_config.custom_instruction_text[:4000],
+                max_length=4000,
+            )
+            self.add_item(self.custom_instruction_text)
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
+            await save_ai_config()
+            await interaction.response.send_message(
+                view=AIManagementView(),
+                ephemeral=True,
+            )
+
+    class AIBreaksModal(discord.ui.Modal, title="AI Breaks"):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_minutes = discord.ui.TextInput(
+                label="Active minutes",
+                required=True,
+                default=f"{ai_config.breaks.active_minutes:g}",
+                max_length=16,
+            )
+            self.break_minutes = discord.ui.TextInput(
+                label="Break minutes",
+                required=True,
+                default=f"{ai_config.breaks.break_minutes:g}",
+                max_length=16,
+            )
+            self.add_item(self.active_minutes)
+            self.add_item(self.break_minutes)
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            try:
+                active_minutes = max(0.0, float(self.active_minutes.value.strip()))
+                break_minutes = max(0.0, float(self.break_minutes.value.strip()))
+            except ValueError:
+                await interaction.response.send_message(
+                    "Break values must be numbers.",
+                    ephemeral=True,
+                )
+                return
+
+            ai_config.breaks.active_minutes = active_minutes
+            ai_config.breaks.break_minutes = break_minutes
+            await save_ai_config()
+            await restart_break_task()
+            await interaction.response.send_message(
+                view=AIManagementView(),
+                ephemeral=True,
+            )
+
+    @manage.command(
+        name="ai",
+        description="Manage AI settings",
+        perm_requirement=3,
+        defer=False,
+    )
+    async def manage_ai(interaction: discord.Interaction) -> None:
+        await bot.discord.send(
+            view=AIManagementView(),
+            response=True,
+            ephemeral=True,
+        )
 
     async def ai_break_cycle() -> None:
         global _ai_break_until
@@ -976,16 +1205,15 @@ async def setup(bot: 'BotCore'):
     @bot.init_callback
     async def init():
         nonlocal break_task
-        global INSTRUCTION_TEXT
+        global _bot_mention_text, _bot_display_name
         if not bot.user:
             return
-        INSTRUCTION_TEXT = INSTRUCTION_TEXT.replace(
-            "@Bogobot",
-            f'<@{bot.user.id} {json_string(bot.user.name)}>' if ai_core.normalize_discord else f'<@{bot.user.id}>'
-        ).replace(
-            "[DISPLAY_NAME]",
-            bot.user.display_name
+        _bot_mention_text = (
+            f'<@{bot.user.id} {json_string(bot.user.name)}>'
+            if ai_core.normalize_discord else
+            f'<@{bot.user.id}>'
         )
+        _bot_display_name = bot.user.display_name
         if ai_break_config(bot).enabled and (break_task is None or break_task.done()):
             break_task = asyncio.create_task(ai_break_cycle())
 
