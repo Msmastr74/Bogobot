@@ -286,6 +286,17 @@ async def setup(bot: BotCore) -> None:
                 response=True,
             )
             return
+        role_error = (
+            security_roles.manageable_role_error(guild, verified_role, "Verified role") or
+            security_roles.manageable_role_error(guild, quarantine_role, "Quarantine role")
+        )
+        if role_error is not None:
+            await bot.discord.send(
+                role_error,
+                ephemeral=True,
+                response=True,
+            )
+            return
         if not hasattr(interaction.channel, "send"):
             await bot.discord.send(
                 "The bot cannot send messages in this channel!",

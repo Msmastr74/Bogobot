@@ -58,6 +58,21 @@ def has_role_id(member: discord.Member, role_id: int | None) -> bool:
     return role_id is not None and any(role.id == role_id for role in member.roles)
 
 
+def manageable_role_error(guild: discord.Guild, role: discord.Role, label: str) -> str | None:
+    bot_member = guild.me
+    if bot_member is None:
+        return f"I cannot inspect my member state for `{label}`."
+    if not bot_member.guild_permissions.manage_roles:
+        return "I need the `Manage Roles` permission to manage verification/quarantine roles."
+    if role.is_default():
+        return f"`{label}` cannot be `@everyone`."
+    if role.managed:
+        return f"`{label}` cannot be an integration-managed role."
+    if role >= bot_member.top_role:
+        return f"`{label}` must be below my highest role."
+    return None
+
+
 async def set_roles(
     bot: "BotCore",
     *,

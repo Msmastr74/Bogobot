@@ -228,6 +228,14 @@ class RaidConfigView(discord.ui.LayoutView):
                 ephemeral=True,
             )
             return
+        role_error = security_roles.manageable_role_error(
+            self.guild,
+            selected,
+            "Verified role",
+        )
+        if role_error is not None:
+            await interaction.response.send_message(role_error, ephemeral=True)
+            return
         await security_roles.set_verified_role(self.protector.bot, selected)
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
@@ -241,6 +249,14 @@ class RaidConfigView(discord.ui.LayoutView):
                 "`Quarantine role` must be in this server.",
                 ephemeral=True,
             )
+            return
+        role_error = security_roles.manageable_role_error(
+            self.guild,
+            selected,
+            "Quarantine role",
+        )
+        if role_error is not None:
+            await interaction.response.send_message(role_error, ephemeral=True)
             return
         await security_roles.set_quarantine_role(self.protector.bot, selected)
         await interaction.response.edit_message(view=RaidConfigView(
@@ -751,6 +767,18 @@ class RaidProtector:
                 return quarantined
             try:
                 await member.add_roles(role, reason=reason)
+                removed_roles = await self.remove_quarantined_member_roles(
+                    member,
+                    quarantine_role=role,
+                    reason=reason,
+                )
+                if removed_roles:
+                    self.logger.warning(
+                        "Removed roles from quarantined member %s (%s): %s",
+                        member,
+                        member.id,
+                        ", ".join(f"{removed.name} ({removed.id})" for removed in removed_roles),
+                    )
             except discord.Forbidden:
                 self.logger.warning(f"Missing permissions to quarantine {member} ({member.id}).")
             except discord.HTTPException:
@@ -758,6 +786,85 @@ class RaidProtector:
             else:
                 quarantined.append(member)
         return quarantined
+
+    async def remove_quarantined_member_roles(
+        self,
+        member: discord.Member,
+        *,
+        quarantine_role: discord.Role,
+        reason: str,
+    ) -> list[discord.Role]:
+        roles = self.removable_member_roles(member, quarantine_role=quarantine_role)
+        if not roles:
+            return []
+
+        try:
+            await member.remove_roles(*roles, reason=f"{reason}: quarantine role isolation")
+            return roles
+        except discord.Forbidden:
+            self.logger.warning(
+                "Missing permissions to remove roles from quarantined member %s (%s).",
+                member,
+                member.id,
+            )
+            return []
+        except discord.HTTPException:
+            self.logger.exception(
+                "Bulk role removal failed for quarantined member %s (%s); retrying individually.",
+                member,
+                member.id,
+            )
+
+        removed_roles: list[discord.Role] = []
+        for role in roles:
+            try:
+                await member.remove_roles(role, reason=f"{reason}: quarantine role isolation")
+            except discord.Forbidden:
+                self.logger.warning(
+                    "Missing permissions to remove role %s (%s) from quarantined member %s (%s).",
+                    role.name,
+                    role.id,
+                    member,
+                    member.id,
+                )
+            except discord.HTTPException:
+                self.logger.exception(
+                    "Failed to remove role %s (%s) from quarantined member %s (%s).",
+                    role.name,
+                    role.id,
+                    member,
+                    member.id,
+                )
+            else:
+                removed_roles.append(role)
+        return removed_roles
+
+    def removable_member_roles(
+        self,
+        member: discord.Member,
+        *,
+        quarantine_role: discord.Role,
+    ) -> list[discord.Role]:
+        bot_member = member.guild.me
+        if bot_member is None:
+            self.logger.warning(
+                "Cannot remove roles from quarantined member %s (%s): bot member is unavailable.",
+                member,
+                member.id,
+            )
+            return []
+
+        removable_roles: list[discord.Role] = []
+        for role in member.roles:
+            if (
+                role.is_default() or
+                role.managed or
+                role.id == quarantine_role.id or
+                role >= bot_member.top_role
+            ):
+                continue
+            removable_roles.append(role)
+        return removable_roles
 
     def record_quarantines(
         self,
@@ -794,6 +901,16 @@ class RaidProtector:
             ))
         except discord.HTTPException:
             self.logger.exception(f"Failed to send raid alert to channel {channel_id}.")
+
+    def role_configuration_error(self, guild: discord.Guild) -> str | None:
+        quarantine_role = security_roles.quarantine_role(self.bot, guild)
+        if quarantine_role is None:
+            return "Raid protection needs a configured quarantine role first: `/manage raid action:config`."
+        return security_roles.manageable_role_error(
+            guild,
+            quarantine_role,
+            "Quarantine role",
+        )
 
 
 class RaidAlertView(discord.ui.LayoutView):
@@ -888,9 +1005,10 @@ async def setup(bot: BotCore) -> None:
                     ephemeral=True,
                 )
                 return
-            if security_roles.quarantine_role(bot, guild) is None:
+            role_error = protector.role_configuration_error(guild)
+            if role_error is not None:
                 await bot.discord.send(
-                    "Raid protection needs a configured quarantine role first: `/manage raid action:config`.",
+                    role_error,
                     response=True,
                     ephemeral=True,
                 )
@@ -931,9 +1049,10 @@ async def setup(bot: BotCore) -> None:
                     ephemeral=True,
                 )
                 return
-            if security_roles.quarantine_role(bot, guild) is None:
+            role_error = protector.role_configuration_error(guild)
+            if role_error is not None:
                 await bot.discord.send(
-                    "Raid protection needs a configured quarantine role first: `/manage raid action:config`.",
+                    role_error,
                     response=True,
                     ephemeral=True,
                 )
