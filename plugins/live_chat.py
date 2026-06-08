@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 from typing import Protocol, TypedDict
 
@@ -150,7 +151,8 @@ async def setup(bot: BotCore):
             return {
                 "view": LiveChatView(format_chat_buffer())
             }
-
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             log.warning(f"pytchat error: {repr(e)}")
 

@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 
 import discord
 
@@ -26,6 +26,8 @@ ACCOUNT_AGE_1_DAY = 24 * 60 * 60
 ACCOUNT_AGE_7_DAYS = 7 * ACCOUNT_AGE_1_DAY
 ACCOUNT_AGE_30_DAYS = 30 * ACCOUNT_AGE_1_DAY
 CREATION_CLUSTER_SECONDS = 60 * 60
+QUARANTINE_ACCOUNT_KEY = "raid_quarantine"
+UNQUARANTINE_CUSTOM_ID_PREFIX = "bogobot:raid:unquarantine"
 
 
 @dataclass
@@ -72,6 +74,14 @@ class GuildRaidState:
     expires_at: float | None = None
     last_suspicious_at: float | None = None
     recent_quarantined_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
+class QuarantineResult:
+    member: discord.Member
+    removed_roles: list[discord.Role]
+    reason: str
+    timestamp: int
 
 
 class RaidStatusView(discord.ui.LayoutView):
@@ -402,12 +412,11 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
             return
 
         await self.protector.save_config()
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             view=RaidConfigView(
                 protector=self.protector,
                 guild=self.guild,
             ),
-            ephemeral=True,
         )
 
     def _parse_assignments(
@@ -754,8 +763,8 @@ class RaidProtector:
         self,
         members: list[discord.Member],
         reason: str,
-    ) -> list[discord.Member]:
-        quarantined: list[discord.Member] = []
+    ) -> list[QuarantineResult]:
+        quarantined: list[QuarantineResult] = []
         for member in members:
             if self.should_skip_member(member):
                 continue
@@ -772,6 +781,13 @@ class RaidProtector:
                     quarantine_role=role,
                     reason=reason,
                 )
+                result = QuarantineResult(
+                    member=member,
+                    removed_roles=removed_roles,
+                    reason=reason,
+                    timestamp=int(time.time()),
+                )
+                await self.store_quarantine_result(result)
                 if removed_roles:
                     self.logger.warning(
                         "Removed roles from quarantined member %s (%s): %s",
@@ -784,7 +800,8 @@ class RaidProtector:
             except discord.HTTPException:
                 self.logger.exception(f"Failed to quarantine {member} ({member.id}).")
             else:
-                quarantined.append(member)
+                quarantined.append(result)
+                await self.alert_quarantine(result)
         return quarantined
 
     async def remove_quarantined_member_roles(
@@ -869,19 +886,33 @@ class RaidProtector:
     def record_quarantines(
         self,
         state: GuildRaidState,
-        members: list[discord.Member],
+        members: list[QuarantineResult],
     ) -> None:
-        for member in members:
-            if member.id not in state.recent_quarantined_ids:
-                state.recent_quarantined_ids.append(member.id)
+        for result in members:
+            if result.member.id not in state.recent_quarantined_ids:
+                state.recent_quarantined_ids.append(result.member.id)
         state.recent_quarantined_ids = state.recent_quarantined_ids[-25:]
+
+    async def store_quarantine_result(self, result: QuarantineResult) -> None:
+        guild_id = str(result.member.guild.id)
+        async with self.bot.accounts.lock:
+            account = self.bot.accounts._account_locked(str(result.member.id))
+            raw_records = account.get(QUARANTINE_ACCOUNT_KEY)
+            records = raw_records if isinstance(raw_records, dict) else {}
+            records[guild_id] = {
+                "removed_role_ids": [role.id for role in result.removed_roles],
+                "reason": result.reason,
+                "timestamp": result.timestamp,
+            }
+            account[QUARANTINE_ACCOUNT_KEY] = records
+            self.bot.accounts._save_sync()
 
     async def alert(
         self,
         guild_id: int,
         message: str,
         score: RaidScore,
-        quarantined: list[discord.Member],
+        quarantined: list[QuarantineResult],
     ) -> None:
         channel_id = self.config.alert_channel_id
         if channel_id is None:
@@ -891,7 +922,7 @@ class RaidProtector:
         if not isinstance(channel, discord.TextChannel):
             self.logger.warning(f"Raid alert skipped for guild {guild_id}: alert channel {channel_id} is unavailable.")
             return
-        mentions = ", ".join(member.mention for member in quarantined) or "None"
+        mentions = ", ".join(result.member.mention for result in quarantined) or "None"
         try:
             await channel.send(view=RaidAlertView(
                 title=message,
@@ -901,6 +932,32 @@ class RaidProtector:
             ))
         except discord.HTTPException:
             self.logger.exception(f"Failed to send raid alert to channel {channel_id}.")
+
+    async def alert_quarantine(self, result: QuarantineResult) -> None:
+        channel_id = self.config.alert_channel_id
+        if channel_id is None:
+            self.logger.warning(
+                "Raid quarantine alert skipped for guild %s: alert channel is not configured.",
+                result.member.guild.id,
+            )
+            return
+        channel = self.bot.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            self.logger.warning(
+                "Raid quarantine alert skipped for guild %s: alert channel %s is unavailable.",
+                result.member.guild.id,
+                channel_id,
+            )
+            return
+        try:
+            await channel.send(view=RaidQuarantineView(result=result))
+        except discord.HTTPException:
+            self.logger.exception(
+                "Failed to send raid quarantine alert for %s (%s) to channel %s.",
+                result.member,
+                result.member.id,
+                channel_id,
+            )
 
     def role_configuration_error(self, guild: discord.Guild) -> str | None:
         quarantine_role = security_roles.quarantine_role(self.bot, guild)
@@ -939,9 +996,200 @@ class RaidAlertView(discord.ui.LayoutView):
         ))
 
 
+def _role_mentions(roles: list[discord.Role]) -> str:
+    if not roles:
+        return "None"
+    return ", ".join(role.mention for role in roles)
+
+
+class RaidQuarantineView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        result: QuarantineResult,
+    ) -> None:
+        super().__init__(timeout=None)
+        member = result.member
+        account_created = int(member.created_at.timestamp())
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("## User Quarantined"),
+            discord.ui.Separator(),
+            discord.ui.Section(
+                discord.ui.TextDisplay(
+                    "\n".join([
+                        f"User: {member.mention} `{member.id}`",
+                        f"Account created: <t:{account_created}:F> `<t:{account_created}:R>`",
+                        f"Reason: `{result.reason}`",
+                        f"Quarantined at: <t:{result.timestamp}:F>",
+                        f"Previous roles: {_role_mentions(result.removed_roles)}",
+                    ])
+                ),
+                accessory=cast(discord.ui.Item[discord.ui.LayoutView], RaidUnquarantineButton(
+                    guild_id=member.guild.id,
+                    user_id=member.id,
+                )),
+            ),
+        ))
+
+
+class RaidUnquarantineButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=rf"{UNQUARANTINE_CUSTOM_ID_PREFIX}:(?P<guild_id>\d+):(?P<user_id>\d+)",
+):
+    def __init__(
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+    ) -> None:
+        super().__init__(discord.ui.Button(
+            label="Unquarantine",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"{UNQUARANTINE_CUSTOM_ID_PREFIX}:{guild_id}:{user_id}",
+        ))
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Item[discord.ui.View | discord.ui.LayoutView],
+        match,
+    ) -> "RaidUnquarantineButton":
+        return cls(
+            guild_id=int(match["guild_id"]),
+            user_id=int(match["user_id"]),
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        if not isinstance(bot, BotCore):
+            await interaction.response.send_message(
+                "This button is not available right now.",
+                ephemeral=True,
+            )
+            return
+        if not bot.is_authorized(interaction.user.id, 2):
+            await interaction.response.send_message(
+                "You are not authorized to unquarantine users.",
+                ephemeral=True,
+            )
+            return
+        guild = interaction.guild
+        if guild is None or guild.id != self.guild_id:
+            await interaction.response.send_message(
+                "This unquarantine button belongs to another server.",
+                ephemeral=True,
+            )
+            return
+        member = guild.get_member(self.user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(self.user_id)
+            except discord.NotFound:
+                await self._clear_record(bot)
+                await interaction.response.send_message(
+                    "That member is no longer in this server. Cleared the stored quarantine record.",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException:
+                await interaction.response.send_message(
+                    "I could not fetch that member.",
+                    ephemeral=True,
+                )
+                return
+
+        raw_records = bot.accounts[self.user_id].get(QUARANTINE_ACCOUNT_KEY)
+        raw_record = (
+            raw_records.get(str(self.guild_id))
+            if isinstance(raw_records, dict) else
+            None
+        )
+        record = raw_record if isinstance(raw_record, dict) else {}
+        raw_role_ids = record.get("removed_role_ids", [])
+        role_ids = [
+            int(role_id)
+            for role_id in raw_role_ids
+            if isinstance(role_id, int) or (isinstance(role_id, str) and role_id.isdigit())
+        ]
+        restorable_roles = [
+            role
+            for role_id in role_ids
+            if (role := guild.get_role(role_id)) is not None and self._can_manage_role(guild, role)
+        ]
+        skipped_roles = [
+            str(role_id)
+            for role_id in role_ids
+            if guild.get_role(role_id) is None or not self._can_manage_role(guild, guild.get_role(role_id))
+        ]
+        quarantine_role = security_roles.quarantine_role(bot, guild)
+        try:
+            if restorable_roles:
+                await member.add_roles(
+                    *restorable_roles,
+                    reason=f"Raid unquarantine by {interaction.user} ({interaction.user.id})",
+                )
+            if quarantine_role is not None and any(role.id == quarantine_role.id for role in member.roles):
+                await member.remove_roles(
+                    quarantine_role,
+                    reason=f"Raid unquarantine by {interaction.user} ({interaction.user.id})",
+                )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I do not have permission to restore roles or remove quarantine.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Unquarantine failed while updating roles.",
+                ephemeral=True,
+            )
+            return
+
+        await self._clear_record(bot)
+        restored = _role_mentions(restorable_roles)
+        skipped = ", ".join(skipped_roles) or "None"
+        await interaction.response.send_message(
+            "\n".join([
+                f"Unquarantined {member.mention}.",
+                f"Restored roles: {restored}",
+                f"Skipped missing/unmanageable role IDs: `{skipped}`",
+            ]),
+            ephemeral=True,
+        )
+
+    def _can_manage_role(self, guild: discord.Guild, role: discord.Role | None) -> bool:
+        if role is None:
+            return False
+        bot_member = guild.me
+        return (
+            bot_member is not None and
+            not role.is_default() and
+            not role.managed and
+            role < bot_member.top_role
+        )
+
+    async def _clear_record(self, bot: BotCore) -> None:
+        async with bot.accounts.lock:
+            account = bot.accounts._account_locked(str(self.user_id))
+            raw_records = account.get(QUARANTINE_ACCOUNT_KEY)
+            if not isinstance(raw_records, dict):
+                return
+            raw_records.pop(str(self.guild_id), None)
+            if raw_records:
+                account[QUARANTINE_ACCOUNT_KEY] = raw_records
+            else:
+                account.pop(QUARANTINE_ACCOUNT_KEY, None)
+            bot.accounts._save_sync()
+
+
 async def setup(bot: BotCore) -> None:
     protector = RaidProtector(bot)
     manage = groups.manage(bot)
+    bot.add_dynamic_items(RaidUnquarantineButton)
 
     @bot.member_join_callback
     async def on_member_join(member: discord.Member | discord.User) -> None:

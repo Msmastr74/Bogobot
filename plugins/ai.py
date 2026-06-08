@@ -914,7 +914,7 @@ async def setup(bot: 'BotCore'):
 
         async def set_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
             ai_config.enabled = enabled
-            ai_core.configure(enabled=enabled)
+            ai_core.configure(enabled=enabled, base_url=ai_config.base_url)
             await save_ai_config()
             await interaction.response.edit_message(view=AIManagementView())
 
@@ -960,9 +960,8 @@ async def setup(bot: 'BotCore'):
         async def on_submit(self, interaction: discord.Interaction) -> None:
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 view=AIManagementView(),
-                ephemeral=True,
             )
 
     class AIBreaksModal(discord.ui.Modal, title="AI Breaks"):
@@ -998,9 +997,8 @@ async def setup(bot: 'BotCore'):
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 view=AIManagementView(),
-                ephemeral=True,
             )
 
     @manage.command(
