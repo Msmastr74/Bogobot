@@ -584,14 +584,6 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
-        if user.id == interaction.user.id:
-            await bot.discord.send(
-                contents="You cannot edit your own capabilities.",
-                response=True,
-                ephemeral=True,
-            )
-            return
-
         if action in ("grant", "revoke") and not requested_capabilities:
             await bot.discord.send(
                 contents="At least one capability is required.",
