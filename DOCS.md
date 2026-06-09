@@ -72,7 +72,7 @@ Cbogo storage:
 Account storage:
 - `accounts.json`, or the file named by `accounts_path`, stores Discord user IDs mapped to account records.
 - Each account record contains a `permissions` object plus plugin-owned root-level annotation fields.
-- Permissions are capability based. Normal users receive `commands.*` and `user.*`; the configured `owner_uid` receives `*`.
+- Permissions are capability based. Normal users receive `commands` and `user`; the configured `owner_uid` receives `[all]`.
 - Server-local account data is stored under each account's `servers.<guild_id>` record. Local records inherit global permissions unless they override them.
 
 Archive storage:
@@ -232,7 +232,7 @@ Account storage and permission logic live in `utils.accounts`, separate from the
 
 `account.local(guild_id)` returns a server-local account view. Server-local views inherit global permissions, then apply local overrides. This is used for server-specific systems such as Bogotree, cbogo, verification, and raid protection.
 
-Capabilities are string permissions such as `commands.*`, `user.ai`, or `raid.manage`. Commands automatically register and require `commands.<qualified.command.name>`, with spaces in Discord qualified names converted to dots. Additional sensitive capabilities can be passed with `capabilities=[...]` in command decorators. See `CAPABILITIES.md` or `/capabilities` for the current capability list.
+Capabilities are string permissions such as `commands`, `user.ai`, or `raid.manage`. Commands automatically register and require `commands.<qualified.command.name>`, with spaces in Discord qualified names converted to dots. Additional sensitive capabilities can be passed with `capabilities=[...]` in command decorators. See `CAPABILITIES.md` or `/capabilities` for the current capability list.
 
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.
@@ -329,13 +329,16 @@ Several management commands use an explicit action parameter instead of separate
 
 Account commands live under `/accounts`:
 
-- `/accounts capability grant|revoke user capabilities [depth]`: Grants or revokes a comma-separated capability list. Capabilities under `server.*` are stored server-locally.
-- `/accounts capability grant|revoke user preset [depth]`: Grants or revokes every capability in a preset. Prefix a preset with `server.`, such as `server.moderator`, to apply it only in the current server.
-- `/accounts capability reset user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides.
-- `/accounts preset show|create|remove name [capabilities]`: Shows, creates/replaces, or removes a custom global preset. Custom preset definitions contain unprefixed capabilities; apply them server-locally with `server.<preset>`.
+- `/accounts capabilities grant|revoke user capabilities [depth]`: Grants or revokes a comma-separated capability list. Capabilities under `server.*` are stored server-locally.
+- `/accounts capabilities grant|revoke user capabilities:(preset) [depth]`: Grants or revokes a dynamic preset reference. Use `server.(preset)` to apply it only in the current server.
+- `/accounts capabilities resolve capabilities`: Shows the concrete capabilities produced by a comma-separated capability list.
+- `/accounts capabilities reset user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides.
+- `/accounts preset show|create|remove name [capabilities]`: Shows, creates/replaces, or removes a custom global preset. Custom preset definitions contain unprefixed capabilities; apply them server-locally with `server.(preset)`.
 - `/accounts list_users [capability]`: Lists accounts, optionally filtered to users who can use a capability in the current server context.
-- `/accounts ban ban|unban user`: Bans an account by clearing global and local capabilities, or unbans by restoring default global capabilities.
+- `/accounts ban ban|unban user [scope]`: Bans or unbans an account globally or in the current server by setting or removing the negative `banned` capability.
 - `/accounts info [user] [eph]`: Shows account information for a user, defaulting to the caller.
+
+Global management capabilities can affect global or server-local targets. Server-local management capabilities can only affect server-local targets. For example, `accounts.ban` can use `/accounts ban scope:global` or `scope:server`, while `server.accounts.ban` only authorizes `scope:server`.
 
 ### Creating a Plugin
 Each plugin must include a `setup` function to register commands with the `BotCore` instance:
@@ -407,6 +410,6 @@ async def setup(bot):
 Keep group helpers tiny. They should only name and return the shared group; command behavior belongs in plugins.
 
 ### Capabilities
-Every command receives a default capability named from its Discord qualified name, such as `commands.ping`, `commands.manage.raid`, or `commands.accounts.info`. Normal users receive `commands.*`, so ordinary commands are available by default. Sensitive commands add narrower capabilities such as `raid.manage` or `discord.announce`.
+Every command receives a default capability named from its Discord qualified name, such as `commands.ping`, `commands.manage.raid`, or `commands.accounts.info`. Normal users receive `commands`, so ordinary commands are available by default. Sensitive commands add narrower capabilities such as `raid.manage` or `discord.announce`.
 
-Grant delegation is controlled by `grant.<capability>` and delegation depth. The owner wildcard `*` can use, grant, and revoke every capability. The special matcher segments `[any]` and `[all]` can be used for broad grant scopes. The `server.` prefix targets the current server's local account record; for example, granting `server.raid.manage` stores local `raid.manage`. `server.` is a management prefix only; commands still check the unprefixed capability through `account.local(guild_id)`. See `CAPABILITIES.md` for the maintained capability list and preset names.
+Root capabilities are prefix matches: `commands` matches `commands`, `commands.ping`, and `commands.manage.raid`, but `commands.manage` does not match the lower `commands` prefix. Grant delegation is controlled by `<capability>.grant` and delegation depth; use `<capability>.use` when use depth should differ from grant depth. Granting, revoking, or resetting a capability requires being above the target account's maximum `.use`/`.grant` depth for that capability and its parent paths. The owner wildcard `[all]` can use, grant, and revoke every capability. The negative `banned` capability disables every other effective capability. The matcher segments `[any]` and `[all]` both apply as broad wildcards; for grant/revoke/reset checks, `[any]` requires authority over any one matching registered capability while `[all]` requires authority over every matching registered capability. The `server.` prefix targets the current server's local account record; for example, granting `server.raid.manage` stores local `raid.manage`. `server.` is a management prefix only; commands still check the unprefixed capability through `account.local(guild_id)`. Global management capabilities can affect global or server-local targets, but server-local management capabilities only affect server-local targets. See `CAPABILITIES.md` for the maintained capability list and preset names.

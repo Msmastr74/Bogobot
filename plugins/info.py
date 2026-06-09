@@ -183,16 +183,6 @@ class CommandSignatureBox(discord.ui.LayoutView):
         return getattr(annotation, "__name__", str(annotation))
 
 
-class CapabilitiesBox(discord.ui.LayoutView):
-    def __init__(self, text: str) -> None:
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay("## Capabilities"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(text),
-        ))
-
-
 def normalize_command_name(name: str) -> str:
     return COMMAND_NAME_CHARACTER_RE.sub("", name)
 
@@ -303,14 +293,15 @@ async def setup(bot: BotCore):
         eph=True,
     )
     async def capabilities(interaction: discord.Interaction):
-        try:
-            text = CAPABILITIES_PATH.read_text(encoding="utf-8")
-        except OSError:
-            text = "CAPABILITIES.md could not be read."
-        if count_characters(text) > MAX_COMMAND_TEXT_CHARACTERS:
-            text = text[:MAX_COMMAND_TEXT_CHARACTERS - 20] + "\n..."
+        if not CAPABILITIES_PATH.exists():
+            await bot.discord.send(
+                "CAPABILITIES.md could not be read.",
+                response=True,
+                ephemeral=True,
+            )
+            return
         await bot.discord.send(
-            view=CapabilitiesBox(text),
+            files=[discord.File(CAPABILITIES_PATH)],
             response=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )

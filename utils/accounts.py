@@ -1,7 +1,8 @@
 import asyncio
 import json
 import os
-from typing import Any, Sequence
+from collections.abc import Callable
+from typing import Any, ClassVar, Literal, Sequence
 
 from pydantic import Field
 
@@ -10,8 +11,11 @@ from utils.schemas import Schema
 AccountRecord = dict[str, Any]
 PERMISSIONS_KEY = "perms"
 LOCAL_ACCOUNTS_KEY = "local"
-DEFAULT_COMMAND_CAPABILITY = "commands.*"
-DEFAULT_USER_CAPABILITY = "user.*"
+DEFAULT_COMMAND_CAPABILITY = "commands"
+DEFAULT_USER_CAPABILITY = "user"
+BANNED_CAPABILITY = "banned"
+CAPABILITY_OPERATIONS = {"use", "grant"}
+CapabilityOperation = Literal["use", "grant"]
 
 
 def default_capabilities() -> dict[str, int]:
@@ -29,9 +33,17 @@ class CapabilityRegistry:
         self.capabilities.update(capabilities)
 
     def __contains__(self, capability: str) -> bool:
-        return any(
-            AccountPermissions._matches(registered_capability, capability)
-            for registered_capability in self.capabilities
+        if AccountPermissions.has_preset_segment(capability):
+            return True
+        return any(self._matches(registered_capability, capability) for registered_capability in self.capabilities)
+
+    @staticmethod
+    def _matches(registered_capability: str, capability: str) -> bool:
+        registered_base, _ = AccountPermissions._split_operation(registered_capability)
+        capability_base, _ = AccountPermissions._split_operation(capability)
+        return (
+            AccountPermissions._matches_base(registered_base, capability_base) or
+            AccountPermissions._matches_base(capability_base, registered_base)
         )
 
     def __iter__(self):
@@ -39,47 +51,200 @@ class CapabilityRegistry:
 
 
 class AccountPermissions(Schema):
+    preset_resolver: ClassVar[Callable[[str], Sequence[str]] | None] = None
+
     capabilities: dict[str, int] = Field(default_factory=dict)
 
+    @classmethod
+    def configure_presets(cls, resolver: Callable[[str], Sequence[str]] | None) -> None:
+        cls.preset_resolver = resolver
+
     def depth(self, capability: str) -> int:
+        capability_base, operation = self._split_operation(capability)
+        return self.effective_depth(capability_base, operation=operation or "use")
+
+    def effective_depth(self, capability: str, *, operation: CapabilityOperation = "use") -> int:
+        if capability != BANNED_CAPABILITY and self.is_banned():
+            return -1
+        capability_base, explicit_operation = self._split_operation(capability)
+        operation = explicit_operation or operation
         matches = [
             depth
             for scope, depth in self.capabilities.items()
-            if self._matches(scope, capability)
+            if self._matches(scope, capability_base, operation=operation)
         ]
         return max(matches, default=-1)
 
+    def is_banned(self) -> bool:
+        return any(self._is_banned_scope(scope) for scope in self.capabilities)
+
+    def max_depth(self) -> int:
+        return max(self.capabilities.values(), default=-1)
+
+    def delegation_depth(self, capability: str) -> int:
+        capability_base, _ = self._split_operation(capability)
+        return max(
+            self.effective_depth(capability_base, operation="use"),
+            self.effective_depth(capability_base, operation="grant"),
+        )
+
+    def required_modification_depth(self, capability: str) -> int:
+        capability_base, _ = self._split_operation(capability)
+        depths = [
+            self.delegation_depth(base)
+            for expanded_base in self._expand_capability_base(capability_base)
+            for base in self._modification_bases(expanded_base)
+        ]
+        return max(depths, default=-1)
+
     def can_use(self, capability: str) -> bool:
-        return self.depth(capability) >= 0
+        capability_base, _ = self._split_operation(capability)
+        return self.effective_depth(capability_base, operation="use") >= 0
 
     def can_grant(self, capability: str, *, depth: int = 0) -> bool:
-        return self.depth(capability) > depth
+        capability_base, _ = self._split_operation(capability)
+        return self.effective_depth(capability_base, operation="grant") > depth
 
     def can_revoke(self, capability: str, *, depth: int = 0) -> bool:
-        return self.depth(capability) > depth
+        capability_base, _ = self._split_operation(capability)
+        return self.effective_depth(capability_base, operation="grant") > depth
 
     def grant(self, capability: str, *, depth: int = 0) -> None:
-        self.capabilities[capability] = int(depth)
+        self.capabilities[self._canonical_permission(capability)] = int(depth)
 
     def revoke(self, capability: str) -> None:
-        self.capabilities.pop(capability, None)
+        self.capabilities.pop(self._canonical_permission(capability), None)
 
-    @staticmethod
-    def _matches(scope: str, capability: str) -> bool:
-        if scope == "*":
-            return True
-        return AccountPermissions._match_parts(
-            AccountPermissions._capability_parts(scope),
-            AccountPermissions._capability_parts(capability),
+    @classmethod
+    def _is_banned_scope(cls, scope: str) -> bool:
+        scope_base, scope_operation = cls._split_operation(scope)
+        if scope_operation == "grant":
+            return False
+        return any(
+            expanded_scope == BANNED_CAPABILITY
+            for expanded_scope in cls._expand_capability_base(scope_base)
         )
 
     @staticmethod
+    def _canonical_permission(capability: str) -> str:
+        capability_base, operation = AccountPermissions._split_operation(capability)
+        if operation is None:
+            return capability_base
+        return f"{capability_base}.{operation}"
+
+    @staticmethod
+    def _split_operation(capability: str) -> tuple[str, CapabilityOperation | None]:
+        parts = capability.split(".")
+        if parts and parts[-1] in CAPABILITY_OPERATIONS:
+            return ".".join(parts[:-1]), parts[-1]  # type: ignore[return-value]
+        return capability, None
+
+    @classmethod
+    def _matches(cls, scope: str, capability: str, *, operation: CapabilityOperation) -> bool:
+        scope_base, scope_operation = cls._split_operation(scope)
+        if scope_operation is not None and scope_operation != operation:
+            return False
+        return cls._matches_base(scope_base, capability)
+
+    @classmethod
+    def _matches_base(cls, scope: str, capability: str) -> bool:
+        expanded_scopes = cls._expand_capability_base(scope)
+        expanded_capabilities = cls._expand_capability_base(capability)
+        return any(
+            cls._matches_expanded_base(expanded_scope, expanded_capability)
+            for expanded_scope in expanded_scopes
+            for expanded_capability in expanded_capabilities
+        )
+
+    @classmethod
+    def expand_capability(cls, capability: str) -> tuple[str, ...]:
+        capability_base, operation = cls._split_operation(capability)
+        expanded_bases = cls._expand_capability_base(capability_base)
+        if operation is None:
+            return expanded_bases
+        return tuple(
+            f"{expanded_base}.{operation}"
+            for expanded_base in expanded_bases
+        )
+
+    @classmethod
+    def has_preset_segment(cls, capability: str) -> bool:
+        return any(cls._preset_name(part) is not None for part in cls._capability_parts(capability))
+
+    @classmethod
+    def _matches_expanded_base(cls, scope: str, capability: str) -> bool:
+        scope_parts = cls._capability_parts(scope)
+        capability_parts = cls._capability_parts(capability)
+        return (
+            cls._match_parts(scope_parts, capability_parts) or
+            cls._match_prefix_parts(scope_parts, capability_parts)
+        )
+
+    @classmethod
+    def _expand_capability_base(cls, capability: str) -> tuple[str, ...]:
+        expanded: list[tuple[str, ...]] = [()]
+        for part in cls._capability_parts(capability):
+            preset_name = cls._preset_name(part)
+            if preset_name is None:
+                expanded = [(*path, part) for path in expanded]
+                continue
+
+            preset_capabilities = (
+                tuple(cls.preset_resolver(preset_name))
+                if cls.preset_resolver is not None else
+                ()
+            )
+            if not preset_capabilities:
+                return ()
+
+            next_expanded: list[tuple[str, ...]] = []
+            for path in expanded:
+                for preset_capability in preset_capabilities:
+                    for preset_path in cls._expand_capability_base(preset_capability):
+                        next_expanded.append((*path, *cls._capability_parts(preset_path)))
+            expanded = next_expanded
+
+        return tuple(".".join(path) for path in expanded if path)
+
+    @staticmethod
+    def _preset_name(part: str) -> str | None:
+        if len(part) < 3 or not part.startswith("(") or not part.endswith(")"):
+            return None
+        name = part[1:-1].strip()
+        return name or None
+
+    @staticmethod
     def _capability_parts(capability: str) -> tuple[str, ...]:
-        if capability == "*":
-            return ("[all]",)
-        if capability.endswith(".*"):
-            return (*capability[:-2].split("."), "[all]")
         return tuple(capability.split("."))
+
+    @staticmethod
+    def _modification_bases(capability: str) -> tuple[str, ...]:
+        if capability == "[all]":
+            return (capability,)
+
+        parts = AccountPermissions._capability_parts(capability)
+        if not parts:
+            return ()
+        return tuple(
+            ".".join(parts[:index])
+            for index in range(1, len(parts) + 1)
+        )
+
+    @staticmethod
+    def _match_prefix_parts(scope: tuple[str, ...], capability: tuple[str, ...]) -> bool:
+        if not scope:
+            return True
+        if not capability:
+            return len(scope) == 1 and scope[0] == "[all]"
+
+        scope_head, *scope_tail = scope
+        capability_head, *capability_tail = capability
+
+        if scope_head == "[all]":
+            return True
+        if scope_head == "[any]" or scope_head == capability_head:
+            return AccountPermissions._match_prefix_parts(tuple(scope_tail), tuple(capability_tail))
+        return False
 
     @staticmethod
     def _match_parts(scope: tuple[str, ...], capability: tuple[str, ...]) -> bool:
