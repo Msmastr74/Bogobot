@@ -1120,8 +1120,6 @@ async def setup(bot: 'BotCore'):
                     followup_only=followup_only,
                 )
 
-                if match.after_execution is not None:
-                    match.after_execution(None)
                 async with capture_interaction_output(interaction) as output_messages:
                     capabilities = bot.setup._normalize_capabilities((
                         bot.setup._default_capability(match.command_name),
@@ -1138,6 +1136,8 @@ async def setup(bot: 'BotCore'):
                     )
                 if len(output_messages) > 0:
                     followup_only = True
+                if match.after_execution is not None:
+                    match.after_execution(output_messages[-1] if output_messages else None)
         finally:
             lock_token.release()
 
@@ -1202,8 +1202,6 @@ async def setup(bot: 'BotCore'):
                 if match.action is None:
                     continue
 
-                if match.after_execution is not None:
-                    match.after_execution(None)
                 async with capture_interaction_output(interaction) as output_messages:
                     capabilities = bot.setup._normalize_capabilities((
                         bot.setup._default_capability(match.command_name),
@@ -1219,6 +1217,8 @@ async def setup(bot: 'BotCore'):
                         defer=False,
                     )
                 has_responded = has_responded or len(output_messages) > 0
+                if match.after_execution is not None:
+                    match.after_execution(output_messages[-1] if output_messages else None)
             if not has_responded:
                 await bot.discord.cleanup_defer_status(interaction)
                 await bot.discord.send(

@@ -89,8 +89,6 @@ async def trigger_ai_activity(
                 guild=getattr(channel, "guild", None),
                 followup_only=followup_only,
             )
-            if match.after_execution is not None:
-                match.after_execution(None)
             async with capture_interaction_output(interaction) as output_messages:
                 capabilities = bot.setup._normalize_capabilities((
                     bot.setup._default_capability(match.command_name),
@@ -108,6 +106,8 @@ async def trigger_ai_activity(
             if output_messages:
                 followup_only = True
                 sent_messages.extend(output_messages)
+            if match.after_execution is not None:
+                match.after_execution(output_messages[-1] if output_messages else None)
 
         return sent_messages
     finally:
