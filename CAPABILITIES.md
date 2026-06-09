@@ -12,13 +12,13 @@ Capabilities are string permissions stored on each account. A user can run a com
 - `server.<capability>`: Capability-management target prefix. It writes the capability to the current server's local account record, so `server.raid.manage` grants local `raid.manage`.
 - `(preset)`: Dynamic preset segment. It expands to the current capability list for `preset` whenever permissions are checked.
 - `server.(preset)`: Dynamic server-local preset segment. It writes the dynamic preset reference to the current server's local account record.
-- `banned`: Negative capability. When present on an effective account, all other capabilities are disabled.
+- `banned`: Negative capability. When present on an effective account, all other capabilities are disabled. It is reserved and can only be changed by `/accounts ban`.
 - `[any]`: Applied wildcard segment. When checking whether a wildcard grant/revoke/reset is allowed, requiring `[any]` means the caller only needs authority over one matching registered capability.
 - `[all]`: Applied wildcard segment. When checking whether a wildcard grant/revoke/reset is allowed, requiring `[all]` means the caller needs authority over every matching registered capability. A root `[all]` grants every capability.
 
 Root capabilities are prefix matches. For example, `commands` matches `commands`, `commands.ping`, and `commands.manage.raid`. A more specific capability, such as `commands.manage`, matches itself and descendants but not lower prefixes such as `commands`.
 
-Use `.use` and `.grant` when you need different effective depths. For example, `raid.use: 5` and `raid.grant: 1` let a user use raid capabilities more broadly than they can delegate them. Granting, revoking, or resetting a capability uses the target account's maximum `.use`/`.grant` depth for that capability and its parent paths, so subpath edits cannot bypass stronger parent permissions.
+Use `.use` and `.grant` when you need different effective depths. For example, `raid.use: 5` and `raid.grant: 1` let a user use raid capabilities more broadly than they can delegate them. Granting, revoking, or resetting a capability uses the target account's exact maximum depth for that capability plus its `.use` and `.grant` forms. Broader prefixes can coexist with lower specific capabilities; account capability displays label lower entries when a broader entry overrides them.
 
 `server.<capability>` is not checked directly by commands. It is only used while granting, revoking, filtering, or expanding presets. Runtime permission checks still use the unprefixed capability on the server-local account view. For example, `/accounts capabilities action:grant capabilities:server.discord.announce user:@user` stores `discord.announce` under that user's current-server permissions, and `/manage announce` then sees `discord.announce` through `account.local(guild_id)`.
 
@@ -32,6 +32,7 @@ Global management capabilities can affect global or server-local targets. Server
 - `/accounts capabilities action:revoke capabilities:a,b,c user:@user`: Revokes a comma-separated capability list.
 - `/accounts capabilities action:reset user:@user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides. It fails without changing anything if the caller cannot revoke every current capability and grant every default capability.
 - `/accounts capabilities action:resolve capabilities:a,b,c`: Shows the concrete capabilities produced by the comma-separated capability list.
+- `/accounts capabilities action:show user:@user`: Shows only the user's effective capability list. If `user` is omitted, shows the caller.
 - `/accounts capabilities action:grant capabilities:(name) user:@user`: Grants the dynamic preset reference `(name)`.
 - `/accounts capabilities action:revoke capabilities:(name) user:@user`: Revokes the dynamic preset reference `(name)`.
 - `/accounts capabilities action:grant capabilities:server.(name) user:@user`: Grants the dynamic server-local preset reference `server.(name)`.
@@ -50,6 +51,8 @@ Custom presets are stored globally in config under `account_capability_presets`.
 - `capabilities.manage_presets`: Create, remove, or show account capability presets.
 
 `/accounts ban` grants or revokes the `banned` capability globally or server-locally. The caller's effective `accounts.ban` depth must be greater than the target account's maximum effective permission depth in that scope. Global bans compare against the target's global and local depths because global `banned` overrides every server-local account view.
+
+`banned`, `banned.use`, `banned.grant`, and server-local `server.banned` targets cannot be granted, revoked, reset away, or included in presets through generic capability management. Use `/accounts ban` for all ban and unban changes.
 
 Account info and account listing are intentionally public through normal `commands` access for transparency.
 

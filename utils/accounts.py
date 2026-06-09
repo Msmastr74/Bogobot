@@ -88,12 +88,19 @@ class AccountPermissions(Schema):
             self.effective_depth(capability_base, operation="grant"),
         )
 
+    def exact_delegation_depth(self, capability: str) -> int:
+        capability_base, _ = self._split_operation(capability)
+        return max(
+            self.capabilities.get(capability_base, -1),
+            self.capabilities.get(f"{capability_base}.use", -1),
+            self.capabilities.get(f"{capability_base}.grant", -1),
+        )
+
     def required_modification_depth(self, capability: str) -> int:
         capability_base, _ = self._split_operation(capability)
         depths = [
-            self.delegation_depth(base)
+            self.exact_delegation_depth(expanded_base)
             for expanded_base in self._expand_capability_base(capability_base)
-            for base in self._modification_bases(expanded_base)
         ]
         return max(depths, default=-1)
 
@@ -110,10 +117,39 @@ class AccountPermissions(Schema):
         return self.effective_depth(capability_base, operation="grant") > depth
 
     def grant(self, capability: str, *, depth: int = 0) -> None:
+        if self.is_reserved_capability(capability):
+            raise ValueError(f"{capability} is reserved")
         self.capabilities[self._canonical_permission(capability)] = int(depth)
 
     def revoke(self, capability: str) -> None:
+        if self.is_reserved_capability(capability):
+            raise ValueError(f"{capability} is reserved")
         self.capabilities.pop(self._canonical_permission(capability), None)
+
+    def ban(self, *, depth: int = 0) -> None:
+        self.capabilities[BANNED_CAPABILITY] = int(depth)
+
+    def unban(self) -> None:
+        self.capabilities.pop(BANNED_CAPABILITY, None)
+
+    def reserved_capabilities(self) -> dict[str, int]:
+        return {
+            capability: depth
+            for capability, depth in self.capabilities.items()
+            if self.is_reserved_capability(capability)
+        }
+
+    @classmethod
+    def is_reserved_capability(cls, capability: str) -> bool:
+        expanded_capabilities = cls.expand_capability(capability)
+        if not expanded_capabilities:
+            if cls.has_preset_segment(capability):
+                return False
+            expanded_capabilities = (capability,)
+        return any(
+            cls._split_operation(expanded_capability)[0] == BANNED_CAPABILITY
+            for expanded_capability in expanded_capabilities
+        )
 
     @classmethod
     def _is_banned_scope(cls, scope: str) -> bool:
@@ -216,19 +252,6 @@ class AccountPermissions(Schema):
     @staticmethod
     def _capability_parts(capability: str) -> tuple[str, ...]:
         return tuple(capability.split("."))
-
-    @staticmethod
-    def _modification_bases(capability: str) -> tuple[str, ...]:
-        if capability == "[all]":
-            return (capability,)
-
-        parts = AccountPermissions._capability_parts(capability)
-        if not parts:
-            return ()
-        return tuple(
-            ".".join(parts[:index])
-            for index in range(1, len(parts) + 1)
-        )
 
     @staticmethod
     def _match_prefix_parts(scope: tuple[str, ...], capability: tuple[str, ...]) -> bool:

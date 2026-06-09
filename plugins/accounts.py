@@ -74,13 +74,32 @@ def _account_perms(account: AccountRecord) -> AccountPermissions:
     return AccountPermissions()
 
 
+def _overriding_capabilities(perms: AccountPermissions, capability: str) -> list[str]:
+    capability_base, explicit_operation = AccountPermissions._split_operation(capability)
+    operations = (explicit_operation,) if explicit_operation is not None else ("use", "grant")
+    overriding: list[str] = []
+    for other_capability in perms.capabilities:
+        if other_capability == capability:
+            continue
+        if any(
+            AccountPermissions._matches(other_capability, capability_base, operation=operation)
+            for operation in operations
+        ):
+            overriding.append(other_capability)
+    return sorted(overriding)
+
+
 def _format_capabilities(perms: AccountPermissions) -> str:
     if not perms.capabilities:
         return "None"
-    return "\n".join(
-        f"`{capability}`: `{depth}`"
-        for capability, depth in sorted(perms.capabilities.items())
-    )
+    lines: list[str] = []
+    for capability, depth in sorted(perms.capabilities.items()):
+        line = f"`{capability}`: `{depth}`"
+        overriding = _overriding_capabilities(perms, capability)
+        if overriding:
+            line += " (overridden by " + ", ".join(f"`{item}`" for item in overriding) + ")"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _parse_capabilities(value: str | None) -> list[str]:
@@ -153,12 +172,17 @@ def _all_presets(bot: BotCore) -> dict[str, tuple[str, ...]]:
 
 def _completion_options(bot: BotCore, *, include_server: bool) -> list[str]:
     presets = _all_presets(bot)
+    registered_capabilities = [
+        capability
+        for capability in bot.accounts.capabilities
+        if not AccountPermissions.is_reserved_capability(capability)
+    ]
     options = [
-        *bot.accounts.capabilities,
+        *registered_capabilities,
         *(f"({preset})" for preset in presets),
     ]
     if include_server:
-        options.extend(f"server.{capability}" for capability in bot.accounts.capabilities)
+        options.extend(f"server.{capability}" for capability in registered_capabilities)
         options.extend(f"server.({preset})" for preset in presets)
     return sorted(dict.fromkeys(options))
 
@@ -174,6 +198,7 @@ def _matching_registered_capabilities(bot: BotCore, capability: str) -> tuple[st
     matches = tuple(
         registered_capability
         for registered_capability in bot.accounts.capabilities
+        if not AccountPermissions.is_reserved_capability(registered_capability)
         if AccountPermissions._matches_base(capability_base, registered_capability)
     )
     if operation is None:
@@ -391,6 +416,21 @@ class AccountView(discord.ui.LayoutView):
         return text
 
 
+class CapabilitiesView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        user: discord.Member | discord.User,
+        account: Account,
+    ) -> None:
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## Capabilities for {user.mention}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(_format_capabilities(account.permissions)),
+        ))
+
+
 async def setup(bot: BotCore) -> None:
     accounts = groups.accounts(bot)
     AccountPermissions.configure_presets(lambda name: _all_presets(bot).get(name, ()))
@@ -489,7 +529,7 @@ async def setup(bot: BotCore) -> None:
     @app_commands.autocomplete(capabilities=capability_list_autocomplete)
     async def capabilities(
         interaction: discord.Interaction,
-        action: Literal["grant", "revoke", "reset", "resolve"],
+        action: Literal["grant", "revoke", "reset", "resolve", "show"],
         user: discord.Member | None = None,
         capabilities: str | None = None,
         depth: int = 0,
@@ -517,6 +557,16 @@ async def setup(bot: BotCore) -> None:
                     resolved_lines.append(f"`{capability}` -> None")
             await bot.discord.send(
                 contents="\n".join(resolved_lines),
+                response=True,
+                ephemeral=True,
+                safety_filter=True,
+            )
+            return
+
+        if action == "show":
+            target_user: discord.Member | discord.User = user if user is not None else interaction.user
+            await bot.discord.send(
+                view=CapabilitiesView(user=target_user, account=bot.accounts[target_user.id].local(interaction.guild_id)),
                 response=True,
                 ephemeral=True,
                 safety_filter=True,
@@ -560,6 +610,23 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
+        reserved_capabilities = [
+            capability
+            for capability in requested_capabilities
+            for stored_capability in (_stored_capability(capability),)
+            if AccountPermissions.is_reserved_capability(stored_capability)
+        ]
+        if reserved_capabilities:
+            await bot.discord.send(
+                contents=(
+                    "`banned` and `server.banned` can only be changed through `/accounts ban`: " +
+                    ", ".join(f"`{capability}`" for capability in reserved_capabilities)
+                ),
+                response=True,
+                ephemeral=True,
+            )
+            return
+
         if any(_is_server_capability(capability) for capability in requested_capabilities) and interaction.guild_id is None:
             await bot.discord.send(
                 contents="`server.*` capabilities can only be managed inside a server.",
@@ -595,6 +662,8 @@ async def setup(bot: BotCore) -> None:
         if action == "reset":
             for scope_id, target_perms in target_permissions.items():
                 for capability, current_depth in target_perms.capabilities.items():
+                    if AccountPermissions.is_reserved_capability(capability):
+                        continue
                     checked_capability = f"server.{capability}" if scope_id is not None else capability
                     for check_group in _check_capability_groups(bot, checked_capability):
                         check_required_depth = max(
@@ -626,11 +695,6 @@ async def setup(bot: BotCore) -> None:
                 required_depth = depth if action == "grant" else current_depth
                 for check_group in _check_capability_groups(bot, capability):
                     check_required_depth = required_depth
-                    if BANNED_CAPABILITY in check_group:
-                        check_required_depth = max(
-                            check_required_depth,
-                            _max_effective_permission_depth(bot.accounts[user.id], scope_id),
-                        )
                     display_capability = (
                         " or ".join(f"server.{check_capability}" for check_capability in check_group)
                         if _is_server_capability(capability) else
@@ -657,10 +721,14 @@ async def setup(bot: BotCore) -> None:
 
         if action == "reset":
             target_permissions = {
-                scope_id: AccountPermissions()
-                for scope_id in target_permissions
+                scope_id: AccountPermissions(capabilities=permissions.reserved_capabilities())
+                for scope_id, permissions in target_permissions.items()
             }
-            target_permissions[None] = AccountPermissions(capabilities=default_capabilities())
+            global_capabilities = {
+                **default_capabilities(),
+                **target_permissions.get(None, AccountPermissions()).reserved_capabilities(),
+            }
+            target_permissions[None] = AccountPermissions(capabilities=global_capabilities)
             message = f"Reset capabilities for {user.mention}."
         elif action == "grant":
             for capability in requested_capabilities:
@@ -794,6 +862,22 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
+        reserved_capabilities = [
+            capability
+            for capability in requested_capabilities
+            if AccountPermissions.is_reserved_capability(capability)
+        ]
+        if reserved_capabilities:
+            await bot.discord.send(
+                contents=(
+                    "Custom presets cannot contain reserved `banned` capabilities: " +
+                    ", ".join(f"`{capability}`" for capability in reserved_capabilities)
+                ),
+                response=True,
+                ephemeral=True,
+            )
+            return
+
         global_actor_perms = bot.accounts[interaction.user.id].permissions
         missing = [
             f"`{capability}.grant`"
@@ -866,7 +950,7 @@ async def setup(bot: BotCore) -> None:
             return
 
         if action == "ban":
-            stored_target_perms.grant(BANNED_CAPABILITY, depth=target_max_depth)
+            stored_target_perms.ban(depth=target_max_depth)
             await _write_permissions(bot, user.id, {scope_id: stored_target_perms})
             await bot.discord.send(
                 contents=f"{user.mention} has been banned from bot commands in `{scope}` scope.",
@@ -875,7 +959,7 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
-        stored_target_perms.revoke(BANNED_CAPABILITY)
+        stored_target_perms.unban()
         await _write_permissions(bot, user.id, {scope_id: stored_target_perms})
         await bot.discord.send(
             contents=f"{user.mention} has been unbanned from bot commands in `{scope}` scope.",
