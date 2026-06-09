@@ -35,6 +35,7 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
     "moderator": (
         "accounts.ban",
         "ai.activity",
+        "capabilities.manage",
         "discord",
         "games.bogotree",
         "games.cbogo",
