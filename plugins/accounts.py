@@ -533,7 +533,7 @@ async def setup(bot: BotCore) -> None:
     async def capabilities(
         interaction: discord.Interaction,
         action: Literal["grant", "revoke", "reset", "resolve", "show"],
-        user: discord.Member | None = None,
+        user: discord.Member | discord.User | None = None,
         capabilities: str | None = None,
         depth: int = 0,
     ) -> None:
@@ -916,7 +916,7 @@ async def setup(bot: BotCore) -> None:
     async def ban(
         interaction: discord.Interaction,
         action: Literal["ban", "unban"],
-        user: discord.Member,
+        user: discord.Member | discord.User,
         scope: Literal["global", "server"] = "global",
     ) -> None:
         if user.id == interaction.user.id:
