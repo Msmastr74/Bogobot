@@ -30,6 +30,7 @@ Go into `config.json` and provide the main credentials:
  * `bot_token`: Discord bot token.
  * `owner_uid`: Your Discord user ID. This account receives the owner wildcard capability on startup.
  * `accounts_path`: Optional account database path. Defaults to `accounts.json`.
+ * `account_capability_presets`: Optional custom account capability presets, usually managed through `/accounts preset`.
  * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.
  * `sort_change_threshold`: Optional monitor sensitivity for stream visual changes. Defaults to `0.1`.

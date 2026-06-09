@@ -112,6 +112,7 @@ async def setup(bot: BotCore):
     hidden_commands: list[str] = [
         manage.group.name,
         f"{accounts.group.name} capability",
+        f"{accounts.group.name} preset",
         f"{accounts.group.name} ban",
         f"{ai_activity.group.name} schedule",
         f"{ai_activity.group.name} remove",

@@ -12,6 +12,7 @@ User-edited settings:
 - `bot_token`: The Discord bot token.
 - `owner_uid`: Discord user ID for the bot owner. On startup, this account receives the owner wildcard capability.
 - `accounts_path`: Optional path to the account database. Defaults to `accounts.json`.
+- `account_capability_presets`: Optional custom account capability presets. Usually managed through `/accounts preset`.
 - `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes, then writes this back to false.
 - `debug`: Enable debug logging for Bogobot.
 - `silence_stream`: Suppress Streamlink/FFmpeg subprocess output. Defaults to false, but stream output is also quiet unless `debug` is true.
@@ -329,8 +330,9 @@ Several management commands use an explicit action parameter instead of separate
 Account commands live under `/accounts`:
 
 - `/accounts capability grant|revoke user capabilities [depth]`: Grants or revokes a comma-separated capability list. Capabilities under `server.*` are stored server-locally.
-- `/accounts capability preset user preset [depth]`: Grants a named preset such as `default`, `user`, `ai`, `moderator`, or `admin`.
+- `/accounts capability grant|revoke user preset [depth]`: Grants or revokes every capability in a preset. Prefix a preset with `server.`, such as `server.moderator`, to apply it only in the current server.
 - `/accounts capability reset user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides.
+- `/accounts preset show|create|remove name [capabilities]`: Shows, creates/replaces, or removes a custom global preset. Custom preset definitions contain unprefixed capabilities; apply them server-locally with `server.<preset>`.
 - `/accounts list_users [capability]`: Lists accounts, optionally filtered to users who can use a capability in the current server context.
 - `/accounts ban ban|unban user`: Bans an account by clearing global and local capabilities, or unbans by restoring default global capabilities.
 - `/accounts info [user] [eph]`: Shows account information for a user, defaulting to the caller.
@@ -407,4 +409,4 @@ Keep group helpers tiny. They should only name and return the shared group; comm
 ### Capabilities
 Every command receives a default capability named from its Discord qualified name, such as `commands.ping`, `commands.manage.raid`, or `commands.accounts.info`. Normal users receive `commands.*`, so ordinary commands are available by default. Sensitive commands add narrower capabilities such as `raid.manage` or `discord.announce`.
 
-Grant delegation is controlled by `grant.<capability>` and delegation depth. The owner wildcard `*` can use, grant, and revoke every capability. The special matcher segments `[any]` and `[all]` can be used for broad grant scopes. See `CAPABILITIES.md` for the maintained capability list and preset names.
+Grant delegation is controlled by `grant.<capability>` and delegation depth. The owner wildcard `*` can use, grant, and revoke every capability. The special matcher segments `[any]` and `[all]` can be used for broad grant scopes. The `server.` prefix targets the current server's local account record; for example, granting `server.raid.manage` stores local `raid.manage`. `server.` is a management prefix only; commands still check the unprefixed capability through `account.local(guild_id)`. See `CAPABILITIES.md` for the maintained capability list and preset names.

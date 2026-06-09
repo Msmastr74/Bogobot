@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping
+import re
 from typing import Any, Literal, Protocol
 
 import discord
@@ -21,8 +22,10 @@ from utils.discord import count_characters
 
 OWNER_CAPABILITY_DEPTH = 100
 ACCOUNT_BAN_CAPABILITY = "accounts.ban"
-CapabilityPreset = Literal["default", "user", "ai", "moderator", "admin"]
-CAPABILITY_PRESETS: dict[CapabilityPreset, tuple[str, ...]] = {
+MANAGE_PRESETS_CAPABILITY = "capabilities.manage_presets"
+CUSTOM_PRESETS_CONFIG_KEY = "account_capability_presets"
+PRESET_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
     "default": tuple(default_capabilities()),
     "user": ("commands.*", "user.*"),
     "ai": ("user.ai",),
@@ -47,6 +50,7 @@ CAPABILITY_PRESETS: dict[CapabilityPreset, tuple[str, ...]] = {
         "ai.activity.trigger",
         "ai.manage",
         "archive.manage",
+        "capabilities.manage_presets",
         "discord.announce",
         "discord.message",
         "games.bogotree.reset",
@@ -96,6 +100,75 @@ def _parse_capabilities(value: str | None) -> list[str]:
         for capability in value.split(",")
         if capability.strip()
     ))
+
+
+def _normalize_preset_name(name: str) -> str | None:
+    name = name.strip()
+    if not PRESET_NAME_RE.fullmatch(name):
+        return None
+    return name
+
+
+def _is_server_capability(capability: str) -> bool:
+    return capability.startswith("server.")
+
+
+def _stored_capability(capability: str) -> str:
+    if _is_server_capability(capability):
+        return capability.removeprefix("server.")
+    return capability
+
+
+def _scope_id(interaction: discord.Interaction, capability: str) -> int | None:
+    if _is_server_capability(capability):
+        return interaction.guild_id
+    return None
+
+
+def _custom_presets(bot: BotCore) -> dict[str, tuple[str, ...]]:
+    raw_presets = bot.config.get(CUSTOM_PRESETS_CONFIG_KEY)
+    if not isinstance(raw_presets, dict):
+        return {}
+
+    presets: dict[str, tuple[str, ...]] = {}
+    for raw_name, raw_capabilities in raw_presets.items():
+        name = _normalize_preset_name(str(raw_name))
+        if name is None or name.startswith("server."):
+            continue
+        if not isinstance(raw_capabilities, list):
+            continue
+        capabilities = tuple(
+            capability
+            for raw_capability in raw_capabilities
+            if isinstance(raw_capability, str)
+            for capability in (raw_capability.strip(),)
+            if capability and not _is_server_capability(capability)
+        )
+        if capabilities:
+            presets[name] = capabilities
+    return presets
+
+
+def _all_presets(bot: BotCore) -> dict[str, tuple[str, ...]]:
+    base_presets = {
+        **BASE_CAPABILITY_PRESETS,
+        **_custom_presets(bot),
+    }
+    return {
+        **base_presets,
+        **{
+            f"server.{preset}": tuple(f"server.{capability}" for capability in capabilities)
+            for preset, capabilities in base_presets.items()
+        },
+    }
+
+
+async def _save_custom_presets(bot: BotCore, presets: dict[str, tuple[str, ...]]) -> None:
+    bot.config[CUSTOM_PRESETS_CONFIG_KEY] = {
+        name: list(capabilities)
+        for name, capabilities in sorted(presets.items())
+    }
+    await bot.save_config()
 
 
 def _local_permission_scope_ids(account: Account) -> list[int]:
@@ -227,6 +300,7 @@ class AccountView(discord.ui.LayoutView):
 async def setup(bot: BotCore) -> None:
     accounts = groups.accounts(bot)
     bot.accounts.capabilities.register(ACCOUNT_BAN_CAPABILITY)
+    bot.accounts.capabilities.register(MANAGE_PRESETS_CAPABILITY)
     bot.accounts.capabilities.register(*default_capabilities())
 
     async def bootstrap_owner() -> None:
@@ -299,10 +373,10 @@ async def setup(bot: BotCore) -> None:
     )
     async def capability(
         interaction: discord.Interaction,
-        action: Literal["grant", "revoke", "reset", "preset"],
+        action: Literal["grant", "revoke", "reset"],
         user: discord.Member,
         capabilities: str | None = None,
-        preset: CapabilityPreset | None = None,
+        preset: str | None = None,
         depth: int = 0,
     ) -> None:
         if user.id == interaction.user.id:
@@ -314,23 +388,31 @@ async def setup(bot: BotCore) -> None:
             return
 
         requested_capabilities = _parse_capabilities(capabilities)
-        if action == "preset":
-            if preset is None:
+        if preset is not None:
+            preset_name = _normalize_preset_name(preset)
+            if preset_name is None:
                 await bot.discord.send(
-                    contents="A preset name is required for the preset action.",
+                    contents="Preset names must start with a letter and use only letters, numbers, `_`, `.`, or `-`.",
                     response=True,
                     ephemeral=True,
                 )
                 return
-            requested_capabilities = list(CAPABILITY_PRESETS[preset])
-            action = "grant"
-        elif preset is not None:
-            await bot.discord.send(
-                contents="`preset` is only used with the preset action.",
-                response=True,
-                ephemeral=True,
-            )
-            return
+            presets = _all_presets(bot)
+            if preset_name not in presets:
+                await bot.discord.send(
+                    contents=f"Unknown preset `{preset_name}`.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            if requested_capabilities:
+                await bot.discord.send(
+                    contents="Use either `capabilities` or `preset`, not both.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            requested_capabilities = list(presets[preset_name])
 
         if action in ("grant", "revoke") and not requested_capabilities:
             await bot.discord.send(
@@ -343,7 +425,7 @@ async def setup(bot: BotCore) -> None:
         unknown_capabilities = [
             capability
             for capability in requested_capabilities
-            if capability not in bot.accounts.capabilities
+            if _stored_capability(capability) not in bot.accounts.capabilities
         ]
         if unknown_capabilities:
             await bot.discord.send(
@@ -353,7 +435,7 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
-        if any(capability.startswith("server.") for capability in requested_capabilities) and interaction.guild_id is None:
+        if any(_is_server_capability(capability) for capability in requested_capabilities) and interaction.guild_id is None:
             await bot.discord.send(
                 contents="`server.*` capabilities can only be managed inside a server.",
                 response=True,
@@ -362,7 +444,7 @@ async def setup(bot: BotCore) -> None:
             return
 
         scope_ids: set[int | None] = {
-            interaction.guild_id if capability.startswith("server.") else None
+            _scope_id(interaction, capability)
             for capability in requested_capabilities
         }
         if action == "reset":
@@ -388,13 +470,14 @@ async def setup(bot: BotCore) -> None:
         if action == "reset":
             for scope_id, target_perms in target_permissions.items():
                 for capability, current_depth in target_perms.capabilities.items():
-                    required_checks.append((scope_id, capability, current_depth, "reset"))
+                    checked_capability = f"server.{capability}" if scope_id is not None else capability
+                    required_checks.append((scope_id, checked_capability, current_depth, "reset"))
             for capability, default_depth in default_capabilities().items():
                 required_checks.append((None, capability, default_depth, "reset"))
         else:
             for capability in requested_capabilities:
-                scope_id = interaction.guild_id if capability.startswith("server.") else None
-                current_depth = target_permissions[scope_id].depth(capability)
+                scope_id = _scope_id(interaction, capability)
+                current_depth = target_permissions[scope_id].depth(_stored_capability(capability))
                 required_depth = depth if action == "grant" else current_depth
                 required_checks.append((scope_id, capability, required_depth, action))
 
@@ -429,14 +512,14 @@ async def setup(bot: BotCore) -> None:
             message = f"Reset capabilities for {user.mention}."
         elif action == "grant":
             for capability in requested_capabilities:
-                scope_id = interaction.guild_id if capability.startswith("server.") else None
-                target_permissions[scope_id].grant(capability, depth=depth)
+                scope_id = _scope_id(interaction, capability)
+                target_permissions[scope_id].grant(_stored_capability(capability), depth=depth)
             capability_text = ", ".join(f"`{capability}`" for capability in requested_capabilities)
             message = f"Granted {capability_text} depth `{depth}` to {user.mention}."
         else:
             for capability in requested_capabilities:
-                scope_id = interaction.guild_id if capability.startswith("server.") else None
-                target_permissions[scope_id].revoke(capability)
+                scope_id = _scope_id(interaction, capability)
+                target_permissions[scope_id].revoke(_stored_capability(capability))
             capability_text = ", ".join(f"`{capability}`" for capability in requested_capabilities)
             message = f"Revoked {capability_text} from {user.mention}."
 
@@ -448,6 +531,137 @@ async def setup(bot: BotCore) -> None:
             ephemeral=True,
         )
         return
+
+    @accounts.command(
+        name="preset",
+        description="Manage custom account capability presets",
+        capabilities=[MANAGE_PRESETS_CAPABILITY],
+    )
+    async def preset(
+        interaction: discord.Interaction,
+        action: Literal["create", "remove", "show"],
+        name: str,
+        capabilities: str | None = None,
+    ) -> None:
+        preset_name = _normalize_preset_name(name)
+        if preset_name is None:
+            await bot.discord.send(
+                contents="Preset names must start with a letter and use only letters, numbers, `_`, `.`, or `-`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if action == "show":
+            all_presets = _all_presets(bot)
+            if preset_name not in all_presets:
+                await bot.discord.send(
+                    contents=f"Preset `{preset_name}` does not exist.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            await bot.discord.send(
+                contents=", ".join(all_presets[preset_name]),
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if preset_name.startswith("server."):
+            await bot.discord.send(
+                contents="Custom preset names cannot start with `server.`. Use `server.<preset>` when applying a preset instead.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if preset_name in BASE_CAPABILITY_PRESETS:
+            await bot.discord.send(
+                contents=f"`{preset_name}` is a built-in preset and cannot be changed.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        presets = _custom_presets(bot)
+        if action == "remove":
+            if preset_name not in presets:
+                await bot.discord.send(
+                    contents=f"Custom preset `{preset_name}` does not exist.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            del presets[preset_name]
+            await _save_custom_presets(bot, presets)
+            await bot.discord.send(
+                contents=f"Removed custom preset `{preset_name}`.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        requested_capabilities = _parse_capabilities(capabilities)
+        if not requested_capabilities:
+            await bot.discord.send(
+                contents="At least one capability is required to create a preset.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        server_capabilities = [
+            capability
+            for capability in requested_capabilities
+            if _is_server_capability(capability)
+        ]
+        if server_capabilities:
+            await bot.discord.send(
+                contents=(
+                    "Custom presets must contain unprefixed capabilities. "
+                    "Use the `server.` prefix when applying the preset."
+                ),
+                response=True,
+                ephemeral=True,
+            )
+            return
+        unknown_capabilities = [
+            capability
+            for capability in requested_capabilities
+            if capability not in bot.accounts.capabilities
+        ]
+        if unknown_capabilities:
+            await bot.discord.send(
+                contents="Unknown capabilities: " + ", ".join(f"`{capability}`" for capability in unknown_capabilities),
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        global_actor_perms = bot.accounts[interaction.user.id].permissions
+        missing = [
+            f"`grant.{capability}`"
+            for capability in requested_capabilities
+            if not global_actor_perms.can_use(f"grant.{capability}") or not global_actor_perms.can_grant(capability)
+        ]
+        if missing:
+            await bot.discord.send(
+                contents="Cannot create preset. Missing permission for: " + ", ".join(missing),
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        presets[preset_name] = tuple(requested_capabilities)
+        await _save_custom_presets(bot, presets)
+        await bot.discord.send(
+            contents=(
+                f"Saved custom preset `{preset_name}` with " +
+                ", ".join(f"`{capability}`" for capability in requested_capabilities) +
+                "."
+            ),
+            response=True,
+            ephemeral=True,
+        )
 
     @accounts.command(
         name="ban",
@@ -508,7 +722,9 @@ async def setup(bot: BotCore) -> None:
             filtered_accounts = [
                 account_item
                 for account_item in filtered_accounts
-                if bot.accounts[account_item[0]].local(interaction.guild_id).permissions.can_use(capability)
+                if bot.accounts[account_item[0]].local(
+                    _scope_id(interaction, capability)
+                ).permissions.can_use(_stored_capability(capability))
             ]
         view = AccountListView(
             title=f"Accounts with `{capability}`" if is_filtered else "All accounts",

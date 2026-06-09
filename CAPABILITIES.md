@@ -8,20 +8,31 @@ Capabilities are string permissions stored on each account. A user can run a com
 - `commands.<qualified.command.name>`: Automatically registered for every slash command. Command names use the Discord qualified name with spaces converted to dots, such as `commands.manage.raid`.
 - `grant.<capability>`: Allows granting or revoking a capability if the account also has enough delegation depth for the target capability.
 - `grant.[any]`: Allows using the accounts capability management command for any capability target.
+- `server.<capability>`: Capability-management target prefix. It writes the capability to the current server's local account record, so `server.raid.manage` grants local `raid.manage`.
 - `[any]`: Special matcher segment for exactly one capability segment.
 - `[all]`: Special matcher segment for the rest of a capability path.
+
+`server.<capability>` is not checked directly by commands. It is only used while granting, revoking, filtering, or expanding presets. Runtime permission checks still use the unprefixed capability on the server-local account view. For example, `/accounts capability action:grant capabilities:server.discord.announce user:@user` stores `discord.announce` under that user's current-server permissions, and `/manage announce` then sees `discord.announce` through `account.local(guild_id)`.
 
 ## Managing Capabilities
 
 - `/accounts capability action:grant capabilities:a,b,c user:@user`: Grants a comma-separated capability list.
 - `/accounts capability action:revoke capabilities:a,b,c user:@user`: Revokes a comma-separated capability list.
 - `/accounts capability action:reset user:@user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides. It fails without changing anything if the caller cannot revoke every current capability and grant every default capability.
-- `/accounts capability action:preset preset:name user:@user`: Expands a named preset into a capability list and grants it.
-- Presets: `default`, `user`, `ai`, `moderator`, `admin`.
+- `/accounts capability action:grant preset:name user:@user`: Grants every capability in a preset.
+- `/accounts capability action:revoke preset:name user:@user`: Revokes every capability in a preset.
+- `/accounts preset action:show name:name`: Shows the expanded capability list for a preset.
+- `/accounts preset action:create name:name capabilities:a,b,c`: Creates or replaces a custom global preset.
+- `/accounts preset action:remove name:name`: Removes a custom global preset.
+- Global presets: `default`, `user`, `ai`, `moderator`, `admin`.
+- Server-local presets: `server.default`, `server.user`, `server.ai`, `server.moderator`, `server.admin`.
+
+Custom presets are stored globally in config under `account_capability_presets`. Custom preset definitions must contain unprefixed capabilities; use `server.<preset>` when applying one server-locally.
 
 ## Account
 
 - `accounts.ban`: Ban or unban accounts from bot commands.
+- `capabilities.manage_presets`: Create, remove, or show account capability presets.
 
 Account info and account listing are intentionally public through normal `commands.*` access for transparency.
 
