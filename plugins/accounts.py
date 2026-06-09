@@ -77,9 +77,12 @@ def _account_perms(account: AccountRecord) -> AccountPermissions:
 def _overriding_capabilities(perms: AccountPermissions, capability: str) -> list[str]:
     capability_base, explicit_operation = AccountPermissions._split_operation(capability)
     operations = (explicit_operation,) if explicit_operation is not None else ("use", "grant")
+    depth = perms.capabilities[capability]
     overriding: list[str] = []
-    for other_capability in perms.capabilities:
+    for other_capability, other_depth in perms.capabilities.items():
         if other_capability == capability:
+            continue
+        if other_depth <= depth:
             continue
         if any(
             AccountPermissions._matches(other_capability, capability_base, operation=operation)
