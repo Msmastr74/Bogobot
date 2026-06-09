@@ -45,6 +45,7 @@ def strip_discord_reference_annotations(text: str) -> str:
 class HistoryMessage:
     role: Literal["user", "assistant"]
     content: str
+    id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,7 +268,7 @@ class AIContext:
             self._ensure_history_schema(connection)
             rows = connection.execute(
                 """
-                SELECT role, content
+                SELECT id, role, content
                 FROM ai_history_messages
                 WHERE channel_id = ?
                 ORDER BY id
@@ -275,8 +276,8 @@ class AIContext:
                 (channel_id,),
             ).fetchall()
         return [
-            HistoryMessage(role, content)
-            for role, content in rows
+            HistoryMessage(role, content, int(row_id))
+            for row_id, role, content in rows
         ]
 
     def record_history_message(
