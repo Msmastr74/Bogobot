@@ -74,6 +74,7 @@ class AIMatch(Generic[ContextT, ActionT]):
     kwargs: dict[str, Any] | None = None
     reply: str | None = None
     respond: bool = True
+    after_execution: Callable[[discord.Message | None], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,22 @@ class _AIAction(Generic[ContextT, ActionT]):
 class _ToolCall:
     name: str
     arguments: dict[str, Any]
+
+
+class AIExecutionLockToken:
+    def __init__(self) -> None:
+        self._lock: asyncio.Lock | None = None
+        self._released = False
+
+    def bind(self, lock: asyncio.Lock | None) -> None:
+        self._lock = lock
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        if self._lock is not None:
+            self._lock.release()
 
 
 class AICore(Generic[ContextT, ActionT]):
@@ -121,6 +138,7 @@ class AICore(Generic[ContextT, ActionT]):
         self._client: 'AsyncOpenAI | None' = None
         self._last_request_at: float | None = None
         self._lock = asyncio.Lock()
+        self._channel_locks: dict[int, asyncio.Lock] = {}
         self.logger = logger or getLogger("Bogobot.AI")
         self.context = AIContext(
             normalize_discord=self.normalize_discord,
@@ -129,6 +147,9 @@ class AICore(Generic[ContextT, ActionT]):
             history_char_budget=self.history_char_budget,
             logger=self.logger,
         )
+
+    def lock_token(self) -> AIExecutionLockToken:
+        return AIExecutionLockToken()
 
     def configure(
         self,
@@ -208,10 +229,14 @@ class AICore(Generic[ContextT, ActionT]):
         return decorator
 
     async def match(self, text: str) -> ActionT | None:
-        matches = await self.ai_turn(text)
-        if not matches:
-            return None
-        return matches[0].action
+        lock_token = self.lock_token()
+        matches = await self.ai_turn(text, lock_token=lock_token)
+        try:
+            if not matches:
+                return None
+            return matches[0].action
+        finally:
+            lock_token.release()
 
     async def ai_turn(
         self,
@@ -223,6 +248,7 @@ class AICore(Generic[ContextT, ActionT]):
         requested_context: str | None = None,
         channel_id: int | None = None,
         allow_system_context: bool = False,
+        lock_token: AIExecutionLockToken | None = None,
     ) -> list[AIMatch[ContextT, ActionT]]:
         if not self.enabled or not text.strip():
             return []
@@ -233,110 +259,146 @@ class AICore(Generic[ContextT, ActionT]):
             return []
 
         channel_id = channel_id if channel_id is not None else self.context.source_channel_id(source)
-        history = self.context.history_messages(channel_id)
-        if assistant_context is not None:
-            self.context.record_reply(
-                assistant_context,
-                assistant_context_source,
-                channel_id=channel_id,
-            )
-        self.context.record_message("user", text, source, channel_id=channel_id)
-        formatted_text = self.context.format_block(
-            "user",
-            self.context.format_message(text, source),
-        )
-        formatted_assistant_context = (
-            self.context.format_reply(assistant_context, assistant_context_source)
-            if assistant_context is not None else
-            None
-        )
-        formatted_requested_context = requested_context.strip() if requested_context is not None else None
-        if formatted_requested_context:
-            self.context.record_message(
-                "assistant",
-                formatted_requested_context,
-                None,
-                channel_id=channel_id,
-            )
-
-        async with self._lock:
-            client = self._ensure_client()
-            await self._wait_for_rate_limit()
-            content, calls = await self._complete(
-                client,
-                formatted_text,
-                self._actions,
-                formatted_assistant_context,
-                history,
-                formatted_requested_context,
-            )
-
-        matches: list[AIMatch[ContextT, ActionT]] = []
-        user_id = self._source_user_id(source)
-        content = self._strip_first_thought_block(content)
-        content, requests = self._extract_text_context_requests(
-            content,
-            channel_id=channel_id,
-            user_id=user_id,
-        )
-        dont_respond = self._extract_dont_respond(content)
-        self._queue_context_requests(requests)
-        reply = self._coerce_reply(content)
-        if reply is not None:
-            matches.append(AIMatch(
-                name="conversation",
-                command_name="conversation",
-                description="Conversational AI response",
-                context=cast(ContextT, {}),
-                action=None,
-                score=1.0,
-                reply=reply,
-                respond=not dont_respond
-            ))
-        if not calls:
-            return matches
-
-        action_by_tool = {action.tool_name: action for action in self._actions}
-        message_source = source if isinstance(source, discord.Message) else None
-        interaction_source = source if isinstance(source, discord.Interaction) else None
-        for call in calls[:_MAX_CALLS]:
-            if call.name == _CONTEXT_REQUEST_TOOL_NAME:
-                request = self._context_request_from_tool_call(
-                    call,
+        caller_releases = lock_token is not None
+        release_token = lock_token or self.lock_token()
+        await self._acquire_channel_execution(channel_id, release_token)
+        release_in_caller = False
+        try:
+            history = self.context.history_messages(channel_id)
+            if assistant_context is not None:
+                self.context.record_reply(
+                    assistant_context,
+                    assistant_context_source,
                     channel_id=channel_id,
-                    user_id=user_id,
                 )
-                if request is not None:
-                    self._queue_context_requests([request])
-                continue
-
-            action = action_by_tool.get(call.name)
-            if action is None:
-                self.logger.debug(f"tool call rejected unknown action {call.name!r}.")
-                continue
-
-            kwargs = self._coerce_arguments(
-                action,
-                call.arguments,
-                message=message_source,
-                interaction=interaction_source,
+            self.context.record_message("user", text, source, channel_id=channel_id)
+            formatted_text = self.context.format_block(
+                "user",
+                self.context.format_message(text, source),
             )
-            if kwargs is None:
-                self.logger.debug(f"tool call {call.name} rejected because arguments did not validate: {call.arguments!r}.")
-                continue
+            formatted_assistant_context = (
+                self.context.format_reply(assistant_context, assistant_context_source)
+                if assistant_context is not None else
+                None
+            )
+            formatted_requested_context = requested_context.strip() if requested_context is not None else None
+            if formatted_requested_context:
+                self.context.record_message(
+                    "assistant",
+                    formatted_requested_context,
+                    None,
+                    channel_id=channel_id,
+                )
 
-            self.logger.debug(f"match succeeded for {text} with action {action.name}.")
-            matches.append(AIMatch(
-                name=action.name,
-                command_name=action.command_name,
-                description=action.description,
-                context=action.context,
-                action=action.action,
-                score=1.0,
-                kwargs=kwargs,
-            ))
+            async with self._lock:
+                client = self._ensure_client()
+                await self._wait_for_rate_limit()
+                content, calls = await self._complete(
+                    client,
+                    formatted_text,
+                    self._actions,
+                    formatted_assistant_context,
+                    history,
+                    formatted_requested_context,
+                )
 
-        return matches
+            matches: list[AIMatch[ContextT, ActionT]] = []
+            user_id = self._source_user_id(source)
+            content = self._strip_first_thought_block(content)
+            content, requests = self._extract_text_context_requests(
+                content,
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+            dont_respond = self._extract_dont_respond(content)
+            self._queue_context_requests(requests)
+            reply = self._coerce_reply(content)
+            if reply is not None:
+                def record_reply(source: discord.Message | None, reply: str = reply) -> None:
+                    try:
+                        self.context.record_message(
+                            "assistant",
+                            reply,
+                            source,
+                            channel_id=channel_id,
+                        )
+                    finally:
+                        release_token.release()
+
+                matches.append(AIMatch(
+                    name="conversation",
+                    command_name="conversation",
+                    description="Conversational AI response",
+                    context=cast(ContextT, {}),
+                    action=None,
+                    score=1.0,
+                    reply=reply,
+                    respond=not dont_respond,
+                    after_execution=record_reply,
+                ))
+            if not calls:
+                release_in_caller = bool(matches)
+                return matches
+
+            action_by_tool = {action.tool_name: action for action in self._actions}
+            message_source = source if isinstance(source, discord.Message) else None
+            interaction_source = source if isinstance(source, discord.Interaction) else None
+            for call in calls[:_MAX_CALLS]:
+                if call.name == _CONTEXT_REQUEST_TOOL_NAME:
+                    request = self._context_request_from_tool_call(
+                        call,
+                        channel_id=channel_id,
+                        user_id=user_id,
+                    )
+                    if request is not None:
+                        self._queue_context_requests([request])
+                    continue
+
+                action = action_by_tool.get(call.name)
+                if action is None:
+                    self.logger.debug(f"tool call rejected unknown action {call.name!r}.")
+                    continue
+
+                kwargs = self._coerce_arguments(
+                    action,
+                    call.arguments,
+                    message=message_source,
+                    interaction=interaction_source,
+                )
+                if kwargs is None:
+                    self.logger.debug(f"tool call {call.name} rejected because arguments did not validate: {call.arguments!r}.")
+                    continue
+
+                self.logger.debug(f"match succeeded for {text} with action {action.name}.")
+                command_history = self.context.format_command_call(action.command_name, kwargs)
+
+                def record_command(source: discord.Message | None, command_history: str = command_history) -> None:
+                    try:
+                        self.context.record_message(
+                            "assistant",
+                            command_history,
+                            source,
+                            channel_id=channel_id,
+                        )
+                    finally:
+                        release_token.release()
+
+                matches.append(AIMatch(
+                    name=action.name,
+                    command_name=action.command_name,
+                    description=action.description,
+                    context=action.context,
+                    action=action.action,
+                    score=1.0,
+                    kwargs=kwargs,
+                    after_execution=record_command,
+                ))
+
+            release_in_caller = bool(matches)
+            return matches
+        finally:
+            if not release_in_caller or not caller_releases:
+                release_token.release()
 
     async def ai_activity(
         self,
@@ -344,6 +406,7 @@ class AICore(Generic[ContextT, ActionT]):
         *,
         channel_id: int,
         requested_context: str | None = None,
+        lock_token: AIExecutionLockToken | None = None,
     ) -> list[AIMatch[ContextT, ActionT]]:
         purpose = strip_context_tag_namespaces(purpose).strip()
         if not purpose:
@@ -364,6 +427,7 @@ class AICore(Generic[ContextT, ActionT]):
             requested_context=requested_context,
             channel_id=channel_id,
             allow_system_context=True,
+            lock_token=lock_token,
         )
 
     async def _wait_for_rate_limit(self) -> None:
@@ -375,6 +439,14 @@ class AICore(Generic[ContextT, ActionT]):
                 await asyncio.sleep(wait_seconds)
                 now = time.monotonic()
         self._last_request_at = now
+
+    async def _acquire_channel_execution(self, channel_id: int | None, token: AIExecutionLockToken) -> None:
+        if channel_id is None:
+            token.bind(None)
+            return
+        lock = self._channel_locks.setdefault(channel_id, asyncio.Lock())
+        await lock.acquire()
+        token.bind(lock)
 
     def _source_user_id(self, source: discord.Message | discord.Interaction | None) -> int | None:
         if isinstance(source, discord.Message):

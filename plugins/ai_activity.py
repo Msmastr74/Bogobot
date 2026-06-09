@@ -41,81 +41,77 @@ async def trigger_ai_activity(
         return []
 
     requested_context = await ContextRequestExecutor(bot).execute(channel, purpose)
-    matches = await ai_core.ai_activity(
-        purpose,
-        channel_id=channel_id,
-        requested_context=requested_context,
-    )
-    if not matches:
-        return []
-
-    sent_messages: list[discord.Message] = []
-    followup_only = False
-    for match in matches:
-        if match.reply is not None:
-            reply = ai_core.visual_reply(match.reply)
-            if reply is None:
-                continue
-            chunks = chunk_text(reply, MAX_REPLY_CHARS)
-            if len(chunks) < 1:
-                continue
-            
-            sent_message: discord.Message | None = None
-            if match.respond:
-                for chunk in chunks:
-                    raw_message = await cast_channel(channel).send(
-                        chunk,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    if isinstance(raw_message, discord.Message):
-                        sent_message = raw_message
-                        sent_messages.append(raw_message)
-            if sent_message is not None:
-                followup_only = True
-            ai_core.context.record_message(
-                "assistant",
-                match.reply,
-                sent_message,
-                channel_id=channel_id,
-            )
-            continue
-
-        if match.action is None:
-            continue
-
-        interaction = MessageInteraction(
-            bot,
-            channel,
-            match.command_name,
-            user=bot_user,
-            guild=getattr(channel, "guild", None),
-            followup_only=followup_only,
-        )
-        async with capture_interaction_output(interaction) as output_messages:
-            capabilities = bot.setup._normalize_capabilities((
-                bot.setup._default_capability(match.command_name),
-                *match.context.get("capabilities", ()),
-            ))
-            await bot.setup._run_command(
-                interaction,
-                match.action,
-                (),
-                match.kwargs or {},
-                capabilities=capabilities,
-                eph=False,
-                defer=False,
-            )
-        if output_messages:
-            followup_only = True
-            sent_messages.extend(output_messages)
-        ai_core.context.record_message(
-            "assistant",
-            ai_core.context.format_command_call(match.command_name, match.kwargs),
-            output_messages[-1] if output_messages else None,
+    lock_token = ai_core.lock_token()
+    try:
+        matches = await ai_core.ai_activity(
+            purpose,
             channel_id=channel_id,
+            requested_context=requested_context,
+            lock_token=lock_token,
         )
+        if not matches:
+            return []
 
-    return sent_messages
+        sent_messages: list[discord.Message] = []
+        followup_only = False
+        for match in matches:
+            if match.reply is not None:
+                reply = ai_core.visual_reply(match.reply)
+                if reply is None:
+                    continue
+                chunks = chunk_text(reply, MAX_REPLY_CHARS)
+                if len(chunks) < 1:
+                    continue
+                
+                sent_message: discord.Message | None = None
+                if match.respond:
+                    for chunk in chunks:
+                        raw_message = await cast_channel(channel).send(
+                            chunk,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                        if isinstance(raw_message, discord.Message):
+                            sent_message = raw_message
+                            sent_messages.append(raw_message)
+                if sent_message is not None:
+                    followup_only = True
+                if match.after_execution is not None:
+                    match.after_execution(sent_message)
+                continue
+            if match.action is None:
+                continue
+
+            interaction = MessageInteraction(
+                bot,
+                channel,
+                match.command_name,
+                user=bot_user,
+                guild=getattr(channel, "guild", None),
+                followup_only=followup_only,
+            )
+            if match.after_execution is not None:
+                match.after_execution(None)
+            async with capture_interaction_output(interaction) as output_messages:
+                capabilities = bot.setup._normalize_capabilities((
+                    bot.setup._default_capability(match.command_name),
+                    *match.context.get("capabilities", ()),
+                ))
+                await bot.setup._run_command(
+                    interaction,
+                    match.action,
+                    (),
+                    match.kwargs or {},
+                    capabilities=capabilities,
+                    eph=False,
+                    defer=False,
+                )
+            if output_messages:
+                followup_only = True
+                sent_messages.extend(output_messages)
+
+        return sent_messages
+    finally:
+        lock_token.release()
 
 
 def cast_channel(channel: 'discord.abc.MessageableChannel') -> Any:
