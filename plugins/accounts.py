@@ -42,7 +42,6 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
         "raid.use",
         "telemetry.use",
         "verification.use",
-        "discord.message.use",
     ),
     "admin": (
         "accounts.ban",
