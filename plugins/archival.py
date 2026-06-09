@@ -825,7 +825,7 @@ async def setup(bot: BotCore):
     @manage.command(
         name="video_archive",
         description="Manage visual stream archive recording",
-        perm_requirement=2,
+        capabilities=["archive.manage"],
         defer=False,
     )
     async def video_archive(
@@ -1153,7 +1153,6 @@ async def setup(bot: BotCore):
     @archive_group.command(
         name="view",
         description="View archived monitor values",
-        perm_requirement=0,
         eph=False,
     )
     @action(
@@ -1194,7 +1193,6 @@ async def setup(bot: BotCore):
     @archive_group.command(
         name="retrieve",
         description="View a visual archive frame by timestamp",
-        perm_requirement=0,
         eph=False,
     )
     @action(
@@ -1294,7 +1292,6 @@ async def setup(bot: BotCore):
     @archive_group.command(
         name="scan",
         description="Find when an image appears in a visual archive recording",
-        perm_requirement=0,
         defer=False,
     )
     async def archive_scan(

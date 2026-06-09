@@ -10,7 +10,7 @@ Configuration is managed via `config.json`.
 
 User-edited settings:
 - `bot_token`: The Discord bot token.
-- `owner_uid`: Discord user ID for the bot owner. On startup, this user is set to account permission level 4.
+- `owner_uid`: Discord user ID for the bot owner. On startup, this account receives the owner wildcard capability.
 - `accounts_path`: Optional path to the account database. Defaults to `accounts.json`.
 - `sync`: Optional one-run force sync for the command tree. The bot also syncs automatically when the local command tree hash changes, then writes this back to false.
 - `debug`: Enable debug logging for Bogobot.
@@ -43,8 +43,8 @@ User-edited settings:
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 - `archive`: Optional archive configuration object. See below for fields.
-- `verification`: Shared Discord role configuration for verification and raid protection. It stores `verified_role_id` and `quarantine_role_id`, usually through `/manage create_verification` or `/manage raid action:config`.
-- `raid_protection`: Raid protection settings. It stores `enabled`, `alert_channel_id`, `mode`, detection windows, expiry windows, and trigger thresholds.
+- `verification`: Server-specific Discord role configuration for verification and raid protection. It stores `verified_role_id` and `quarantine_role_id` under `servers.<guild_id>`, usually through `/manage create_verification` or `/manage raid action:config`.
+- `raid_protection`: Server-specific raid protection settings. It stores `enabled`, `alert_channel_id`, `mode`, detection windows, expiry windows, and trigger thresholds under `servers.<guild_id>`.
 - `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
 - `cbogo_path`: Path to the collaborative bogosort puzzle-state JSON file. Defaults to `cbogo.json`.
 - `fps`: Frames received per second.
@@ -61,13 +61,18 @@ Bot-managed storage:
 - `milestones`: Latest confirmed value for each milestone name.
 
 Bogotree storage:
-- `bogotree.json`, or the file named by `bogotree_path`, stores Bogotree puzzle state.
-- Per-user Bogotree leaderboard data is stored on accounts under the root-level `bogotree` field.
+- `bogotree.json`, or the file named by `bogotree_path`, stores server-specific Bogotree puzzle state under `servers.<guild_id>`.
+- Per-user Bogotree leaderboard data is stored on local server account records under the `bogotree` field.
+
+Cbogo storage:
+- `cbogo.json`, or the file named by `cbogo_path`, stores server-specific cbogo puzzle state under `servers.<guild_id>`.
+- Per-user cbogo leaderboard data is stored on local server account records under the `cbogo` field.
 
 Account storage:
 - `accounts.json`, or the file named by `accounts_path`, stores Discord user IDs mapped to account records.
-- Each account record contains `perm_level` plus any plugin-owned root-level annotation fields.
-- On ready, the bot creates basic accounts for visible guild members and saves the configured `owner_uid` at permission level 4.
+- Each account record contains a `permissions` object plus plugin-owned root-level annotation fields.
+- Permissions are capability based. Normal users receive `commands.*` and `user.*`; the configured `owner_uid` receives `*`.
+- Server-local account data is stored under each account's `servers.<guild_id>` record. Local records inherit global permissions unless they override them.
 
 Archive storage:
 - `archive/monitor.bga`, or the file named by `archive.path`, stores compact monitor value chunks.
@@ -220,9 +225,13 @@ The plugin keeps a small recent-action buffer for `/manage telemetry` and builds
 ## Accounts
 Account storage and permission logic live in `utils.accounts`, separate from the `/accounts` command plugin.
 
-`AccountManager` owns the account JSON file, normalizes account records, and serializes writes through an async lock. It provides permission helpers such as `authorization_level(...)`, `is_authorized(...)`, and the atomic rank-edit helper used by `/accounts perm_edit`. The `/accounts` plugin registers a `connect_callback` to hydrate visible guild member accounts on every Discord ready event.
+`AccountManager` owns the account JSON file, normalizes account records, and serializes writes through an async lock. It exposes a capability registry and account handles used for command permission checks. The `/accounts` plugin registers a `connect_callback` to hydrate visible guild member accounts on every Discord ready event and to ensure the configured owner has the owner wildcard.
 
-`accounts[uid]` returns an `Account` handle. Missing accounts read as a fake account with `perm_level: 0`. `account[key]` reads root-level account data, `await account.write(key, value)` creates the account if needed and writes under the manager lock, and `account.lock` exposes that lock for larger grouped operations. Plugin annotations are root-level account fields beside `perm_level`.
+`accounts[uid]` returns an `Account` handle. Missing accounts read as a fake account with default capabilities. `account[key]` reads root-level account data, `await account.write(key, value)` creates the account if needed and writes under the manager lock, and `account.lock` exposes that lock for larger grouped operations. Plugin annotations are root-level account fields beside `permissions`.
+
+`account.local(guild_id)` returns a server-local account view. Server-local views inherit global permissions, then apply local overrides. This is used for server-specific systems such as Bogotree, cbogo, verification, and raid protection.
+
+Capabilities are string permissions such as `commands.*`, `user.ai`, or `raid.manage`. Commands automatically register and require `commands.<qualified.command.name>`, with spaces in Discord qualified names converted to dots. Additional sensitive capabilities can be passed with `capabilities=[...]` in command decorators. See `CAPABILITIES.md` or `/capabilities` for the current capability list.
 
 ## Plugin System
 Plugins are independent Python files located in the `/plugins` directory.
@@ -241,7 +250,7 @@ Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.act
 
 Current plugin responsibilities:
 
-- `accounts.py`: `/accounts` permission commands.
+- `accounts.py`: `/accounts` capability, account info/list, and ban commands.
 - `admin.py`: `/manage state`, `/manage logs`, `/manage loglevel`, and `/manage message`.
 - `archival.py`: compact append-only archive for observed monitor values, visual archive frame extraction, and archive image scanning.
 - `bogo.py`: random utility commands and small bogosort toys under `/bogo`, plus top-level `/sort` and random helpers.
@@ -262,9 +271,9 @@ Current plugin responsibilities:
 - `stats.py`: Bogostream API/OCR stats cache updates, sort-state events, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
 - `utility.py`: `/avatar`, `/ping`, and `/manage announce`.
-- `verify.py`: persistent captcha verification prompt and shared verified/quarantine role setup.
+- `verify.py`: persistent captcha verification prompt and server-specific verified/quarantine role setup.
 - `utils/accounts.py`: Account storage, permission checks, and account annotations.
-- `utils/security_roles.py`: Shared verified/quarantine role config helpers.
+- `utils/security_roles.py`: Server-specific verified/quarantine role config helpers.
 - `utils/transformers.py`: Slash-command transformers such as `ColourTransformer` and `IntTransformer`.
 
 ## Admin Commands
@@ -278,17 +287,17 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage stats_monitor start|stop|resend`: Creates, removes, or resends a persistent stream-stats monitor in the current channel. It uses the same data as `/get_stats` and updates when new stream stats are available.
 - `/manage live_chat start|stop|resend`: Creates, removes, or resends a persistent YouTube live-chat monitor in the current channel. It reads from the configured `TARGET_VIDEO_ID` through `pytchat` and retries with backoff.
 - `/manage ai`: Shows an ephemeral AI management panel. Admins can toggle AI on/off, edit `ai.custom_instruction_text`, toggle scheduled AI breaks, and edit break active/break minutes. The command intentionally does not expose API keys, provider URLs, model settings, request interval, or AI history settings; history remains config-file only for safety.
-- `/manage create_verification verified_role quarantine_role`: Saves the shared verified/quarantine roles and sends a persistent verification prompt in the current channel. Users click the persistent button, solve one captcha attempt, and receive the configured verified role. Quarantined users cannot verify.
-- `/manage raid config [alert_channel]`: Shows an ephemeral raid-protection config panel. The panel can set shared verified/quarantine roles, alert channel, mode, detection windows, expiry windows, and trigger thresholds. Opening or editing config does not enable automation.
+- `/manage create_verification verified_role quarantine_role`: Saves the server's verified/quarantine roles and sends a persistent verification prompt in the current channel. Users click the persistent button, solve one captcha attempt, and receive the configured verified role. Quarantined users cannot verify.
+- `/manage raid config [alert_channel]`: Shows an ephemeral raid-protection config panel. The panel can set server-specific verified/quarantine roles, alert channel, mode, detection windows, expiry windows, and trigger thresholds. Opening or editing config does not enable automation.
 - `/manage raid status`: Shows automation state, active raid-mode state, rolling score, recent joins/messages, alert channel, expiry, and recent quarantines.
 - `/manage raid on|off`: Enables or disables automatic raid detection only. These actions do not manually activate or deactivate raid mode.
 - `/manage raid activate|deactivate`: Manually activates or deactivates raid mode. Active raid mode quarantines future non-exempt joiners even if automatic detection is off.
 - `/manage milestones subscribe|unsubscribe`: Adds or removes the current channel from milestone notifications.
 - `/manage milestones spoof name [data] [min_count]`: Sets a milestone when `data` is provided, or deletes the milestone when `data` is omitted.
 - `/manage milestones ratelimit_reset`: Clears the milestone notification rate limit.
-- `/manage announce [title] [message] [message_container] [attachments_container] [accent_colour] [message_id] [attachment_1..attachment_10]`: Sends a bot-authored announcement with up to 10 files, or edits a bot-authored announcement in the current channel when `message_id` is provided. Announcement edits replace the message's files with the files provided in the edit command; omit attachments to clear existing files. `message_id` uses `IntTransformer` because Discord snowflakes are too large for slash-command integer options. When `message` is omitted, Discord opens a modal for longer message entry. Media attachments render through `MediaGallery`; other attachments render as Components v2 file items. `attachments_container` places those attachment components inside the accent container. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`. Requires admin level 3.
+- `/manage announce [title] [message] [message_container] [attachments_container] [accent_colour] [message_id] [attachment_1..attachment_10]`: Sends a bot-authored announcement with up to 10 files, or edits a bot-authored announcement in the current channel when `message_id` is provided. Announcement edits replace the message's files with the files provided in the edit command; omit attachments to clear existing files. `message_id` uses `IntTransformer` because Discord snowflakes are too large for slash-command integer options. When `message` is omitted, Discord opens a modal for longer message entry. Media attachments render through `MediaGallery`; other attachments render as Components v2 file items. `attachments_container` places those attachment components inside the accent container. `accent_colour` accepts hex colours like `#57f287` or supported `discord.Colour` names such as `brand_green`, `red`, or `blurple`. Requires `discord.announce`.
 - `/manage message delete|react|unreact|pin|unpin|edit|reply message_id [channel_id] [emoji] [content]`: Deletes, reacts to, removes a reaction from, pins, unpins, edits, or replies to a message using a partial message reference. `channel_id` defaults to the current channel. `emoji` is required for `react` and `unreact`; `content` is required for `edit` and `reply`. `delete` is restricted to messages sent by the bot.
-- `/manage state stop|restart`: Stops the bot or restarts the current process. This command is owner-only.
+- `/manage state stop|restart`: Stops the bot or restarts the current process. Requires `system.state`.
 - `/manage logs`: Shows recent in-memory bot logs.
 - `/manage loglevel [level]`: Shows the current runtime log levels when `level` is omitted, or temporarily sets the Bogobot logger to `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, or `FATAL`. The root logger is capped at `INFO` minimum to avoid dependency debug noise.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
@@ -309,19 +318,21 @@ Several management commands use an explicit action parameter instead of separate
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/help [command]`: Shows bot command help. When `command` is provided, shows a slash-style command signature and description for that command.
+- `/capabilities`: Shows the capability reference from `CAPABILITIES.md`.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/sort`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexicographic` modes.
 - `/bogo roll|bogo|shuffle|choice|name|sort|sort-list|sort-listr|sort-lexicographic`: Dice roll, text bogo, shuffle/choice, name bogo, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
 - `/bogoscramble [text] [attachment1..attachment10] [rows] [columns]`: Scrambles text and image/media attachments. Message context menus provide normal and custom Bogoscramble entry points for existing messages.
-- `/cbogo [run|info|leaderboard|reset|reset_last_user] [target]`: Advances the original collaborative community bogosort puzzle, shows puzzle info, shows leaderboards, or resets the puzzle. `reset` requires mod rank.
-- `/bogotree [run|info|leaderboard|reset] [target]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `leaderboard` shows per-user calls, simulated steps, and best score, optionally forcing `target` into each leaderboard section; `reset` requires mod rank.
+- `/cbogo [run|info|leaderboard|reset|reset_last_user] [target]`: Advances the original collaborative community bogosort puzzle, shows puzzle info, shows server-local leaderboards, or resets the puzzle. `reset` requires `games.cbogo.reset`; `reset_last_user` requires `games.cbogo.reset_last_user`.
+- `/bogotree [run|info|leaderboard|reset] [target]`: Advances a collaborative random equalization puzzle. `info` shows state and pseudocode; `leaderboard` shows server-local per-user calls, simulated steps, and best score, optionally forcing `target` into each leaderboard section; `reset` requires `games.bogotree.reset`.
 
 Account commands live under `/accounts`:
 
-- `/accounts perm_edit promote|demote user`: Moves a user up or down by one rank.
-- `/accounts perm_edit set user level`: Sets a user to `basic`, `authorized`, `mod`, or `admin`.
-- `/accounts list_users [minimum_rank]`: Lists accounts, optionally filtered to users at or above a rank.
-- `/accounts ban_mgr ban|unban user`: Bans or unbans an account by setting its permission level below/above the banned state.
+- `/accounts capability grant|revoke user capabilities [depth]`: Grants or revokes a comma-separated capability list. Capabilities under `server.*` are stored server-locally.
+- `/accounts capability preset user preset [depth]`: Grants a named preset such as `default`, `user`, `ai`, `moderator`, or `admin`.
+- `/accounts capability reset user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides.
+- `/accounts list_users [capability]`: Lists accounts, optionally filtered to users who can use a capability in the current server context.
+- `/accounts ban ban|unban user`: Bans an account by clearing global and local capabilities, or unbans by restoring default global capabilities.
 - `/accounts info [user] [eph]`: Shows account information for a user, defaulting to the caller.
 
 ### Creating a Plugin
@@ -332,7 +343,7 @@ import discord
 from bogobot_core import BotCore
 
 async def setup(bot: BotCore):
-    @bot.setup.command(name="example", description="An example command", perm_requirement=0)
+    @bot.setup.command(name="example", description="An example command")
     async def example(interaction: discord.Interaction):
         await bot.discord.send("Hello World", response=True)
 
@@ -352,7 +363,7 @@ async def setup(bot):
     @manage.command(
         name="example",
         description="Run a grouped management action",
-        perm_requirement=1,
+        capabilities=["example.manage"],
     )
     async def example(
         interaction: discord.Interaction,
@@ -372,9 +383,10 @@ Shared groups live in `utils/groups.py`. Add a small helper that calls `bot.setu
 
 ```python
 from typing import TYPE_CHECKING
-from bogobot_core import BotCore
+if TYPE_CHECKING:
+    from bogobot_core import BotCore
 
-def tools(bot: BotCore):
+def tools(bot: "BotCore"):
     return bot.setup.group("tools", "Tool commands")
 ```
 
@@ -385,18 +397,14 @@ from utils import groups
 async def setup(bot):
     tools = groups.tools(bot)
 
-    @tools.command(name="ping", description="Ping the tools group", perm_requirement=0)
+    @tools.command(name="ping", description="Ping the tools group")
     async def ping(interaction):
         await bot.discord.send("Pong.", response=True)
 ```
 
 Keep group helpers tiny. They should only name and return the shared group; command behavior belongs in plugins.
 
-### Permission Levels
- * **0 (`basic`)**: Default account rank. Public commands should use `perm_requirement=0`.
- * **1 (`authorized`)**: Trusted account rank. This is the default requirement for `bot.setup.command` and grouped commands.
- * **2 (`mod`)**: Elevated management rank.
- * **3 (`admin`)**: Highest manually assignable rank through `/accounts perm_edit`.
- * **4 (`owner`)**: Forced rank for `owner_uid` on startup.
+### Capabilities
+Every command receives a default capability named from its Discord qualified name, such as `commands.ping`, `commands.manage.raid`, or `commands.accounts.info`. Normal users receive `commands.*`, so ordinary commands are available by default. Sensitive commands add narrower capabilities such as `raid.manage` or `discord.announce`.
 
-When editing permissions, the caller must overrank both the target's current rank and the new rank.
+Grant delegation is controlled by `grant.<capability>` and delegation depth. The owner wildcard `*` can use, grant, and revoke every capability. The special matcher segments `[any]` and `[all]` can be used for broad grant scopes. See `CAPABILITIES.md` for the maintained capability list and preset names.

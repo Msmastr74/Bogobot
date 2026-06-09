@@ -111,8 +111,8 @@ async def setup(bot: BotCore):
     ai_activity = groups.ai_activity(bot)
     hidden_commands: list[str] = [
         manage.group.name,
-        f"{accounts.group.name} perm_edit",
-        f"{accounts.group.name} ban_mgr",
+        f"{accounts.group.name} capability",
+        f"{accounts.group.name} ban",
         f"{ai_activity.group.name} schedule",
         f"{ai_activity.group.name} remove",
         f"{ai_activity.group.name} trigger",
@@ -587,6 +587,7 @@ async def setup(bot: BotCore):
     @manage.command(
         name="telemetry",
         description="Show recent bot command activity",
+        capabilities=["telemetry.view"],
         eph=True,
     )
     async def telemetry(
@@ -630,7 +631,6 @@ async def setup(bot: BotCore):
     @bot.setup.command(
         name="usage",
         description="Show command usage totals",
-        perm_requirement=0,
         defer=False,
     )
     @action(

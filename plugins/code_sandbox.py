@@ -40,7 +40,7 @@ async def setup(bot: BotCore) -> None:
             fuel=fuel,
             language=language
         )
-        @bot.setup.command(language.name, description=f"Execute {language.name} code.", perm_requirement=0, defer=False)
+        @bot.setup.command(language.name, description=f"Execute {language.name} code.", defer=False)
         @action(
             language.name,
             f"Execute {language.name} code in a sandboxed environment — output will only be shown to the user.",

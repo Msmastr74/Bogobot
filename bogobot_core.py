@@ -9,6 +9,7 @@ import asyncio
 import importlib
 import contextvars
 import time
+from collections.abc import Sequence
 from typing import Any, Callable, TYPE_CHECKING, Concatenate, cast
 from ocr import LibTesseractOCR, OcrCrop, TESSDATA_FAST_URL
 from stream import StreamHandler
@@ -203,12 +204,6 @@ class BotCore(discord.Client):
         self._save_config_sync()
         return channel_data
 
-    def authorization_level(self, user_id: int) -> int:
-        return self.accounts.authorization_level(user_id)
-
-    def is_authorized(self, user_id: int, perm_requirement: int) -> bool:
-        return self.accounts.is_authorized(user_id, perm_requirement)
-    
     def init_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
         self.callbacks.register('init', callback)
         return callback
@@ -661,12 +656,16 @@ class BotCore(discord.Client):
         _Command = app_commands.Command[app_commands.Group, P, T]
         
         def command(
-            self, name: str, *, description="No description", perm_requirement=1,
-            eph=True, defer=True
+            self, name: str, *, description="No description",
+            eph=True, defer=True, capabilities: Sequence[str] = ()
         ) -> Callable[[_Callable], _Command]:
+            capabilities = self._normalize_capabilities(
+                (self._default_capability(name), *capabilities)
+            )
             def decorator(
                 func: 'BotCore._Setup._Callable'
             ) -> 'BotCore._Setup._Command':
+                self.outer.accounts.capabilities.register(*capabilities)
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
                     await self._run_command(
@@ -674,7 +673,7 @@ class BotCore(discord.Client):
                         func,
                         args,
                         kwargs,
-                        perm_requirement=perm_requirement,
+                        capabilities=capabilities,
                         eph=eph,
                         defer=defer,
                     )
@@ -693,12 +692,21 @@ class BotCore(discord.Client):
                 self.group = group
             
             def command(
-                self, name: str, *, description="No description", perm_requirement=1,
-                eph=True, defer=True
+                self, name: str, *, description="No description",
+                eph=True, defer=True, capabilities: Sequence[str] = ()
             ) -> Callable[['BotCore._Setup._Callable'], 'BotCore._Setup._Command']:
+                capabilities = self.setup._normalize_capabilities(
+                    (
+                        self.setup._default_capability(
+                            f"{self.group.name} {name}"
+                        ),
+                        *capabilities,
+                    )
+                )
                 def decorator(
                     func: 'BotCore._Setup._Callable'
                 ) -> 'BotCore._Setup._Command':
+                    self.setup.outer.accounts.capabilities.register(*capabilities)
                     @functools.wraps(func)
                     async def wrapper(interaction: discord.Interaction, *args, **kwargs):
                         await self.setup._run_command(
@@ -706,7 +714,7 @@ class BotCore(discord.Client):
                             func,
                             args,
                             kwargs,
-                            perm_requirement=perm_requirement,
+                            capabilities=capabilities,
                             eph=eph,
                             defer=defer,
                         )
@@ -725,8 +733,8 @@ class BotCore(discord.Client):
             return self._CommandGroup(self, group)
 
         def context_menu(
-            self, name: str, *, perm_requirement=1,
-            eph=True, defer=True
+            self, name: str, *,
+            eph=True, defer=True, capabilities: Sequence[str] = ()
         ) -> Callable[[
                 Callable[[discord.Interaction, discord.Member], Coro[Any]] |
                 Callable[[discord.Interaction, discord.User], Coro[Any]] |
@@ -734,7 +742,11 @@ class BotCore(discord.Client):
                 Callable[[discord.Interaction, discord.Member | discord.User],
                          Coro[Any]]
             ], app_commands.ContextMenu]:
+            capabilities = self._normalize_capabilities(
+                (self._default_capability(name), *capabilities)
+            )
             def decorator(func):
+                self.outer.accounts.capabilities.register(*capabilities)
                 @self.outer.tree.context_menu(name=name)
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
@@ -743,12 +755,21 @@ class BotCore(discord.Client):
                         func,
                         args,
                         kwargs,
-                        perm_requirement=perm_requirement,
+                        capabilities=capabilities,
                         eph=eph,
                         defer=defer,
                     )
                 return wrapper
             return decorator
+
+        def _normalize_capabilities(
+            self,
+            capabilities: Sequence[str],
+        ) -> tuple[str, ...]:
+            return tuple(dict.fromkeys(str(capability) for capability in capabilities))
+
+        def _default_capability(self, qualified_name: str) -> str:
+            return f"commands.{qualified_name.replace(' ', '.')}"
 
         def _get_group(
             self,
@@ -782,7 +803,7 @@ class BotCore(discord.Client):
             args,
             kwargs,
             *,
-            perm_requirement,
+            capabilities: Sequence[str],
             eph,
             defer,
         ):
@@ -804,7 +825,12 @@ class BotCore(discord.Client):
             error: str | None = None
 
             token = current_interaction.set(interaction)
-            allowed = self.outer.is_authorized(interaction.user.id, perm_requirement)
+            user_perms = self.outer.accounts[interaction.user.id].local(interaction.guild_id).permissions
+            missing_capabilities = [
+                capability
+                for capability in capabilities
+                if not user_perms.can_use(capability)
+            ]
 
             started_at = time.monotonic()
             try:
@@ -813,12 +839,14 @@ class BotCore(discord.Client):
                     "phase": "start",
                     "time": int(time.time()),
                 })
-                if not allowed:
+                if missing_capabilities:
                     status = "unauthorized"
+                    missing_text = ", ".join(f"`{capability}`" for capability in missing_capabilities)
+                    message = f"❌ Missing capabilities: {missing_text}"
                     if interaction.response.is_done():
                         await self.outer.discord.cleanup_defer_status(interaction)
-                        return await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
-                    return await interaction.response.send_message("❌ Unauthorized.", ephemeral=True)
+                        return await interaction.followup.send(message, ephemeral=True)
+                    return await interaction.response.send_message(message, ephemeral=True)
                 if defer and not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=(eph))
                 await func(interaction, *args, **kwargs)

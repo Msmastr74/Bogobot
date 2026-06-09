@@ -407,6 +407,7 @@ async def setup(bot: BotCore):
     @manage.command(
         name="milestones",
         description="Manage milestone events.",
+        capabilities=["milestones.manage"],
     )
     async def milestones(
         interaction: discord.Interaction,
@@ -553,11 +554,13 @@ async def setup(bot: BotCore):
     @bot.setup.command(
         name="milestone_info",
         description="Show milestone history",
+        capabilities=["milestones.info"],
         defer=False
     )
     @action(
         "milestone_info",
         "Show milestone history.",
+        capabilities=("milestones.info",),
         params={
             "milestone_name": AIParam(),
             "ephemeral": AIParam(type=bool, required=False, default=True),

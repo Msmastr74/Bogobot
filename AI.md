@@ -49,7 +49,7 @@ Fields:
 
 ## Runtime Management
 
-`/manage ai` opens an ephemeral Components v2 panel for admin-level AI controls. It shows the base instructions, the configured custom instructions, the current AI enabled state, and break timing.
+`/manage ai` opens an ephemeral Components v2 panel for AI controls. It requires `ai.manage` and shows the base instructions, the configured custom instructions, the current AI enabled state, and break timing.
 
 The panel can:
 
@@ -173,7 +173,7 @@ Example attached metadata:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-perm_level: owner
+capabilities: *:100
 </{SYSTEM_TAG}:attached_metadata>
 ```
 
@@ -185,7 +185,7 @@ Reply context is sent as a separate assistant-role message:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-perm_level: owner
+capabilities: *:100
 </{SYSTEM_TAG}:attached_metadata>
 previous bot message
 </{SYSTEM_TAG}:replied_to>
@@ -216,7 +216,7 @@ hello
 </{SYSTEM_TAG}:message_history>
 ```
 
-`perm_level` is derived from the bot account system and is emitted as a rank name: `basic`, `authorized`, `mod`, `admin`, or `owner`.
+`capabilities` is derived from the bot account system and is emitted as a compact comma-separated `capability:depth` list. Users with no effective capabilities are shown as `none`.
 
 ```xml
 <{SYSTEM_TAG}:message_history>
@@ -277,7 +277,7 @@ async def ping(interaction: discord.Interaction, user: discord.User | discord.Me
 
 The first argument is the AI action name. It can contain spaces, such as `"bogo roll"`; the OpenAI tool name is generated automatically by lowercasing and replacing non-word characters with underscores. If two actions would produce the same tool name, Bogobot adds a numeric suffix.
 
-`command_name` defaults to the action name and is used for telemetry/error context. Set it when the AI action name should differ from the Discord command name. Action metadata such as `perm_requirement` is passed as decorator keyword arguments.
+`command_name` defaults to the action name and is used for telemetry/error context. Set it when the AI action name should differ from the Discord command name. Action metadata such as `capabilities=[...]` is passed as decorator keyword arguments, then checked by the normal command runner.
 
 Command parameters are declared with `AIParam`. Supported parameter types are:
 

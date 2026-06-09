@@ -318,7 +318,7 @@ async def setup(bot: BotCore):
                 await bot.discord.send(view=view, response=True)
         return True
 
-    @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False, perm_requirement=0)
+    @bot.setup.command(name="avatar", description="Get the avatar of a user", eph=False)
     @action(
         "avatar",
         "Show a user's avatar.",
@@ -335,7 +335,7 @@ async def setup(bot: BotCore):
             response=True,
         )
     
-    @bot.setup.command(name="ping", description="Ping pong", defer=False, perm_requirement=0)
+    @bot.setup.command(name="ping", description="Ping pong", defer=False)
     @action(
         "ping",
         "Show bot latency. Omit the user parameter when the message does not mention a user to target.",
@@ -451,7 +451,7 @@ async def setup(bot: BotCore):
     @manage.command(
         name='announce',
         description='Send a message through the bot.',
-        perm_requirement=3,
+        capabilities=["discord.announce"],
         defer=False
     )
     @app_commands.describe(

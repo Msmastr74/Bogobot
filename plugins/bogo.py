@@ -25,7 +25,7 @@ async def setup(bot: BotCore):
                 map(lambda t: t.strip(), text.split(delim))
             )
         )
-    @bogo.command(name="roll", description="Rolls a number from 1-100", defer=False, perm_requirement=0)
+    @bogo.command(name="roll", description="Rolls a number from 1-100", defer=False)
     @action(
         "bogo roll",
         "Roll a random number from 1 to 100.",
@@ -34,7 +34,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=f"{random.randint(1, 100)}", response=True)
     
     @bot.setup.command(name="randint", description="Roll a random integer", 
-                       defer=False, perm_requirement=0)
+                       defer=False)
     @action(
         "randint",
         "Roll a random integer.",
@@ -52,7 +52,7 @@ async def setup(bot: BotCore):
             return
         await bot.discord.send(contents=f"{random.randint(min, max)}", response=True)
     
-    @bogo.command(name="choice", description="Chooses a random item from a list of items", defer=False, perm_requirement=0)
+    @bogo.command(name="choice", description="Chooses a random item from a list of items", defer=False)
     @action(
         "bogo choice",
         "Choose a random item.",
@@ -71,7 +71,7 @@ async def setup(bot: BotCore):
             c = FALSE_SPACE
         await bot.discord.send(contents=c, response=True, safety_filter=True)
 
-    @bogo.command(name="bogo", description="bogos your string", defer=False, perm_requirement=0)
+    @bogo.command(name="bogo", description="bogos your string", defer=False)
     @action(
         "bogo",
         "Shuffle text characters.",
@@ -84,7 +84,7 @@ async def setup(bot: BotCore):
         random.shuffle(char_list)
         await bot.discord.send(contents=f"{''.join(char_list)}", response=True, safety_filter=True)
     
-    @bogo.command(name="shuffle", description="shuffles", defer=False, perm_requirement=0)
+    @bogo.command(name="shuffle", description="shuffles", defer=False)
     @action(
         "bogo shuffle",
         "Shuffle list items.",
@@ -102,7 +102,7 @@ async def setup(bot: BotCore):
         contents = f"{output_delimiter.join(items_list)}" or FALSE_SPACE
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
 
-    @bot.setup.command(name="sort", description="Sorts a list of items", defer=False, perm_requirement=0)
+    @bot.setup.command(name="sort", description="Sorts a list of items", defer=False)
     @action(
         "sort",
         "Sort list items.",
@@ -150,7 +150,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=contents, response=True, safety_filter=True)
     
     @bot.setup.command(name="randlist", description="Generate random integers", 
-                       defer=False, perm_requirement=0)
+                       defer=False)
     @action(
         "randlist",
         "Generate random integers.",
@@ -178,7 +178,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(contents=f"`{delimiter.join(map(str, rand_list))}`", response=True)
 
     @bot.setup.command(name="randfloat", description="Roll a random float", 
-                       defer=False, perm_requirement=0)
+                       defer=False)
     @action(
         "randfloat",
         "Roll a random float.",
@@ -196,7 +196,7 @@ async def setup(bot: BotCore):
             return
         await bot.discord.send(contents=f"{random.uniform(min, max)}", response=True)
     
-    @bot.setup.command(name="randbool", description="Rolls a random boolean", defer=False, perm_requirement=0)
+    @bot.setup.command(name="randbool", description="Rolls a random boolean", defer=False)
     @action(
         "randbool",
         "Roll true or false.",
@@ -204,7 +204,7 @@ async def setup(bot: BotCore):
     async def randbool(interaction: discord.Interaction):
         await bot.discord.send(contents=f"{random.choice([True, False])}", response=True)
 
-    @bogo.command(name="sort-list", description="Bogosorts a list of numbers", defer=False, perm_requirement=0)
+    @bogo.command(name="sort-list", description="Bogosorts a list of numbers", defer=False)
     @action(
         "bogo sort-list",
         "Bogosort numbers.",
@@ -256,7 +256,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
 
-    @bogo.command(name="sort-lexicographic", description="Bogosorts a list of strings", defer=False, perm_requirement=0)
+    @bogo.command(name="sort-lexicographic", description="Bogosorts a list of strings", defer=False)
     @action(
         "bogo sort-lexicographic",
         "Bogosort strings.",
@@ -301,7 +301,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
     
-    @bogo.command(name="sort-listr", description="bogosorts a list of number?", defer=False, perm_requirement=0)
+    @bogo.command(name="sort-listr", description="bogosorts a list of number?", defer=False)
     @action(
         "bogo sort-listr",
         "Bogosort numbers with success chance.",
@@ -396,7 +396,7 @@ async def setup(bot: BotCore):
         await message.add_reaction(sorted_emoji)
         return
 
-    @bogo.command(name="sort", description="Bogosorts", defer=False, perm_requirement=0)
+    @bogo.command(name="sort", description="Bogosorts", defer=False)
     @action(
         "bogo sort",
         "Bogosort a tiny list.",

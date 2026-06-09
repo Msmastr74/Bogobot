@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 from bogobot_core import BotCore
-import asyncio.__main__
+import asyncio.__main__  # type: ignore[reportMissingImports]
 import site
 
 async def async_setup():
@@ -22,7 +22,7 @@ def start_async_repl(bot):
         CAN_USE_PYREPL = False # noqa: F401
     else:
         try:
-            from _pyrepl.main import CAN_USE_PYREPL # noqa: F401
+            from _pyrepl.main import CAN_USE_PYREPL  # type: ignore[reportMissingImports] # noqa: F401
         except ImportError:
             CAN_USE_PYREPL = False
 

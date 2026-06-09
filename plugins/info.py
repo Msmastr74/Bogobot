@@ -1,6 +1,7 @@
 import inspect
 import re
 import types
+from pathlib import Path
 from typing import Any, Union, get_args, get_origin
 
 import discord
@@ -21,6 +22,7 @@ BOGOBOT_DESCRIPTION = (
 MAX_COMMAND_TEXT_CHARACTERS = 3900
 MAX_COMMAND_CHOICES = 25
 COMMAND_NAME_CHARACTER_RE = re.compile(r"[^A-Za-z]+")
+CAPABILITIES_PATH = Path("CAPABILITIES.md")
 
 
 class HelpBox(discord.ui.LayoutView):
@@ -181,6 +183,16 @@ class CommandSignatureBox(discord.ui.LayoutView):
         return getattr(annotation, "__name__", str(annotation))
 
 
+class CapabilitiesBox(discord.ui.LayoutView):
+    def __init__(self, text: str) -> None:
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("## Capabilities"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(text),
+        ))
+
+
 def normalize_command_name(name: str) -> str:
     return COMMAND_NAME_CHARACTER_RE.sub("", name)
 
@@ -244,7 +256,6 @@ async def setup(bot: BotCore):
     @bot.setup.command(
         name="help",
         description="Show bot information and commands",
-        perm_requirement=0,
         defer=False,
         eph=True,
     )
@@ -281,6 +292,25 @@ async def setup(bot: BotCore):
 
         await bot.discord.send(
             view=HelpBox(commands, context_menus),
+            response=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @bot.setup.command(
+        name="capabilities",
+        description="Show bot account capabilities",
+        defer=False,
+        eph=True,
+    )
+    async def capabilities(interaction: discord.Interaction):
+        try:
+            text = CAPABILITIES_PATH.read_text(encoding="utf-8")
+        except OSError:
+            text = "CAPABILITIES.md could not be read."
+        if count_characters(text) > MAX_COMMAND_TEXT_CHARACTERS:
+            text = text[:MAX_COMMAND_TEXT_CHARACTERS - 20] + "\n..."
+        await bot.discord.send(
+            view=CapabilitiesBox(text),
             response=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )

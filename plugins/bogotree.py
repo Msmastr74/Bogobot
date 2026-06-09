@@ -23,7 +23,9 @@ BOGOTREE_STEPS_EXPONENT = 1.5
 BOGOTREE_WARMUP_RUNS = 5
 BOGOTREE_STORAGE_PATH = "bogotree.json"
 BOGOTREE_STATE_KEY = "state"
+BOGOTREE_SERVERS_KEY = "servers"
 BOGOTREE_ACCOUNT_KEY = "bogotree"
+BOGOTREE_RESET_CAPABILITY = "games.bogotree.reset"
 ARROW = "→"
 LEADERBOARD_SECTION_LIMIT = 950
 BOGOTREE_SOLVED_SCORE = 1
@@ -542,6 +544,7 @@ async def setup(bot: BotCore):
     storage_path = bot.config.get("bogotree_path", BOGOTREE_STORAGE_PATH)
     sorted_emoji = bot.discord.get_emoji("sorted")
     star_emoji = "⭐"
+    bot.accounts.capabilities.register(BOGOTREE_RESET_CAPABILITY)
 
     def load_storage_sync() -> dict[str, object]:
         if not os.path.exists(storage_path):
@@ -571,31 +574,44 @@ async def setup(bot: BotCore):
     async def save_storage(storage: dict[str, object]) -> None:
         await asyncio.to_thread(save_storage_sync, storage)
 
-    async def get_state() -> BogotreeState:
+    def server_storage(storage: dict[str, object], guild_id: int) -> dict[str, object]:
+        raw_servers = storage.get(BOGOTREE_SERVERS_KEY)
+        servers = raw_servers if isinstance(raw_servers, dict) else {}
+        raw_server = servers.get(str(guild_id))
+        server = raw_server if isinstance(raw_server, dict) else {}
+        servers[str(guild_id)] = server
+        storage[BOGOTREE_SERVERS_KEY] = servers
+        return server
+
+    async def get_state(guild_id: int) -> BogotreeState:
         storage = await load_storage()
-        state = normalize_state(storage.get(BOGOTREE_STATE_KEY))
+        server = server_storage(storage, guild_id)
+        state = normalize_state(server.get(BOGOTREE_STATE_KEY))
         state_data = state.model_dump()
-        if state_data != storage.get(BOGOTREE_STATE_KEY):
-            storage[BOGOTREE_STATE_KEY] = state_data
+        if state_data != server.get(BOGOTREE_STATE_KEY):
+            server[BOGOTREE_STATE_KEY] = state_data
             await save_storage(storage)
         return state
 
-    async def save_state(state: BogotreeState) -> None:
+    async def save_state(guild_id: int, state: BogotreeState) -> None:
         storage = await load_storage()
-        storage[BOGOTREE_STATE_KEY] = state.model_dump()
+        server_storage(storage, guild_id)[BOGOTREE_STATE_KEY] = state.model_dump()
         await save_storage(storage)
 
-    async def get_leaderboard() -> dict[str, BogotreeUserStats]:
+    async def get_leaderboard(guild_id: int) -> dict[str, BogotreeUserStats]:
         return {
             uid: normalize_user_stats(raw_stats)
-            for uid, raw_stats in await bot.accounts.query(BOGOTREE_ACCOUNT_KEY)
+            for uid, raw_stats in await bot.accounts.query_local(guild_id, BOGOTREE_ACCOUNT_KEY)
         }
 
     async def bogotree_leaderboard(
         interaction: discord.Interaction,
         target: discord.Member | discord.User | None = None,
     ):
-        leaderboard = await get_leaderboard()
+        if interaction.guild_id is None:
+            await bot.discord.send("Bogotree leaderboards are server-specific.", response=True, ephemeral=True)
+            return
+        leaderboard = await get_leaderboard(interaction.guild_id)
         await bot.discord.send(
             view=BogotreeLeaderboard(
                 leaderboard=leaderboard,
@@ -615,7 +631,9 @@ async def setup(bot: BotCore):
         best_equal_count: int,
     ) -> None:
         uid = str(interaction.user.id)
-        account = bot.accounts[uid]
+        if interaction.guild_id is None:
+            return
+        account = bot.accounts[uid].local(interaction.guild_id)
         stats = normalize_user_stats(
             account.get(BOGOTREE_ACCOUNT_KEY),
             str(interaction.user),
@@ -632,21 +650,20 @@ async def setup(bot: BotCore):
 
         await account.write(BOGOTREE_ACCOUNT_KEY, stats.model_dump())
 
-    async def reset_user_scores() -> None:
-        for uid, raw_stats in await bot.accounts.query(BOGOTREE_ACCOUNT_KEY):
+    async def reset_user_scores(guild_id: int) -> None:
+        for uid, raw_stats in await bot.accounts.query_local(guild_id, BOGOTREE_ACCOUNT_KEY):
             stats = normalize_user_stats(raw_stats)
             stats.steps = 0
             stats.height = 0
             stats.best_score = 0
             stats.best_equal_count = 0
             stats.best_timestamp = 0
-            await bot.accounts[uid].write(BOGOTREE_ACCOUNT_KEY, stats.model_dump())
+            await bot.accounts[uid].local(guild_id).write(BOGOTREE_ACCOUNT_KEY, stats.model_dump())
 
     @bot.setup.command(
         name="bogotree",
         description="Advance the collaborative bogotree",
         eph=False,
-        perm_requirement=0,
     )
     @action(
         "bogotree",
@@ -661,8 +678,17 @@ async def setup(bot: BotCore):
         action: Literal["run", "info", "leaderboard", "reset"] = "run",
         target: discord.Member | discord.User | None = None,
     ):
+        if interaction.guild_id is None:
+            await bot.discord.send(
+                "Bogotree is server-specific and can only be used in a server.",
+                response=True,
+                ephemeral=True,
+            )
+            return
         if action == "reset":
-            if not bot.is_authorized(interaction.user.id, 2):
+            if not bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
+                BOGOTREE_RESET_CAPABILITY,
+            ):
                 await bot.discord.send(
                     "Only mods can reset bogotree.",
                     response=True,
@@ -672,8 +698,8 @@ async def setup(bot: BotCore):
 
             async with state_lock:
                 state = default_state()
-                await save_state(state)
-                await reset_user_scores()
+                await save_state(interaction.guild_id, state)
+                await reset_user_scores(interaction.guild_id)
             await bot.discord.send(
                 view=BogotreeView(title="Bogotree Reset", state=state),
                 response=True,
@@ -685,7 +711,7 @@ async def setup(bot: BotCore):
             return
 
         if action == "info":
-            state = await get_state()
+            state = await get_state(interaction.guild_id)
             await bot.discord.send(
                 view=BogotreeView(
                     title="Bogotree Info",
@@ -697,7 +723,7 @@ async def setup(bot: BotCore):
             return
 
         async with state_lock:
-            state = await get_state()
+            state = await get_state(interaction.guild_id)
             if state.solved:
                 await bot.discord.send(
                     view=BogotreeView(title="Bogotree", state=state),
@@ -738,7 +764,7 @@ async def setup(bot: BotCore):
                 best_score=final_score[0],
                 best_equal_count=final_score[1],
             )
-            await save_state(state)
+            await save_state(interaction.guild_id, state)
 
         message = await bot.discord.send(
             view=BogotreeView(

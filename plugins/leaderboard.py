@@ -122,7 +122,6 @@ async def setup(bot: BotCore):
         name="leaderboard",
         description="Gets the leaderboard in sortoffs!",
         defer=False,
-        perm_requirement=0,
     )
     @action(
         "leaderboard",
@@ -155,7 +154,6 @@ async def setup(bot: BotCore):
         name="top",
         description=f"Gets the top {LEADERBOARD_LIMIT} players in sortoffs!",
         eph=False,
-        perm_requirement=0,
     )
     @action(
         "top",
@@ -174,7 +172,6 @@ async def setup(bot: BotCore):
         name="bottom",
         description=f"Gets the bottom {LEADERBOARD_LIMIT} players in sortoffs!",
         eph=False,
-        perm_requirement=0,
     )
     @action(
         "bottom",

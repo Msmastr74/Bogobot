@@ -92,12 +92,16 @@ async def trigger_ai_activity(
             followup_only=followup_only,
         )
         async with capture_interaction_output(interaction) as output_messages:
+            capabilities = bot.setup._normalize_capabilities((
+                bot.setup._default_capability(match.command_name),
+                *match.context.get("capabilities", ()),
+            ))
             await bot.setup._run_command(
                 interaction,
                 match.action,
                 (),
                 match.kwargs or {},
-                perm_requirement=match.context.get("perm_requirement", 0),
+                capabilities=capabilities,
                 eph=False,
                 defer=False,
             )
@@ -381,7 +385,8 @@ async def setup(bot: "BotCore"):
 
     @ai_activity.command(
         name="schedule",
-        description="Schedule a recurring or one-off AI activity trigger"
+        description="Schedule a recurring or one-off AI activity trigger",
+        capabilities=["ai.activity.manage"],
     )
     async def schedule_cmd(interaction: discord.Interaction, when: str, purpose: str):
         channel = interaction_messageable_channel(interaction)
@@ -423,7 +428,8 @@ async def setup(bot: "BotCore"):
 
     @ai_activity.command(
         name="trigger",
-        description="Trigger AI activity now"
+        description="Trigger AI activity now",
+        capabilities=["ai.activity.trigger"],
     )
     async def trigger_cmd(interaction: discord.Interaction, purpose: str):
         channel = interaction_messageable_channel(interaction)
@@ -441,8 +447,7 @@ async def setup(bot: "BotCore"):
 
     @ai_activity.command(
         name="list",
-        description="List all scheduled AI activities for this channel",
-        perm_requirement=0
+        description="List all scheduled AI activities for this channel"
     )
     @action(
         "ai_activity list",
@@ -463,6 +468,7 @@ async def setup(bot: "BotCore"):
     @ai_activity.command(
         name="remove",
         description="Remove a scheduled AI activity by its unique ID",
+        capabilities=["ai.activity.manage"],
         eph=True,
         defer=False,
     )

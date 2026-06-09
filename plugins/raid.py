@@ -28,6 +28,9 @@ ACCOUNT_AGE_30_DAYS = 30 * ACCOUNT_AGE_1_DAY
 CREATION_CLUSTER_SECONDS = 60 * 60
 QUARANTINE_ACCOUNT_KEY = "raid_quarantine"
 UNQUARANTINE_CUSTOM_ID_PREFIX = "bogobot:raid:unquarantine"
+RAID_MANAGE_CAPABILITY = "raid.manage"
+RAID_UNQUARANTINE_CAPABILITY = "raid.unquarantine"
+RAID_EXEMPT_CAPABILITY = "raid.exempt"
 
 
 @dataclass
@@ -137,7 +140,7 @@ class RaidConfigView(discord.ui.LayoutView):
         super().__init__(timeout=300)
         self.protector = protector
         self.guild = guild
-        config = protector.config
+        config = protector.config_for(guild.id)
 
         self.verified_role_select = discord.ui.RoleSelect(
             placeholder="Choose verified role",
@@ -190,8 +193,8 @@ class RaidConfigView(discord.ui.LayoutView):
             if config.alert_channel_id is not None else
             "Not configured"
         )
-        verified_role_text = self._role_text(security_roles.verified_role_id(protector.bot))
-        quarantine_role_text = self._role_text(security_roles.quarantine_role_id(protector.bot))
+        verified_role_text = self._role_text(security_roles.verified_role_id(protector.bot, guild))
+        quarantine_role_text = self._role_text(security_roles.quarantine_role_id(protector.bot, guild))
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay("## Raid Protection Config"),
             discord.ui.Separator(),
@@ -281,8 +284,8 @@ class RaidConfigView(discord.ui.LayoutView):
         return callback
 
     async def set_mode(self, interaction: discord.Interaction, mode: RaidMode) -> None:
-        self.protector.config.mode = mode
-        await self.protector.save_config()
+        self.protector.config_for(self.guild.id).mode = mode
+        await self.protector.save_config(self.guild.id)
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
@@ -307,8 +310,8 @@ class RaidConfigView(discord.ui.LayoutView):
                 ephemeral=True,
             )
             return
-        self.protector.config.alert_channel_id = selected.id
-        await self.protector.save_config()
+        self.protector.config_for(self.guild.id).alert_channel_id = selected.id
+        await self.protector.save_config(self.guild.id)
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
@@ -330,7 +333,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
         super().__init__()
         self.protector = protector
         self.guild = guild
-        config = protector.config
+        config = protector.config_for(guild.id)
 
         self.windows = discord.ui.TextInput(
             label="Windows",
@@ -383,27 +386,28 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
                 self.triggers.value,
                 ("trigger_score", "trigger_join_count"),
             )
-            self.protector.config.window_seconds = self._positive_float(
+            config = self.protector.config_for(self.guild.id)
+            config.window_seconds = self._positive_float(
                 window_values["window_seconds"],
                 "window_seconds",
             )
-            self.protector.config.early_message_window_seconds = self._positive_float(
+            config.early_message_window_seconds = self._positive_float(
                 window_values["early_message_window_seconds"],
                 "early_message_window_seconds",
             )
-            self.protector.config.quiet_seconds = self._positive_float(
+            config.quiet_seconds = self._positive_float(
                 expiry_values["quiet_seconds"],
                 "quiet_seconds",
             )
-            self.protector.config.fixed_seconds = self._positive_float(
+            config.fixed_seconds = self._positive_float(
                 expiry_values["fixed_seconds"],
                 "fixed_seconds",
             )
-            self.protector.config.trigger_score = self._positive_int(
+            config.trigger_score = self._positive_int(
                 trigger_values["trigger_score"],
                 "trigger_score",
             )
-            self.protector.config.trigger_join_count = self._positive_int(
+            config.trigger_join_count = self._positive_int(
                 trigger_values["trigger_join_count"],
                 "trigger_join_count",
             )
@@ -411,7 +415,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
             await interaction.response.send_message(str(error), ephemeral=True)
             return
 
-        await self.protector.save_config()
+        await self.protector.save_config(self.guild.id)
         
         if interaction.message:
             await interaction.message.edit(
@@ -462,62 +466,105 @@ class RaidProtector:
     def __init__(self, bot: BotCore) -> None:
         self.bot = bot
         self.logger = bot.logger.getChild("Raid")
-        self.config = self._load_config()
+        self.configs = self._load_configs()
         self.join_events: list[JoinEvent] = []
         self.early_message_events: list[EarlyMessageEvent] = []
         self.guild_states: dict[int, GuildRaidState] = {}
 
-    def _load_config(self) -> RaidConfig:
+    def _load_configs(self) -> dict[int, RaidConfig]:
         raw = self.bot.config.get("raid_protection", {})
-        config = raw if isinstance(raw, dict) else {}
+        root = raw if isinstance(raw, dict) else {}
+        raw_servers = root.get("servers")
+        servers = raw_servers if isinstance(raw_servers, dict) else {}
+        configs: dict[int, RaidConfig] = {}
+        for raw_guild_id, raw_config in servers.items():
+            try:
+                guild_id = int(raw_guild_id)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(raw_config, dict):
+                configs[guild_id] = self._load_config(raw_config)
+        return configs
+
+    def _float_config(self, config: dict[str, object], key: str, default: float) -> float:
+        value = config.get(key)
+        if not isinstance(value, (int, float, str)):
+            return default
+        try:
+            return float(value)
+        except ValueError:
+            return default
+
+    def _int_config(self, config: dict[str, object], key: str, default: int) -> int:
+        value = config.get(key)
+        if not isinstance(value, (int, str)):
+            return default
+        try:
+            return int(value)
+        except ValueError:
+            return default
+
+    def _load_config(self, config: dict[str, object]) -> RaidConfig:
+        alert_channel_id = self._int_config(config, "alert_channel_id", 0)
         return RaidConfig(
             enabled=bool(config.get("enabled", False)),
             alert_channel_id=(
-                int(config["alert_channel_id"])
+                alert_channel_id
                 if config.get("alert_channel_id") is not None else
                 None
             ),
             mode=self._mode(config.get("mode", DEFAULT_MODE)),
-            window_seconds=float(config.get("window_seconds", DEFAULT_WINDOW_SECONDS)),
-            quiet_seconds=float(config.get("quiet_seconds", DEFAULT_QUIET_SECONDS)),
-            fixed_seconds=float(config.get("fixed_seconds", DEFAULT_FIXED_SECONDS)),
-            early_message_window_seconds=float(config.get(
+            window_seconds=self._float_config(config, "window_seconds", DEFAULT_WINDOW_SECONDS),
+            quiet_seconds=self._float_config(config, "quiet_seconds", DEFAULT_QUIET_SECONDS),
+            fixed_seconds=self._float_config(config, "fixed_seconds", DEFAULT_FIXED_SECONDS),
+            early_message_window_seconds=self._float_config(config,
                 "early_message_window_seconds",
                 DEFAULT_EARLY_MESSAGE_WINDOW_SECONDS,
-            )),
-            trigger_score=int(config.get("trigger_score", DEFAULT_TRIGGER_SCORE)),
-            trigger_join_count=int(config.get("trigger_join_count", DEFAULT_TRIGGER_JOIN_COUNT)),
+            ),
+            trigger_score=self._int_config(config, "trigger_score", DEFAULT_TRIGGER_SCORE),
+            trigger_join_count=self._int_config(config, "trigger_join_count", DEFAULT_TRIGGER_JOIN_COUNT),
         )
 
     def _mode(self, value: object) -> RaidMode:
         return value if value in ("quiet", "fixed", "manual") else DEFAULT_MODE
 
-    async def save_config(self) -> None:
-        self.bot.config["raid_protection"] = {
-            "enabled": self.config.enabled,
-            "alert_channel_id": self.config.alert_channel_id,
-            "mode": self.config.mode,
-            "window_seconds": self.config.window_seconds,
-            "quiet_seconds": self.config.quiet_seconds,
-            "fixed_seconds": self.config.fixed_seconds,
-            "early_message_window_seconds": self.config.early_message_window_seconds,
-            "trigger_score": self.config.trigger_score,
-            "trigger_join_count": self.config.trigger_join_count,
+    def config_for(self, guild_id: int) -> RaidConfig:
+        return self.configs.setdefault(guild_id, RaidConfig())
+
+    async def save_config(self, guild_id: int) -> None:
+        root = self.bot.config.get("raid_protection")
+        config_root = root if isinstance(root, dict) else {}
+        raw_servers = config_root.get("servers")
+        servers = raw_servers if isinstance(raw_servers, dict) else {}
+        config = self.config_for(guild_id)
+        servers[str(guild_id)] = {
+            "enabled": config.enabled,
+            "alert_channel_id": config.alert_channel_id,
+            "mode": config.mode,
+            "window_seconds": config.window_seconds,
+            "quiet_seconds": config.quiet_seconds,
+            "fixed_seconds": config.fixed_seconds,
+            "early_message_window_seconds": config.early_message_window_seconds,
+            "trigger_score": config.trigger_score,
+            "trigger_join_count": config.trigger_join_count,
         }
+        config_root["servers"] = servers
+        self.bot.config["raid_protection"] = config_root
         await self.bot.save_config()
 
     async def configure(
         self,
         *,
+        guild_id: int,
         alert_channel: discord.TextChannel | None,
     ) -> None:
         if alert_channel is not None:
-            self.config.alert_channel_id = alert_channel.id
-        await self.save_config()
+            self.config_for(guild_id).alert_channel_id = alert_channel.id
+        await self.save_config(guild_id)
 
     async def manual_activate(self, guild_id: int) -> None:
         state = self.state_for(guild_id)
-        self._activate(state, "manual activation")
+        self._activate(guild_id, state, "manual activation")
         await self.alert(guild_id, "Raid mode manually activated.", self.score(guild_id), [])
 
     async def manual_deactivate(self, guild_id: int) -> None:
@@ -546,7 +593,7 @@ class RaidProtector:
         await self.maybe_expire(member.guild.id, now)
 
         if state.active:
-            self._activate(state, "active suspicious join")
+            self._activate(member.guild.id, state, "active suspicious join")
             quarantined = await self.quarantine_members([member], "raid mode active")
             self.record_quarantines(state, quarantined)
             if quarantined:
@@ -558,13 +605,14 @@ class RaidProtector:
                 )
             return
 
-        if not self.config.enabled or self.config.alert_channel_id is None:
+        config = self.config_for(member.guild.id)
+        if not config.enabled or config.alert_channel_id is None:
             return
 
         score = self.score(member.guild.id)
-        if self.is_triggered(score):
+        if self.is_triggered(member.guild.id, score):
             state.last_suspicious_at = now
-            self._activate(state, "automatic trigger")
+            self._activate(member.guild.id, state, "automatic trigger")
             candidates = [
                 event.member
                 for event in self.window_join_events(member.guild.id, now)
@@ -600,16 +648,17 @@ class RaidProtector:
         state = self.state_for(member.guild.id)
         await self.maybe_expire(member.guild.id, now)
         if state.active:
-            self._activate(state, "active suspicious message")
+            self._activate(member.guild.id, state, "active suspicious message")
             return
 
-        if not self.config.enabled or self.config.alert_channel_id is None:
+        config = self.config_for(member.guild.id)
+        if not config.enabled or config.alert_channel_id is None:
             return
 
         score = self.score(member.guild.id)
-        if self.is_triggered(score):
+        if self.is_triggered(member.guild.id, score):
             state.last_suspicious_at = now
-            self._activate(state, "early message trigger")
+            self._activate(member.guild.id, state, "early message trigger")
             candidates = [
                 event.member
                 for event in self.window_join_events(member.guild.id, now)
@@ -629,30 +678,37 @@ class RaidProtector:
     def should_skip_member(self, member: discord.Member) -> bool:
         return (
             member.bot or
-            self.bot.is_authorized(member.id, 1) or
-            security_roles.has_role_id(member, security_roles.verified_role_id(self.bot)) or
-            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
+            self.bot.accounts[member.id].local(member.guild.id).permissions.can_use(RAID_EXEMPT_CAPABILITY) or
+            security_roles.has_role_id(member, security_roles.verified_role_id(self.bot, member.guild)) or
+            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot, member.guild))
         )
 
     def should_skip_join_record(self, member: discord.Member) -> bool:
         return (
             member.bot or
-            self.bot.is_authorized(member.id, 1) or
-            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
+            self.bot.accounts[member.id].local(member.guild.id).permissions.can_use(RAID_EXEMPT_CAPABILITY) or
+            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot, member.guild))
         )
 
     def should_skip_message_member(self, member: discord.Member) -> bool:
         return (
             member.bot or
-            self.bot.is_authorized(member.id, 1) or
-            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot))
+            self.bot.accounts[member.id].local(member.guild.id).permissions.can_use(RAID_EXEMPT_CAPABILITY) or
+            security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot, member.guild))
         )
 
     def trim(self, now: float) -> None:
-        keep_since = now - max(
-            self.config.window_seconds,
-            self.config.early_message_window_seconds,
+        window_seconds = max(
+            [
+                DEFAULT_WINDOW_SECONDS,
+                DEFAULT_EARLY_MESSAGE_WINDOW_SECONDS,
+                *[
+                    max(config.window_seconds, config.early_message_window_seconds)
+                    for config in self.configs.values()
+                ],
+            ]
         )
+        keep_since = now - window_seconds
         self.join_events = [
             event for event in self.join_events
             if event.timestamp >= keep_since
@@ -663,21 +719,21 @@ class RaidProtector:
         ]
 
     def window_join_events(self, guild_id: int, now: float) -> list[JoinEvent]:
-        window_start = now - self.config.window_seconds
+        window_start = now - self.config_for(guild_id).window_seconds
         return [
             event for event in self.join_events
             if event.guild_id == guild_id and event.timestamp >= window_start
         ]
 
     def window_message_events(self, guild_id: int, now: float) -> list[EarlyMessageEvent]:
-        window_start = now - self.config.window_seconds
+        window_start = now - self.config_for(guild_id).window_seconds
         return [
             event for event in self.early_message_events
             if event.guild_id == guild_id and event.timestamp >= window_start
         ]
 
     def recent_join_for(self, guild_id: int, user_id: int, now: float) -> JoinEvent | None:
-        window_start = now - self.config.early_message_window_seconds
+        window_start = now - self.config_for(guild_id).early_message_window_seconds
         for event in reversed(self.join_events):
             if (
                 event.guild_id == guild_id and
@@ -705,10 +761,11 @@ class RaidProtector:
             cluster_user_ids=cluster_user_ids,
         )
 
-    def is_triggered(self, score: RaidScore) -> bool:
+    def is_triggered(self, guild_id: int, score: RaidScore) -> bool:
+        config = self.config_for(guild_id)
         return score.join_count > 0 and (
-            score.score >= self.config.trigger_score or
-            score.join_count >= self.config.trigger_join_count
+            score.score >= config.trigger_score or
+            score.join_count >= config.trigger_join_count
         )
 
     def account_age_score(self, created_at: datetime) -> int:
@@ -740,15 +797,16 @@ class RaidProtector:
                 cluster_user_ids.update(nearby)
         return cluster_user_ids
 
-    def _activate(self, state: GuildRaidState, _reason: str) -> None:
+    def _activate(self, guild_id: int, state: GuildRaidState, _reason: str) -> None:
+        config = self.config_for(guild_id)
         now = time.monotonic()
         state.active = True
         state.active_since = state.active_since or now
         state.last_suspicious_at = now
-        if self.config.mode == "fixed":
-            state.expires_at = now + self.config.fixed_seconds
-        elif self.config.mode == "quiet":
-            state.expires_at = now + self.config.quiet_seconds
+        if config.mode == "fixed":
+            state.expires_at = now + config.fixed_seconds
+        elif config.mode == "quiet":
+            state.expires_at = now + config.quiet_seconds
         else:
             state.expires_at = None
 
@@ -917,7 +975,8 @@ class RaidProtector:
         score: RaidScore,
         quarantined: list[QuarantineResult],
     ) -> None:
-        channel_id = self.config.alert_channel_id
+        config = self.config_for(guild_id)
+        channel_id = config.alert_channel_id
         if channel_id is None:
             self.logger.warning(f"Raid alert skipped for guild {guild_id}: alert channel is not configured.")
             return
@@ -929,7 +988,7 @@ class RaidProtector:
         try:
             await channel.send(view=RaidAlertView(
                 title=message,
-                config=self.config,
+                config=config,
                 score=score,
                 quarantined=mentions,
             ))
@@ -937,7 +996,7 @@ class RaidProtector:
             self.logger.exception(f"Failed to send raid alert to channel {channel_id}.")
 
     async def alert_quarantine(self, result: QuarantineResult) -> None:
-        channel_id = self.config.alert_channel_id
+        channel_id = self.config_for(result.member.guild.id).alert_channel_id
         if channel_id is None:
             self.logger.warning(
                 "Raid quarantine alert skipped for guild %s: alert channel is not configured.",
@@ -1073,7 +1132,9 @@ class RaidUnquarantineButton(
                 ephemeral=True,
             )
             return
-        if not bot.is_authorized(interaction.user.id, 2):
+        if not bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
+            RAID_UNQUARANTINE_CAPABILITY,
+        ):
             await interaction.response.send_message(
                 "You are not authorized to unquarantine users.",
                 ephemeral=True,
@@ -1192,6 +1253,8 @@ class RaidUnquarantineButton(
 async def setup(bot: BotCore) -> None:
     protector = RaidProtector(bot)
     manage = groups.manage(bot)
+    bot.accounts.capabilities.register(RAID_UNQUARANTINE_CAPABILITY)
+    bot.accounts.capabilities.register(RAID_EXEMPT_CAPABILITY)
     bot.add_dynamic_items(RaidUnquarantineButton)
 
     @bot.member_join_callback
@@ -1202,7 +1265,12 @@ async def setup(bot: BotCore) -> None:
     async def on_message(message: discord.Message) -> None:
         await protector.on_message(message)
 
-    @manage.command(name="raid", description="Manage raid protection", perm_requirement=2, defer=False)
+    @manage.command(
+        name="raid",
+        description="Manage raid protection",
+        capabilities=[RAID_MANAGE_CAPABILITY],
+        defer=False,
+    )
     async def raid(
         interaction: discord.Interaction,
         action: RaidAction,
@@ -1225,7 +1293,7 @@ async def setup(bot: BotCore) -> None:
                     ephemeral=True,
                 )
                 return
-            await protector.configure(alert_channel=alert_channel)
+            await protector.configure(guild_id=guild.id, alert_channel=alert_channel)
             await interaction.response.send_message(
                 view=RaidConfigView(
                     protector=protector,
@@ -1239,7 +1307,7 @@ async def setup(bot: BotCore) -> None:
             await protector.maybe_expire(guild.id, time.monotonic())
             await bot.discord.send(
                 view=RaidStatusView(
-                    config=protector.config,
+                    config=protector.config_for(guild.id),
                     state=protector.state_for(guild.id),
                     score=protector.score(guild.id),
                 ),
@@ -1249,7 +1317,8 @@ async def setup(bot: BotCore) -> None:
             return
 
         if action == "on":
-            if protector.config.alert_channel_id is None:
+            config = protector.config_for(guild.id)
+            if config.alert_channel_id is None:
                 await bot.discord.send(
                     "Raid protection needs an alert channel first: `/manage raid action:config alert_channel:#channel`.",
                     response=True,
@@ -1264,7 +1333,7 @@ async def setup(bot: BotCore) -> None:
                     ephemeral=True,
                 )
                 return
-            protector.config.enabled = True
+            config.enabled = True
             if alert_channel is not None:
                 if alert_channel.guild.id != guild.id:
                     await bot.discord.send(
@@ -1273,8 +1342,8 @@ async def setup(bot: BotCore) -> None:
                         ephemeral=True,
                     )
                     return
-                protector.config.alert_channel_id = alert_channel.id
-            await protector.save_config()
+                config.alert_channel_id = alert_channel.id
+            await protector.save_config(guild.id)
             await bot.discord.send(
                 "Raid protection automation enabled.",
                 response=True,
@@ -1283,8 +1352,8 @@ async def setup(bot: BotCore) -> None:
             return
 
         if action == "off":
-            protector.config.enabled = False
-            await protector.save_config()
+            protector.config_for(guild.id).enabled = False
+            await protector.save_config(guild.id)
             await bot.discord.send(
                 "Raid protection automation disabled.",
                 response=True,
@@ -1293,7 +1362,7 @@ async def setup(bot: BotCore) -> None:
             return
 
         if action == "activate":
-            if protector.config.alert_channel_id is None:
+            if protector.config_for(guild.id).alert_channel_id is None:
                 await bot.discord.send(
                     "Raid protection needs an alert channel first: `/manage raid action:config alert_channel:#channel`.",
                     response=True,

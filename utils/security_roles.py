@@ -9,15 +9,27 @@ if TYPE_CHECKING:
 CONFIG_KEY = "verification"
 VERIFIED_ROLE_ID_KEY = "verified_role_id"
 QUARANTINE_ROLE_ID_KEY = "quarantine_role_id"
+SERVERS_KEY = "servers"
 
 
-def role_config(bot: "BotCore") -> dict[str, object]:
+def role_config(bot: "BotCore", guild_id: int | str | None = None) -> dict[str, object]:
     raw = bot.config.get(CONFIG_KEY)
     if isinstance(raw, dict):
-        return raw
-    config: dict[str, object] = {}
-    bot.config[CONFIG_KEY] = config
-    return config
+        config = raw
+    else:
+        config: dict[str, object] = {}
+        bot.config[CONFIG_KEY] = config
+
+    if guild_id is None:
+        return config
+
+    raw_servers = config.get(SERVERS_KEY)
+    servers = raw_servers if isinstance(raw_servers, dict) else {}
+    raw_server = servers.get(str(guild_id))
+    server = raw_server if isinstance(raw_server, dict) else {}
+    servers[str(guild_id)] = server
+    config[SERVERS_KEY] = servers
+    return server
 
 
 def _role_id(value: object) -> int | None:
@@ -31,16 +43,16 @@ def _role_id(value: object) -> int | None:
         return None
 
 
-def verified_role_id(bot: "BotCore") -> int | None:
-    return _role_id(role_config(bot).get(VERIFIED_ROLE_ID_KEY))
+def verified_role_id(bot: "BotCore", guild: discord.Guild | None = None) -> int | None:
+    return _role_id(role_config(bot, guild.id if guild is not None else None).get(VERIFIED_ROLE_ID_KEY))
 
 
-def quarantine_role_id(bot: "BotCore") -> int | None:
-    return _role_id(role_config(bot).get(QUARANTINE_ROLE_ID_KEY))
+def quarantine_role_id(bot: "BotCore", guild: discord.Guild | None = None) -> int | None:
+    return _role_id(role_config(bot, guild.id if guild is not None else None).get(QUARANTINE_ROLE_ID_KEY))
 
 
 def configured_role(bot: "BotCore", guild: discord.Guild, key: str) -> discord.Role | None:
-    role_id = _role_id(role_config(bot).get(key))
+    role_id = _role_id(role_config(bot, guild.id).get(key))
     if role_id is None:
         return None
     return guild.get_role(role_id)
@@ -79,17 +91,17 @@ async def set_roles(
     verified: discord.Role,
     quarantine: discord.Role,
 ) -> None:
-    config = role_config(bot)
+    config = role_config(bot, verified.guild.id)
     config[VERIFIED_ROLE_ID_KEY] = verified.id
     config[QUARANTINE_ROLE_ID_KEY] = quarantine.id
     await bot.save_config()
 
 
 async def set_verified_role(bot: "BotCore", role: discord.Role) -> None:
-    role_config(bot)[VERIFIED_ROLE_ID_KEY] = role.id
+    role_config(bot, role.guild.id)[VERIFIED_ROLE_ID_KEY] = role.id
     await bot.save_config()
 
 
 async def set_quarantine_role(bot: "BotCore", role: discord.Role) -> None:
-    role_config(bot)[QUARANTINE_ROLE_ID_KEY] = role.id
+    role_config(bot, role.guild.id)[QUARANTINE_ROLE_ID_KEY] = role.id
     await bot.save_config()

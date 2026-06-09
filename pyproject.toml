@@ -20,3 +20,15 @@ dependencies = [
     "google-auth-httplib2>=0.4.0",
     "pydantic>=2.13.0",
 ]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "python-wasi",
+    "javascript-wasi",
+    "**/__pycache__",
+    "**/node_modules",
+    "**/.*",
+    ".venv",
+]

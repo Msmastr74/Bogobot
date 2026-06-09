@@ -259,7 +259,7 @@ async def setup(bot: BotCore) -> None:
         )
         return { 'view': view }
     
-    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False, perm_requirement=0)
+    @bot.setup.command(name="get_stats", description="Retrieve all current stream statistics", eph=False)
     @action(
         "get_stats",
         "Show current stream statistics.",
@@ -323,7 +323,6 @@ async def setup(bot: BotCore) -> None:
         name="streamboard",
         description="Show Bogostream contributor rankings or a contributor profile",
         eph=False,
-        perm_requirement=0,
     )
     @action(
         "streamboard",
@@ -422,7 +421,7 @@ async def setup(bot: BotCore) -> None:
             image=file
         ), file
 
-    @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False, perm_requirement=0)
+    @bot.setup.command(name="get_sort", description="Retrieve the current sort state", defer=False)
     @action(
         "get_sort",
         "Show the latest color-extracted sort state from the cached video frame.",

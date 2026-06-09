@@ -67,7 +67,7 @@ async def setup(bot: BotCore):
         if update_status.is_running():
             update_status.cancel()
 
-    @bogo.command(name="name", description="Bogoes your name", perm_requirement=0, defer=False)
+    @bogo.command(name="name", description="Bogoes your name", defer=False)
     @action(
         "bogo name",
         "Shuffle the user's display name. Does not take any parameters.",

@@ -116,9 +116,9 @@ class VerifyPanelView(discord.ui.LayoutView):
         )
 
     def _blocked_message(self, member: discord.Member) -> str | None:
-        if security_roles.has_role_id(member, security_roles.verified_role_id(self.bot)):
+        if security_roles.has_role_id(member, security_roles.verified_role_id(self.bot, member.guild)):
             return "You are already verified."
-        if security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot)):
+        if security_roles.has_role_id(member, security_roles.quarantine_role_id(self.bot, member.guild)):
             return "You cannot verify while quarantined."
         return None
 
@@ -257,7 +257,7 @@ async def setup(bot: BotCore) -> None:
     @manage.command(
         name="create_verification",
         description="Create a persistent verification message",
-        perm_requirement=2,
+        capabilities=["verification.manage"],
     )
     async def create_verification(
         interaction: discord.Interaction,

@@ -364,7 +364,7 @@ async def setup(bot: "BotCore"):
     @manage.command(
         name="state",
         description="Show or change bot process state",
-        perm_requirement=4,
+        capabilities=["system.state"],
     )
     async def state(
         interaction: discord.Interaction,
@@ -386,7 +386,11 @@ async def setup(bot: "BotCore"):
             sys.exit(0)
             return
 
-    @manage.command(name="logs", description="Show recent bot logs or write a log message")
+    @manage.command(
+        name="logs",
+        description="Show recent bot logs or write a log message",
+        capabilities=["system.logs"],
+    )
     async def logs(interaction: discord.Interaction, message: str | None = None, level: LogLevel = "INFO"):
         if message is not None:
             logger = bot.logger.getChild("UserLog")
@@ -431,7 +435,11 @@ async def setup(bot: "BotCore"):
         )
 
 
-    @manage.command(name="loglevel", description="Temporarily set the runtime log level", perm_requirement=3)
+    @manage.command(
+        name="loglevel",
+        description="Temporarily set the runtime log level",
+        capabilities=["system.loglevel"],
+    )
     async def loglevel(interaction: discord.Interaction, level: LogLevel | None = None):
         current_level = logging.getLevelName(bot.logger.getEffectiveLevel())
         root_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
@@ -458,7 +466,11 @@ async def setup(bot: "BotCore"):
         )
 
 
-    @manage.command(name="message", description="Manage a message", perm_requirement=3)
+    @manage.command(
+        name="message",
+        description="Manage a message",
+        capabilities=["discord.message"],
+    )
     async def message(
         interaction: discord.Interaction,
         action: Literal['delete', 'edit', 'reply', 'react', 'unreact', 'pin', 'unpin'],

@@ -19,7 +19,10 @@ CBOGO_MIN_SHUFFLES = 1
 CBOGO_MAX_SHUFFLES = 100
 CBOGO_STORAGE_PATH = "cbogo.json"
 CBOGO_STATE_KEY = "state"
+CBOGO_SERVERS_KEY = "servers"
 CBOGO_ACCOUNT_KEY = "cbogo"
+CBOGO_RESET_CAPABILITY = "games.cbogo.reset"
+CBOGO_RESET_LAST_USER_CAPABILITY = "games.cbogo.reset_last_user"
 CBOGO_LEADERBOARD_SECTION_LIMIT = 1200
 CBOGO_INFO = f"""
 ### cbogo info
@@ -515,6 +518,8 @@ async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
     storage_path = bot.config.get("cbogo_path", CBOGO_STORAGE_PATH)
     sorted_emoji = bot.discord.get_emoji("sorted")
+    bot.accounts.capabilities.register(CBOGO_RESET_CAPABILITY)
+    bot.accounts.capabilities.register(CBOGO_RESET_LAST_USER_CAPABILITY)
 
     def load_storage_sync() -> dict[str, object]:
         if not os.path.exists(storage_path):
@@ -544,31 +549,44 @@ async def setup(bot: BotCore):
     async def save_storage(storage: Mapping[str, object]) -> None:
         await asyncio.to_thread(save_storage_sync, storage)
 
-    async def get_state() -> CbogoState:
+    def server_storage(storage: dict[str, object], guild_id: int) -> dict[str, object]:
+        raw_servers = storage.get(CBOGO_SERVERS_KEY)
+        servers = raw_servers if isinstance(raw_servers, dict) else {}
+        raw_server = servers.get(str(guild_id))
+        server = raw_server if isinstance(raw_server, dict) else {}
+        servers[str(guild_id)] = server
+        storage[CBOGO_SERVERS_KEY] = servers
+        return server
+
+    async def get_state(guild_id: int) -> CbogoState:
         storage = await load_storage()
-        state = normalize_state(storage.get(CBOGO_STATE_KEY, storage))
+        server = server_storage(storage, guild_id)
+        state = normalize_state(server.get(CBOGO_STATE_KEY))
         state_data = state.model_dump()
-        if state_data != storage.get(CBOGO_STATE_KEY):
-            storage[CBOGO_STATE_KEY] = state_data
+        if state_data != server.get(CBOGO_STATE_KEY):
+            server[CBOGO_STATE_KEY] = state_data
             await save_storage(storage)
         return state
 
-    async def save_state(state: CbogoState) -> None:
+    async def save_state(guild_id: int, state: CbogoState) -> None:
         storage = await load_storage()
-        storage[CBOGO_STATE_KEY] = state.model_dump()
+        server_storage(storage, guild_id)[CBOGO_STATE_KEY] = state.model_dump()
         await save_storage(storage)
 
-    async def get_leaderboard() -> dict[str, CbogoUserStats]:
+    async def get_leaderboard(guild_id: int) -> dict[str, CbogoUserStats]:
         return {
             uid: normalize_user_stats(raw_stats)
-            for uid, raw_stats in await bot.accounts.query(CBOGO_ACCOUNT_KEY)
+            for uid, raw_stats in await bot.accounts.query_local(guild_id, CBOGO_ACCOUNT_KEY)
         }
 
     async def cbogo_leaderboard(
         interaction: discord.Interaction,
         target: discord.Member | discord.User | None = None,
     ):
-        leaderboard = await get_leaderboard()
+        if interaction.guild_id is None:
+            await bot.discord.send("cbogo leaderboards are server-specific.", response=True, ephemeral=True)
+            return
+        leaderboard = await get_leaderboard(interaction.guild_id)
         await bot.discord.send(
             view=CbogoLeaderboard(
                 leaderboard=leaderboard,
@@ -578,13 +596,13 @@ async def setup(bot: BotCore):
             safety_filter=True,
         )
 
-    async def reset_user_scores() -> None:
-        for uid, raw_stats in await bot.accounts.query(CBOGO_ACCOUNT_KEY):
+    async def reset_user_scores(guild_id: int) -> None:
+        for uid, raw_stats in await bot.accounts.query_local(guild_id, CBOGO_ACCOUNT_KEY):
             stats = normalize_user_stats(raw_stats)
             stats.shuffles = 0
             stats.best_run = 0
             stats.best_timestamp = 0
-            await bot.accounts[uid].write(CBOGO_ACCOUNT_KEY, stats.model_dump())
+            await bot.accounts[uid].local(guild_id).write(CBOGO_ACCOUNT_KEY, stats.model_dump())
 
     async def update_user_stats(
         interaction: discord.Interaction,
@@ -594,7 +612,9 @@ async def setup(bot: BotCore):
         best_run: int,
     ) -> None:
         uid = str(interaction.user.id)
-        account = bot.accounts[uid]
+        if interaction.guild_id is None:
+            return
+        account = bot.accounts[uid].local(interaction.guild_id)
         stats = normalize_user_stats(
             account.get(CBOGO_ACCOUNT_KEY),
             str(interaction.user),
@@ -611,7 +631,6 @@ async def setup(bot: BotCore):
         name="cbogo",
         description="Run cbogo",
         defer=False,
-        perm_requirement=0,
     )
     @action(
         "cbogo",
@@ -626,8 +645,17 @@ async def setup(bot: BotCore):
         action: Literal["run", "info", "leaderboard", "reset", "reset_last_user"] = "run",
         target: discord.Member | discord.User | None = None,
     ):
+        if interaction.guild_id is None:
+            await bot.discord.send(
+                "cbogo is server-specific and can only be used in a server.",
+                response=True,
+                ephemeral=True,
+            )
+            return
         if action == "reset":
-            if not bot.is_authorized(interaction.user.id, 2):
+            if not bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
+                CBOGO_RESET_CAPABILITY,
+            ):
                 await bot.discord.send(
                     "Only mods can reset cbogo.",
                     response=True,
@@ -637,8 +665,8 @@ async def setup(bot: BotCore):
 
             async with state_lock:
                 state = default_state()
-                await save_state(state)
-                await reset_user_scores()
+                await save_state(interaction.guild_id, state)
+                await reset_user_scores(interaction.guild_id)
             await bot.discord.send(
                 view=CbogoView(title="cbogo reset", state=state),
                 response=True,
@@ -646,7 +674,9 @@ async def setup(bot: BotCore):
             )
             return
         if action == "reset_last_user":
-            if not bot.is_authorized(interaction.user.id, 1):
+            if not bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
+                CBOGO_RESET_LAST_USER_CAPABILITY,
+            ):
                 await bot.discord.send(
                     "Unauthorized.",
                     response=True,
@@ -654,10 +684,10 @@ async def setup(bot: BotCore):
                 )
                 return
             async with state_lock:
-                state = await get_state()
+                state = await get_state(interaction.guild_id)
                 old_last_user = state.last_user
                 state.last_user = None
-                await save_state(state)
+                await save_state(interaction.guild_id, state)
             if old_last_user is None:
                 await bot.discord.send(
                     "No last user was set.",
@@ -678,7 +708,7 @@ async def setup(bot: BotCore):
             return
 
         if action == "info":
-            state = await get_state()
+            state = await get_state(interaction.guild_id)
             await bot.discord.send(
                 view=CbogoView(
                     title="cbogo info",
@@ -691,7 +721,7 @@ async def setup(bot: BotCore):
             return
 
         async with state_lock:
-            state = await get_state()
+            state = await get_state(interaction.guild_id)
             if state.solved:
                 await bot.discord.send(
                     view=CbogoView(title=f"cbogo {sorted_emoji}", state=state),
@@ -735,7 +765,7 @@ async def setup(bot: BotCore):
                 shuffles=performed,
                 best_run=run_best_score,
             )
-            await save_state(state)
+            await save_state(interaction.guild_id, state)
 
         message = await bot.discord.send(
             view=CbogoView(

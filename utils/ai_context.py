@@ -66,14 +66,14 @@ class AIContext:
         history_enabled: bool = True,
         history_path: str = DEFAULT_HISTORY_PATH,
         history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
-        user_permission_level: Callable[[int], int] | None = None,
+        user_capabilities: Callable[[int], dict[str, int]] | None = None,
         logger: Logger | None = None,
     ):
         self.normalize_discord = normalize_discord
         self.history_enabled = history_enabled
         self.history_path = history_path
         self.history_char_budget = max(0, int(history_char_budget))
-        self.user_permission_level = user_permission_level
+        self.user_capabilities = user_capabilities
         self.logger = logger or getLogger("Bogobot.AI.Context")
 
     def configure(
@@ -83,7 +83,7 @@ class AIContext:
         history_enabled: bool | None = None,
         history_path: str | None = None,
         history_char_budget: int | None = None,
-        user_permission_level: Callable[[int], int] | None = None,
+        user_capabilities: Callable[[int], dict[str, int]] | None = None,
         logger: Logger | None = None,
     ) -> None:
         if normalize_discord is not None:
@@ -94,8 +94,8 @@ class AIContext:
             self.history_path = history_path
         if history_char_budget is not None:
             self.history_char_budget = max(0, int(history_char_budget))
-        if user_permission_level is not None:
-            self.user_permission_level = user_permission_level
+        if user_capabilities is not None:
+            self.user_capabilities = user_capabilities
         if logger is not None:
             self.logger = logger
 
@@ -404,7 +404,7 @@ class AIContext:
         interaction_line = "interaction: true\n" if interaction else ""
         interaction_text = f"from interaction: {self._format_interaction_metadata(interaction_data)}\n" if interaction_data is not None else ""
         timestamp = created_at.astimezone(timezone.utc).isoformat()
-        perm_level = self._user_permission_level_name(user.id)
+        capabilities = self._user_capabilities_text(user.id)
         content = content.strip()
         return (
             f"{open_system_tag('attached_metadata')}\n"
@@ -413,24 +413,28 @@ class AIContext:
             f"{interaction_text}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
-            f"perm_level: {perm_level}\n"
+            f"capabilities: {capabilities}\n"
             f"{close_system_tag('attached_metadata')}\n"
             f"{content}"
         )
 
-    def _user_permission_level(self, user_id: int) -> int:
-        if self.user_permission_level is None:
-            return 0
+    def _user_capabilities(self, user_id: int) -> dict[str, int]:
+        if self.user_capabilities is None:
+            return {}
         try:
-            return int(self.user_permission_level(user_id))
+            return self.user_capabilities(user_id)
         except Exception:
-            self.logger.exception(f"Could not resolve AI metadata permission level for user {user_id}.")
-            return 0
+            self.logger.exception(f"Could not resolve AI metadata capabilities for user {user_id}.")
+            return {}
 
-    def _user_permission_level_name(self, user_id: int) -> str:
-        from plugins.accounts import NAMES
-        level = self._user_permission_level(user_id)
-        return NAMES.get(level, f"level_{level}")
+    def _user_capabilities_text(self, user_id: int) -> str:
+        capabilities = self._user_capabilities(user_id)
+        if not capabilities:
+            return "none"
+        return ", ".join(
+            f"{capability}:{depth}"
+            for capability, depth in sorted(capabilities.items())
+        )
     
     def _format_interaction_metadata(self, meta: discord.MessageInteractionMetadata):
         all_data = {

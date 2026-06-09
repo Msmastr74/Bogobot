@@ -832,7 +832,6 @@ async def setup(bot: BotCore):
         )
     @bot.setup.context_menu(
         name="Bogoscramble",
-        perm_requirement=0,
         eph=False,
     )
     async def Bogoscramble(interaction: discord.Interaction, message: discord.Message):
@@ -895,7 +894,6 @@ async def setup(bot: BotCore):
                 current_interaction.reset(token)
     @bot.setup.context_menu(
         name="Custom Bogoscramble",
-        perm_requirement=0,
         eph=False,
         defer=False,
     )
@@ -911,7 +909,6 @@ async def setup(bot: BotCore):
     @bot.setup.command(
         name="bogoscramble",
         description="Bogoscramble text and attachments",
-        perm_requirement=0,
         defer=False
     )
     @action(

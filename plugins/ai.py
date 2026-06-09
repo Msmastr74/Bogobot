@@ -55,11 +55,12 @@ def instruction_text_base() -> str:
     )
 
 class BotActionParameters(TypedDict, total=False):
-    perm_requirement: int
+    capabilities: Sequence[str]
 
 BotAction: TypeAlias = Callable[..., Coro[None]]
 MAX_ASSISTANT_CONTEXT_CHARS = 4500
 MAX_REPLY_CHARS = 2000
+USER_AI_CAPABILITY = "user.ai"
 
 
 class AIHistoryConfig(Schema):
@@ -148,7 +149,7 @@ def setup_ai(bot: "BotCore"):
         history_char_budget=ai_config.history.char_budget,
         logger=bot.logger.getChild("AI"),
     )
-    ai_core.context.configure(user_permission_level=bot.authorization_level)
+    ai_core.context.configure(user_capabilities=lambda user_id: bot.accounts[user_id].permissions.capabilities)
     if ai_core.enabled and ai_config.api_key:
         os.environ[ai_core.api_key_env] = ai_config.api_key
     return ai_core
@@ -559,8 +560,15 @@ def ai_break_config(bot: 'BotCore') -> AIBreakConfig:
 
 def ai_enabled(bot: 'BotCore') -> bool:
     return ai_config.enabled
+
+
 def banned(bot: 'BotCore', user: discord.User | discord.Member):
-    return bot.authorization_level(user.id) < 0
+    return False
+
+
+def can_use_ai(bot: 'BotCore', user: discord.User | discord.Member, guild_id: int | None) -> bool:
+    return bot.accounts[user.id].local(guild_id).permissions.can_use(USER_AI_CAPABILITY)
+
 
 class ContextRequestExecutor:
     def __init__(self, bot: "BotCore"):
@@ -804,6 +812,7 @@ async def capture_interaction_output(interaction: discord.Interaction):
 async def setup(bot: 'BotCore'):
     ai_core = setup_ai(bot)
     manage = groups.manage(bot)
+    bot.accounts.capabilities.register(USER_AI_CAPABILITY)
 
     bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
@@ -1008,7 +1017,7 @@ async def setup(bot: 'BotCore'):
     @manage.command(
         name="ai",
         description="Manage AI settings",
-        perm_requirement=3,
+        capabilities=["ai.manage"],
         defer=False,
     )
     async def manage_ai(interaction: discord.Interaction) -> None:
@@ -1045,6 +1054,9 @@ async def setup(bot: 'BotCore'):
             return
         
         if not ai_enabled(bot) or banned(bot, message.author):
+            return
+        guild_id = message.guild.id if message.guild is not None else None
+        if not can_use_ai(bot, message.author, guild_id):
             return
 
         text = mentioned_message_text(bot, message)
@@ -1109,12 +1121,16 @@ async def setup(bot: 'BotCore'):
             )
 
             async with capture_interaction_output(interaction) as output_messages:
+                capabilities = bot.setup._normalize_capabilities((
+                    bot.setup._default_capability(match.command_name),
+                    *match.context.get("capabilities", ()),
+                ))
                 await bot.setup._run_command(
                     interaction,
                     match.action,
                     (),
                     match.kwargs or {},
-                    perm_requirement=match.context.get("perm_requirement", 0),
+                    capabilities=capabilities,
                     eph=False,
                     defer=False,
                 )
@@ -1130,7 +1146,7 @@ async def setup(bot: 'BotCore'):
     @bot.setup.command(
         name="ai",
         description="Ask Bogobot",
-        perm_requirement=0,
+        capabilities=[USER_AI_CAPABILITY],
         defer=False,
         eph=False,
     )
@@ -1186,12 +1202,16 @@ async def setup(bot: 'BotCore'):
                 continue
 
             async with capture_interaction_output(interaction) as output_messages:
+                capabilities = bot.setup._normalize_capabilities((
+                    bot.setup._default_capability(match.command_name),
+                    *match.context.get("capabilities", ()),
+                ))
                 await bot.setup._run_command(
                     interaction,
                     match.action,
                     (),
                     match.kwargs or {},
-                    perm_requirement=match.context.get("perm_requirement", 0),
+                    capabilities=capabilities,
                     eph=False,
                     defer=False,
                 )

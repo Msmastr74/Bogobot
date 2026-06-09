@@ -28,7 +28,7 @@ Android/Termux is a supported environment.
 ## Configuration
 Go into `config.json` and provide the main credentials:
  * `bot_token`: Discord bot token.
- * `owner_uid`: Your Discord user ID. This account is forced to the owner rank on startup.
+ * `owner_uid`: Your Discord user ID. This account receives the owner wildcard capability on startup.
  * `accounts_path`: Optional account database path. Defaults to `accounts.json`.
  * `sync`: Optional one-run force sync for slash commands. The bot also syncs automatically when its command tree changes.
  * `save_live_frame`: Optional debug setting. When true, the bot writes the latest stream frame to `live_720p.png` after each received frame. Defaults to false.
@@ -46,6 +46,8 @@ Go into `config.json` and provide the main credentials:
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
  * `archive`: Optional archive configuration object. It contains compact monitor archive settings and optional visual archive settings, including appendable daily `.ts` recording and old-day remuxing to `mkv`, `mp4`, or `ts`.
+ * `verification`: Optional server-specific verified/quarantine role config, usually managed through `/manage create_verification` or `/manage raid`.
+ * `raid_protection`: Optional server-specific raid protection config, usually managed through `/manage raid`.
  * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
  * `cbogo_path`: Optional collaborative bogosort puzzle storage path. Defaults to `cbogo.json`.
  * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, `/manage ai`, and prompt/context notes.
@@ -114,7 +116,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage live_chat: Starts, stops, or resends a persistent YouTube live-chat monitor.
  * /manage video_archive: Starts, stops, restarts, or shows status for visual stream archive recording.
  * /manage ai: Toggles AI, edits custom instructions, and tunes scheduled AI breaks without exposing history or provider secrets.
- * /manage create_verification: Creates a persistent captcha verification prompt and configures shared verified/quarantine roles.
+ * /manage create_verification: Creates a persistent captcha verification prompt and configures server-specific verified/quarantine roles.
  * /manage raid: Configures raid protection, toggles automatic detection, or manually activates/deactivates raid mode.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /milestone_info: Shows recent milestone history; OCR/manual entries may include frame images, while API-mode milestones usually do not.
@@ -124,14 +126,15 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
  * /help: Shows bot command help, or a command signature when given a command name.
+ * /capabilities: Shows the bot capability reference.
  * /avatar and /ping: Small Discord utility commands.
  * /python and /javascript: Execute code in WASI-backed sandboxes, with modal input for longer programs or uploaded source files.
  * /ai_activity: Schedule, trigger, list, or remove AI activity triggers for a channel.
  * /bogo and friends: Grouped roll, shuffle, choice, text bogo, name bogo, and small bogosort utilities, plus top-level /sort and random number helpers.
  * /bogoscramble: Scrambles text and media attachments; message context-menu variants are also available.
- * /cbogo: Runs the original collaborative community bogosort puzzle.
- * /bogotree: Advances or resets a collaborative random equalization puzzle.
- * /accounts: Shows account info, manages permission ranks, lists users, and bans/unbans accounts.
+ * /cbogo: Runs the original collaborative community bogosort puzzle with server-specific state and leaderboards.
+ * /bogotree: Advances or resets a collaborative random equalization puzzle with server-specific state and leaderboards.
+ * /accounts: Shows account info, manages capabilities, lists users, and bans/unbans accounts.
 
 Bogobot also writes an append-only monitor archive when observed sort values are available.
 Each chunk starts with a JSON header line, then compact `dt,value;` records where `dt`
