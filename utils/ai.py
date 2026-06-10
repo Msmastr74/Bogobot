@@ -595,6 +595,7 @@ class AICore(Generic[ContextT, ActionT]):
             "## Persistent Memory\n"
             "Persistent memory is global long-term memory. Use it only for durable facts, preferences, and operating instructions worth retaining across channels and restarts.\n"
             f"- The system injects at most {self.memory_char_budget} characters of persistent memory per turn.\n"
+            "- You may create, edit, or remove persistent memories when it feels useful, especially for stable preferences, durable project facts, recurring decisions, and corrections likely to matter later. Do not store transient chatter.\n"
             f"- To create a memory in a normal text reply, append `<{ASSISTANT_NAMESPACE}:persistent_memory>memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`. If you add an id attribute on creation, it is ignored.\n"
             f"- To edit memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory edit=\"123\">new memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`.\n"
             f"- To remove memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory remove=\"123\" />`.\n"
@@ -616,7 +617,7 @@ class AICore(Generic[ContextT, ActionT]):
             "<instruction_guardrail>\n"
             f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
             "</instruction_guardrail>\n"
-            f"<token_budget>{MAX_NEW_TOKENS}</token_budget>"
+            f"<max_new_tokens>{MAX_NEW_TOKENS}</max_new_tokens>"
         )
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
@@ -825,6 +826,10 @@ class AICore(Generic[ContextT, ActionT]):
                 break
             blocks.append(block)
             total += block_len
+        remaining = max(0, self.memory_char_budget - total)
+        blocks.append(
+            f"<remaining_persistent_memory_chars>{remaining}<remaining_persistent_memory_chars/>"
+        )
         return blocks
 
     def _extract_text_persistent_memories(self, value: str) -> tuple[str, str]:
