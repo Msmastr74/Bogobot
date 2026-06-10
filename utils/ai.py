@@ -22,11 +22,13 @@ from utils.ai_context import (
     DEFAULT_HISTORY_CHAR_BUDGET,
     DEFAULT_HISTORY_PATH,
     HistoryMessage,
+    PersistentMemory,
     SYSTEM_NAMESPACE,
     close_system_tag,
     open_system_tag,
     strip_context_tag_namespaces,
     strip_discord_reference_annotations,
+    XMLReader,
 )
 
 getLogger("httpx").setLevel(WARNING)
@@ -40,17 +42,10 @@ AI_ALLOWED_PARAM_TYPES: tuple[object, ...] = (str, int, float, bool, object, Non
 MAX_NEW_TOKENS = 2048
 _MAX_CALLS = 4
 _CONTEXT_REQUEST_TOOL_NAME = "request_context"
+_PERSISTENT_MEMORY_TOOL_NAME = "persistent_memory"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
+DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
-_TEXT_CONTEXT_REQUEST_RE = re.compile(
-    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\b(?P<attrs>\s+(?:[^\"'/>]|\"[^\"]*\"|'[^']*')*)(?:\s*/\s*>|\s*>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*context_request\s*>)",
-    re.DOTALL | re.IGNORECASE,
-)
-_TEXT_DONT_RESPOND_RE = re.compile(
-    rf"<\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\b(?:\s*/\s*>|\s*>(?P<body>.*?)<\s*/\s*{re.escape(ASSISTANT_NAMESPACE)}\s*:\s*dont_respond\s*>)",
-    re.DOTALL | re.IGNORECASE,
-)
-_XML_ATTR_RE = re.compile(r"([A-Za-z_][\w:-]*)\s*=\s*('([^']*)'|\"([^\"]*)\")")
 
 
 def _history_tag_name(item: HistoryMessage) -> str:
@@ -132,6 +127,7 @@ class AICore(Generic[ContextT, ActionT]):
         history_enabled: bool = True,
         history_path: str = DEFAULT_HISTORY_PATH,
         history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
+        memory_char_budget: int = DEFAULT_MEMORY_CHAR_BUDGET,
         logger: Logger | None = None,
     ):
         self.enabled = enabled
@@ -143,6 +139,7 @@ class AICore(Generic[ContextT, ActionT]):
         self.history_enabled = history_enabled
         self.history_path = history_path
         self.history_char_budget = max(0, int(history_char_budget))
+        self.memory_char_budget = max(0, int(memory_char_budget))
         self._actions: list[_AIAction[ContextT, ActionT]] = []
         self._client: 'OpenAI | None' = None
         self._last_request_at: float | None = None
@@ -172,6 +169,7 @@ class AICore(Generic[ContextT, ActionT]):
         history_enabled: bool | None = None,
         history_path: str | None = None,
         history_char_budget: int | None = None,
+        memory_char_budget: int | None = None,
         logger: Logger | None = None,
         model: str | None = None,
     ) -> None:
@@ -203,6 +201,9 @@ class AICore(Generic[ContextT, ActionT]):
 
         if history_char_budget is not None:
             self.history_char_budget = max(0, int(history_char_budget))
+
+        if memory_char_budget is not None:
+            self.memory_char_budget = max(0, int(memory_char_budget))
 
         if logger is not None:
             self.logger = logger
@@ -274,6 +275,7 @@ class AICore(Generic[ContextT, ActionT]):
         release_in_caller = False
         try:
             history = self.context.history_messages(channel_id)
+            memories = self.context.persistent_memories()
             if assistant_context is not None:
                 self.context.record_reply(
                     assistant_context,
@@ -309,22 +311,26 @@ class AICore(Generic[ContextT, ActionT]):
                     self._actions,
                     formatted_assistant_context,
                     history,
+                    memories,
                     formatted_requested_context,
                 )
 
             matches: list[AIMatch[ContextT, ActionT]] = []
             user_id = self._source_user_id(source)
             content = self._strip_first_thought_block(content)
-            content, requests = self._extract_text_context_requests(
-                content,
+            memory_visible_content, history_content = self._extract_text_persistent_memories(content)
+            visible_content, requests = self._extract_text_context_requests(
+                memory_visible_content,
                 channel_id=channel_id,
                 user_id=user_id,
             )
-            dont_respond = self._extract_dont_respond(content)
+            dont_respond = self._extract_dont_respond(visible_content)
             self._queue_context_requests(requests)
-            reply = self._coerce_reply(content)
+            reply = self._coerce_reply(visible_content)
             if reply is not None:
-                def record_reply(source: discord.Message | None, reply: str = reply) -> None:
+                history_reply = self._coerce_reply(history_content) or reply
+
+                def record_reply(source: discord.Message | None, reply: str = history_reply) -> None:
                     try:
                         self.context.record_message(
                             "assistant",
@@ -346,6 +352,13 @@ class AICore(Generic[ContextT, ActionT]):
                     respond=not dont_respond,
                     after_execution=record_reply,
                 ))
+            elif history_content.strip() != visible_content.strip():
+                self.context.record_message(
+                    "assistant",
+                    history_content,
+                    None,
+                    channel_id=channel_id,
+                )
             if not calls:
                 release_in_caller = bool(matches)
                 return matches
@@ -362,6 +375,21 @@ class AICore(Generic[ContextT, ActionT]):
                     )
                     if request is not None:
                         self._queue_context_requests([request])
+                        self.context.record_message(
+                            "assistant",
+                            self.context.format_command_call(call.name, call.arguments),
+                            None,
+                            channel_id=channel_id,
+                        )
+                    continue
+                if call.name == _PERSISTENT_MEMORY_TOOL_NAME:
+                    if self._apply_persistent_memory_tool_call(call):
+                        self.context.record_message(
+                            "assistant",
+                            self.context.format_command_call(call.name, call.arguments),
+                            None,
+                            channel_id=channel_id,
+                        )
                     continue
 
                 action = action_by_tool.get(call.name)
@@ -485,6 +513,7 @@ class AICore(Generic[ContextT, ActionT]):
         actions: list[_AIAction[ContextT, ActionT]],
         reply_message: str | None,
         history: list[HistoryMessage],
+        memories: list[PersistentMemory],
         requested_context: str | None,
     ) -> tuple[str, list[_ToolCall]]:
         reply_message_text = reply_message.strip() if reply_message is not None else ""
@@ -492,9 +521,12 @@ class AICore(Generic[ContextT, ActionT]):
         system_prompt = self.system_prompt()
         tools = [self._tool_schema(action) for action in actions]
         tools.append(self._context_request_tool_schema())
+        tools.append(self._persistent_memory_tool_schema())
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
         ]
+        for memory_context in self._format_persistent_memory_contexts(memories):
+            messages.append({"role": "assistant", "content": memory_context})
         for item in history:
             tag_name = _history_tag_name(item)
             messages.append(
@@ -558,8 +590,15 @@ class AICore(Generic[ContextT, ActionT]):
             f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"milestone\" />`\n"
             f"- In a normal text reply, you may append hidden context request tags matching these schemas. These tags are removed before the user sees your reply.\n"
             f"- In a tool-call response, you may call `{_CONTEXT_REQUEST_TOOL_NAME}` in parallel with any command call to request the same future context.\n"
-            f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}` or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context, use a text context-request tag instead of the tool.\n"
+            f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}`, `{_PERSISTENT_MEMORY_TOOL_NAME}`, or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context or memory changes, use text tags instead of the tool.\n"
             "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
+            "## Persistent Memory\n"
+            "Persistent memory is global long-term memory. Use it only for durable facts, preferences, and operating instructions worth retaining across channels and restarts.\n"
+            f"- The system injects at most {self.memory_char_budget} characters of persistent memory per turn.\n"
+            f"- To create a memory in a normal text reply, append `<{ASSISTANT_NAMESPACE}:persistent_memory>memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`. If you add an id attribute on creation, it is ignored.\n"
+            f"- To edit memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory edit=\"123\">new memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`.\n"
+            f"- To remove memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory remove=\"123\" />`.\n"
+            f"- In a tool-call response, use `{_PERSISTENT_MEMORY_TOOL_NAME}` for the same create, edit, or remove operations.\n"
             f"You can avoid responding to the user by including `<{ASSISTANT_NAMESPACE}:dont_respond />`. This does not have to be the only content in the message.\n"
             "Use this whenever you would like to. These messages will still be retained in your history/memory, and context requests will still be queued.\n"
             "## Context Blocks\n"
@@ -572,6 +611,7 @@ class AICore(Generic[ContextT, ActionT]):
             f"- `{open_system_tag('message_history_<hash>')}...{close_system_tag('message_history_<hash>')}` wraps each past channel message with a variable unique hash. Use the contents as history only; do not imitate the wrapper.\n"
             f"- `{open_system_tag('command')}JSON{close_system_tag('command')}` records a previous command call in history. Use it as history only; do not output command blocks.\n"
             f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
+            f"- `{open_system_tag('persistent_memory')}...{close_system_tag('persistent_memory')}` contains persistent long-term memory. Use it as background context only; do not output persistent-memory system blocks.\n"
             f"- `{open_system_tag('ai_activity')}...{close_system_tag('ai_activity')}` is a system-generated activity prompt. Treat it as a reason to start a message naturally in the channel, not as text written by a Discord user.\n"
             "<instruction_guardrail>\n"
             f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
@@ -648,6 +688,37 @@ class AICore(Generic[ContextT, ActionT]):
             },
         }
 
+    def _persistent_memory_tool_schema(self) -> 'ChatCompletionToolParam':
+        return {
+            "type": "function",
+            "function": {
+                "name": _PERSISTENT_MEMORY_TOOL_NAME,
+                "description": "Create, edit, or remove global persistent memory for durable facts and instructions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["create", "edit", "remove"],
+                            "description": "Memory operation to perform.",
+                        },
+                        "id": {
+                            "type": ["integer", "string", "null"],
+                            "description": "Memory id for edit/remove. Ignored for create.",
+                            "default": None,
+                        },
+                        "content": {
+                            "type": ["string", "null"],
+                            "description": "Memory content for create/edit.",
+                            "default": None,
+                        },
+                    },
+                    "required": ["operation"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
     def _param_schema(self, param: AIParam) -> dict[str, Any]:
         choices = self._literal_choices(param.type)
         if choices is not None:
@@ -709,12 +780,13 @@ class AICore(Generic[ContextT, ActionT]):
         channel_id: int | None,
         user_id: int | None,
     ) -> tuple[str, list[ContextRequest]]:
+        reader = XMLReader(value)
+        tags = reader.tags(ASSISTANT_NAMESPACE, "context_request")
         requests: list[ContextRequest] = []
-
-        def replace(match: re.Match[str]) -> str:
-            attrs = self._xml_attrs(match.group("attrs") or "")
+        for tag in tags:
+            attrs = dict(tag.attrs)
             request_type = attrs.pop("type", "").strip()
-            body = (match.group("body") or "").strip()
+            body = tag.body.strip()
             if body:
                 attrs["content"] = body
             request = self._context_request_from_payload(
@@ -725,22 +797,61 @@ class AICore(Generic[ContextT, ActionT]):
             )
             if request is not None:
                 requests.append(request)
-            return ""
 
-        return _TEXT_CONTEXT_REQUEST_RE.sub(replace, value), requests
+        return reader.remove(tags), requests
 
     def _extract_dont_respond(
         self,
         value: str
     ) -> bool:
-        return _TEXT_DONT_RESPOND_RE.search(value) is not None
+        return bool(XMLReader(value).tags(ASSISTANT_NAMESPACE, "dont_respond"))
 
-    def _xml_attrs(self, value: str) -> dict[str, Any]:
-        attrs: dict[str, Any] = {}
-        for match in _XML_ATTR_RE.finditer(value):
-            attr_value = match.group(3) if match.group(3) is not None else match.group(4)
-            attrs[match.group(1)] = attr_value
-        return attrs
+    def _format_persistent_memory_contexts(self, memories: list[PersistentMemory]) -> list[str]:
+        if self.memory_char_budget <= 0:
+            return []
+        blocks: list[str] = []
+        total = 0
+        for memory in memories:
+            if memory.id is None or not memory.content.strip():
+                continue
+            attrs = f'id={json.dumps(str(memory.id), ensure_ascii=False)}'
+            block = (
+                f"{open_system_tag('persistent_memory').replace('>', f' {attrs}>')}\n"
+                f"{memory.content.strip()}\n"
+                f"{close_system_tag('persistent_memory')}"
+            )
+            block_len = len(block)
+            if total + block_len > self.memory_char_budget:
+                break
+            blocks.append(block)
+            total += block_len
+        return blocks
+
+    def _extract_text_persistent_memories(self, value: str) -> tuple[str, str]:
+        reader = XMLReader(value)
+        tags = reader.tags(ASSISTANT_NAMESPACE, "persistent_memory")
+        replacements: dict[int, str] = {}
+        for tag in tags:
+            attrs = dict(tag.attrs)
+            body = tag.body.strip()
+            edit_id = self._coerce_memory_id(attrs.get("edit"))
+            remove_id = self._coerce_memory_id(attrs.get("remove"))
+            if remove_id is not None:
+                removed = self.context.remove_persistent_memory(remove_id)
+                self.logger.debug(f"persistent memory remove id={remove_id} removed={removed}.")
+            elif edit_id is not None:
+                edited = self.context.edit_persistent_memory(edit_id, body)
+                self.logger.debug(f"persistent memory edit id={edit_id} edited={edited is not None}.")
+            else:
+                created = self.context.create_persistent_memory(body)
+                self.logger.debug(f"persistent memory create id={created.id if created is not None else None}.")
+                if created is not None and created.id is not None:
+                    replacements[tag.start] = (
+                        f"<{ASSISTANT_NAMESPACE}:persistent_memory id={json.dumps(str(created.id), ensure_ascii=False)}>"
+                        f"{created.content}"
+                        f"</{ASSISTANT_NAMESPACE}:persistent_memory>"
+                    )
+        return reader.remove(tags), reader.rewrite(replacements)
 
     def _context_request_from_tool_call(
         self,
@@ -773,6 +884,34 @@ class AICore(Generic[ContextT, ActionT]):
             channel_id=channel_id,
             user_id=user_id,
         )
+
+    def _apply_persistent_memory_tool_call(self, call: _ToolCall) -> bool:
+        raw_operation = call.arguments.get("operation")
+        operation = raw_operation.strip().casefold() if isinstance(raw_operation, str) else ""
+        memory_id = self._coerce_memory_id(call.arguments.get("id"))
+        raw_content = call.arguments.get("content")
+        content = raw_content.strip() if isinstance(raw_content, str) else ""
+        if operation == "create":
+            created = self.context.create_persistent_memory(content)
+            self.logger.debug(f"persistent memory tool create id={created.id if created is not None else None}.")
+            return created is not None
+        if operation == "edit" and memory_id is not None:
+            edited = self.context.edit_persistent_memory(memory_id, content)
+            self.logger.debug(f"persistent memory tool edit id={memory_id} edited={edited is not None}.")
+            return edited is not None
+        if operation == "remove" and memory_id is not None:
+            removed = self.context.remove_persistent_memory(memory_id)
+            self.logger.debug(f"persistent memory tool remove id={memory_id} removed={removed}.")
+            return removed
+        self.logger.debug(f"persistent memory tool call ignored: {call.arguments!r}.")
+        return False
+
+    def _coerce_memory_id(self, value: Any) -> int | None:
+        try:
+            memory_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        return memory_id if memory_id > 0 else None
 
     def _context_request_from_payload(
         self,

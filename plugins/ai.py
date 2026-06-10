@@ -67,13 +67,14 @@ class AIHistoryConfig(Schema):
     enabled: bool = Field(True, validation_alias=AliasPath("history", "enabled"))
     path: str = Field("ai_history.sqlite3", validation_alias=AliasPath("history", "path"))
     char_budget: int = Field(10_000, validation_alias=AliasPath("history", "char_budget"))
+    persistent_char_budget: int = Field(5_000, validation_alias=AliasPath("history", "persistent_char_budget"))
 
     @field_validator("path", mode="before")
     @classmethod
     def stringify_path(cls, value: object) -> str:
         return str(value)
 
-    @field_validator("char_budget", mode="before")
+    @field_validator("char_budget", "persistent_char_budget", mode="before")
     @classmethod
     def nonnegative_char_budget(cls, value: Any) -> int:
         return max(0, int(value))
@@ -147,6 +148,7 @@ def setup_ai(bot: "BotCore"):
         history_enabled=ai_config.history.enabled,
         history_path=ai_config.history.path,
         history_char_budget=ai_config.history.char_budget,
+        memory_char_budget=ai_config.history.persistent_char_budget,
         logger=bot.logger.getChild("AI"),
     )
     ai_core.context.configure(user_capabilities=lambda user_id: bot.accounts[user_id].permissions.capabilities)

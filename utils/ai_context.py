@@ -17,8 +17,272 @@ ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.
 USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")
 ROLE_MENTION_RE = re.compile(r"<@&([0-9]{15,20})>")
 CHANNEL_MENTION_RE = re.compile(r"<#([0-9]{15,20})>")
-_OPEN_TAG_NAMESPACE_RE = re.compile(rf"<\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
-_CLOSE_TAG_NAMESPACE_RE = re.compile(rf"<\s*/\s*{re.escape(SYSTEM_NAMESPACE)}\s*:\s*", re.IGNORECASE)
+@dataclass(frozen=True, slots=True)
+class XMLTag:
+    namespace: str | None
+    name: str
+    attrs: dict[str, str]
+    body: str
+    start: int
+    end: int
+    raw: str
+    self_closing: bool
+
+
+class XMLReader:
+    def __init__(self, text: str):
+        self.text = text
+
+    def tags(self, namespace: str | None = None, name: str | None = None) -> list[XMLTag]:
+        namespace = self._normalize_namespace(namespace)
+        name = self._normalize_name(name) if name is not None else None
+        tags: list[XMLTag] = []
+        index = 0
+        while index < len(self.text):
+            start = self.text.find("<", index)
+            if start < 0:
+                break
+            tag = self._read_open_tag(start)
+            if tag is None:
+                index = start + 1
+                continue
+            if (
+                (namespace is None or tag.namespace == namespace)
+                and (name is None or tag.name == name)
+            ):
+                tags.append(tag)
+            index = max(tag.end, start + 1)
+        return tags
+
+    def remove(self, tags: list[XMLTag]) -> str:
+        if not tags:
+            return self.text
+        parts: list[str] = []
+        last_end = 0
+        for tag in sorted(tags, key=lambda item: item.start):
+            if tag.start < last_end:
+                continue
+            parts.append(self.text[last_end:tag.start])
+            last_end = tag.end
+        parts.append(self.text[last_end:])
+        return "".join(parts)
+
+    def rewrite(self, replacements: dict[int, str]) -> str:
+        if not replacements:
+            return self.text
+        parts: list[str] = []
+        last_end = 0
+        for tag in self.tags():
+            replacement = replacements.get(tag.start)
+            if replacement is None or tag.start < last_end:
+                continue
+            parts.append(self.text[last_end:tag.start])
+            parts.append(replacement)
+            last_end = tag.end
+        parts.append(self.text[last_end:])
+        return "".join(parts)
+
+    def strip_namespace(self, namespace: str) -> str:
+        normalized_namespace = self._normalize_namespace(namespace)
+        if normalized_namespace is None:
+            return self.text
+        output: list[str] = []
+        index = 0
+        while index < len(self.text):
+            if self.text[index] != "<":
+                output.append(self.text[index])
+                index += 1
+                continue
+            replacement, end = self._strip_namespace_prefix_at(index, normalized_namespace)
+            if replacement is None:
+                output.append(self.text[index])
+                index += 1
+                continue
+            output.append(replacement)
+            index = end
+        return "".join(output)
+
+    def _strip_namespace_prefix_at(self, start: int, namespace: str) -> tuple[str | None, int]:
+        index = start + 1
+        closing = False
+        if index < len(self.text) and self.text[index] == "/":
+            closing = True
+            index += 1
+        stripped = False
+        while True:
+            attempt_start = index
+            while index < len(self.text) and self.text[index].isspace():
+                index += 1
+            namespace_start = index
+            while index < len(self.text) and self._is_name_char(self.text[index]):
+                index += 1
+            candidate = self.text[namespace_start:index].strip().casefold()
+            if candidate != namespace:
+                index = attempt_start
+                break
+            while index < len(self.text) and self.text[index].isspace():
+                index += 1
+            if index >= len(self.text) or self.text[index] != ":":
+                index = attempt_start
+                break
+            stripped = True
+            index += 1
+            while index < len(self.text) and self.text[index].isspace():
+                index += 1
+        if not stripped:
+            return None, start
+        return ("</" if closing else "<"), index
+
+    def _read_open_tag(self, start: int) -> XMLTag | None:
+        open_end = self._find_tag_end(start)
+        if open_end is None:
+            return None
+        inner = self.text[start + 1:open_end].strip()
+        if not inner or inner.startswith(("/", "!", "?")):
+            return None
+        self_closing = inner.endswith("/")
+        if self_closing:
+            inner = inner[:-1].rstrip()
+        full_name, attr_text = self._split_name_attrs(inner)
+        if not full_name:
+            return None
+        namespace, name = self._split_namespace(full_name)
+        body = ""
+        end = open_end + 1
+        if not self_closing:
+            close_start, close_end = self._find_close_tag(full_name, end)
+            if close_start is not None and close_end is not None:
+                body = self.text[end:close_start]
+                end = close_end
+        return XMLTag(
+            namespace=namespace,
+            name=name,
+            attrs=self._parse_attrs(attr_text),
+            body=body,
+            start=start,
+            end=end,
+            raw=self.text[start:end],
+            self_closing=self_closing,
+        )
+
+    def _find_tag_end(self, start: int) -> int | None:
+        quote: str | None = None
+        index = start + 1
+        while index < len(self.text):
+            char = self.text[index]
+            if quote is not None:
+                if char == quote:
+                    quote = None
+            elif char in ("'", '"'):
+                quote = char
+            elif char == ">":
+                return index
+            index += 1
+        return None
+
+    def _find_close_tag(self, full_name: str, start: int) -> tuple[int | None, int | None]:
+        index = start
+        target_namespace, target_name = self._split_namespace(full_name)
+        while index < len(self.text):
+            close_start = self.text.find("</", index)
+            if close_start < 0:
+                return None, None
+            close_end = self._find_tag_end(close_start)
+            if close_end is None:
+                return None, None
+            close_inner = self.text[close_start + 2:close_end].strip()
+            close_name, _attrs = self._split_name_attrs(close_inner)
+            close_namespace, close_tag_name = self._split_namespace(close_name)
+            if close_namespace == target_namespace and close_tag_name == target_name:
+                return close_start, close_end + 1
+            index = close_end + 1
+        return None, None
+
+    def _split_name_attrs(self, inner: str) -> tuple[str, str]:
+        index = 0
+        length = len(inner)
+        while index < length and self._is_name_char(inner[index]):
+            index += 1
+        first = inner[:index].strip()
+        while index < length and inner[index].isspace():
+            index += 1
+        if index < length and inner[index] == ":":
+            index += 1
+            while index < length and inner[index].isspace():
+                index += 1
+            name_start = index
+            while index < length and self._is_name_char(inner[index]):
+                index += 1
+            second = inner[name_start:index].strip()
+            while index < length and inner[index].isspace():
+                index += 1
+            return f"{first}:{second}", inner[index:].strip()
+        return first, inner[index:].strip()
+
+    def _split_namespace(self, full_name: str) -> tuple[str | None, str]:
+        namespace, separator, name = full_name.partition(":")
+        if not separator:
+            return None, self._normalize_name(namespace)
+        return self._normalize_namespace(namespace), self._normalize_name(name)
+
+    def _normalize_namespace(self, namespace: str | None) -> str | None:
+        if namespace is None:
+            return None
+        namespace = namespace.strip().casefold()
+        return namespace or None
+
+    def _normalize_name(self, name: str) -> str:
+        return name.strip()
+
+    def _is_name_char(self, char: str) -> bool:
+        return char.isalnum() or char in "_-."
+
+    def _parse_attrs(self, text: str) -> dict[str, str]:
+        attrs: dict[str, str] = {}
+        index = 0
+        while index < len(text):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text):
+                break
+            name_start = index
+            while index < len(text) and not text[index].isspace() and text[index] not in "=/":
+                index += 1
+            attr_name = text[name_start:index]
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if not attr_name:
+                index += 1
+                continue
+            if index >= len(text) or text[index] != "=":
+                attrs[attr_name] = ""
+                continue
+            index += 1
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index < len(text) and text[index] in ("'", '"'):
+                quote = text[index]
+                index += 1
+                value_start = index
+                while index < len(text) and text[index] != quote:
+                    index += 1
+                attrs[attr_name] = text[value_start:index]
+                if index < len(text):
+                    index += 1
+            else:
+                value_start = index
+                while index < len(text) and not text[index].isspace():
+                    index += 1
+                attrs[attr_name] = text[value_start:index]
+        return attrs
+
+    def _format_attrs(self, attrs: dict[str, str]) -> str:
+        if not attrs:
+            return ""
+        return "".join(
+            f" {name}={json.dumps(value, ensure_ascii=False)}"
+            for name, value in attrs.items()
+        )
 
 def system_tag(name: str) -> str:
     return f"{SYSTEM_NAMESPACE}:{name}"
@@ -33,8 +297,7 @@ def close_system_tag(name: str) -> str:
 
 
 def strip_context_tag_namespaces(text: str) -> str:
-    text = _OPEN_TAG_NAMESPACE_RE.sub("<", text)
-    return _CLOSE_TAG_NAMESPACE_RE.sub("</", text)
+    return XMLReader(text).strip_namespace(SYSTEM_NAMESPACE)
 
 
 def strip_discord_reference_annotations(text: str) -> str:
@@ -57,6 +320,14 @@ class ContextRequest:
     created_at: datetime | None = None
     expires_at: datetime | None = None
     id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentMemory:
+    content: str
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class AIContext:
@@ -384,6 +655,81 @@ class AIContext:
                     (request.id,),
                 )
 
+    def persistent_memories(self) -> list[PersistentMemory]:
+        with closing(self._history_connection()) as connection:
+            self._ensure_persistent_memory_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT id, created_at, updated_at, content
+                FROM ai_persistent_memories
+                ORDER BY id
+                """,
+            ).fetchall()
+        return [
+            PersistentMemory(
+                id=int(memory_id),
+                created_at=datetime.fromisoformat(created_at),
+                updated_at=datetime.fromisoformat(updated_at),
+                content=str(content),
+            )
+            for memory_id, created_at, updated_at, content in rows
+        ]
+
+    def create_persistent_memory(self, content: str) -> PersistentMemory | None:
+        content = content.strip()
+        if not content:
+            return None
+        now = datetime.now(timezone.utc)
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_persistent_memory_schema(connection)
+                cursor = connection.execute(
+                    """
+                    INSERT INTO ai_persistent_memories(created_at, updated_at, content)
+                    VALUES (?, ?, ?)
+                    """,
+                    (now.isoformat(), now.isoformat(), content),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("SQLite did not return an id for the persistent AI memory.")
+                memory_id = int(cursor.lastrowid)
+        return PersistentMemory(
+            id=memory_id,
+            created_at=now,
+            updated_at=now,
+            content=content,
+        )
+
+    def edit_persistent_memory(self, memory_id: int, content: str) -> PersistentMemory | None:
+        content = content.strip()
+        if not content:
+            return None
+        now = datetime.now(timezone.utc)
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_persistent_memory_schema(connection)
+                cursor = connection.execute(
+                    """
+                    UPDATE ai_persistent_memories
+                    SET updated_at = ?, content = ?
+                    WHERE id = ?
+                    """,
+                    (now.isoformat(), content, memory_id),
+                )
+                if cursor.rowcount < 1:
+                    return None
+        return PersistentMemory(id=memory_id, updated_at=now, content=content)
+
+    def remove_persistent_memory(self, memory_id: int) -> bool:
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_persistent_memory_schema(connection)
+                cursor = connection.execute(
+                    "DELETE FROM ai_persistent_memories WHERE id = ?",
+                    (memory_id,),
+                )
+        return cursor.rowcount > 0
+
     def source_channel_id(self, source: discord.Message | discord.Interaction | None) -> int | None:
         if isinstance(source, discord.Message):
             return source.channel.id
@@ -500,6 +846,16 @@ class AIContext:
         connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_ai_context_requests_expires_at
             ON ai_context_requests(expires_at)
+        """)
+
+    def _ensure_persistent_memory_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS ai_persistent_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                content TEXT NOT NULL
+            )
         """)
 
     def _context_request_from_row(self, row: sqlite3.Row | tuple[Any, ...]) -> ContextRequest:
