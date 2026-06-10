@@ -6,30 +6,21 @@ if TYPE_CHECKING:
     from bogobot_core import BotCore
 
 
-CONFIG_KEY = "verification"
+ACCOUNT_KEY = "security_roles"
 VERIFIED_ROLE_ID_KEY = "verified_role_id"
 QUARANTINE_ROLE_ID_KEY = "quarantine_role_id"
-SERVERS_KEY = "servers"
 
 
 def role_config(bot: "BotCore", guild_id: int | str | None = None) -> dict[str, object]:
-    raw = bot.config.get(CONFIG_KEY)
-    if isinstance(raw, dict):
-        config = raw
-    else:
-        config: dict[str, object] = {}
-        bot.config[CONFIG_KEY] = config
-
     if guild_id is None:
-        return config
+        return {}
 
-    raw_servers = config.get(SERVERS_KEY)
-    servers = raw_servers if isinstance(raw_servers, dict) else {}
-    raw_server = servers.get(str(guild_id))
-    server = raw_server if isinstance(raw_server, dict) else {}
-    servers[str(guild_id)] = server
-    config[SERVERS_KEY] = servers
-    return server
+    account = bot.accounts.guild(guild_id)
+    raw_config = account.get(ACCOUNT_KEY)
+    if isinstance(raw_config, dict):
+        return raw_config
+
+    return {}
 
 
 def _role_id(value: object) -> int | None:
@@ -91,17 +82,19 @@ async def set_roles(
     verified: discord.Role,
     quarantine: discord.Role,
 ) -> None:
-    config = role_config(bot, verified.guild.id)
+    config = dict(role_config(bot, verified.guild.id))
     config[VERIFIED_ROLE_ID_KEY] = verified.id
     config[QUARANTINE_ROLE_ID_KEY] = quarantine.id
-    await bot.save_config()
+    await bot.accounts.guild(verified.guild.id).write(ACCOUNT_KEY, config)
 
 
 async def set_verified_role(bot: "BotCore", role: discord.Role) -> None:
-    role_config(bot, role.guild.id)[VERIFIED_ROLE_ID_KEY] = role.id
-    await bot.save_config()
+    config = dict(role_config(bot, role.guild.id))
+    config[VERIFIED_ROLE_ID_KEY] = role.id
+    await bot.accounts.guild(role.guild.id).write(ACCOUNT_KEY, config)
 
 
 async def set_quarantine_role(bot: "BotCore", role: discord.Role) -> None:
-    role_config(bot, role.guild.id)[QUARANTINE_ROLE_ID_KEY] = role.id
-    await bot.save_config()
+    config = dict(role_config(bot, role.guild.id))
+    config[QUARANTINE_ROLE_ID_KEY] = role.id
+    await bot.accounts.guild(role.guild.id).write(ACCOUNT_KEY, config)

@@ -83,7 +83,7 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
         prompt += '- `{"operation":"remove","id":123}`\n'
         prompt += f"- `{PERSISTENT_MEMORY_TOOL_NAME}` can be called alongside normal assistant text or other tool calls when a multi-part response is appropriate.\n"
         prompt += f"- Do not output `{ASSISTANT_NAMESPACE}:persistent_memory` XML tags in multipart mode.\n"
-        prompt += "- To avoid sending a visible reply, make only tool calls and no normal assistant text.\n"
+        prompt += f"- To avoid sending a visible reply, make only tool calls with no normal assistant text, or include `<{ASSISTANT_NAMESPACE}:dont_respond />`. This is the only assistant XML tag still allowed in multipart mode.\n"
     else:
         prompt += "- If a create or edit would exceed the persistent memory budget, the system records it with `failed=\"true\"` and does not create or edit the stored memory. If you later see a failed memory attempt, retry with shorter content or free budget first.\n"
         prompt += f"- To create a memory in a normal text reply, append `<{ASSISTANT_NAMESPACE}:persistent_memory>memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`. If you add an id attribute on creation, it is ignored.\n"

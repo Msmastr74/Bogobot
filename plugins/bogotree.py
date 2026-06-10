@@ -1,8 +1,6 @@
 from collections import Counter
 from typing import Any, Callable, Literal, Self
 import asyncio
-import json
-import os
 import random
 import time
 
@@ -21,10 +19,8 @@ BOGOTREE_MIN_STEPS = 73
 BOGOTREE_MAX_STEPS = 512
 BOGOTREE_STEPS_EXPONENT = 1.5
 BOGOTREE_WARMUP_RUNS = 5
-BOGOTREE_STORAGE_PATH = "bogotree.json"
-BOGOTREE_STATE_KEY = "state"
-BOGOTREE_SERVERS_KEY = "servers"
 BOGOTREE_ACCOUNT_KEY = "bogotree"
+BOGOTREE_GUILD_STATE_KEY = "bogotree_state"
 BOGOTREE_RESET_CAPABILITY = "games.bogotree.reset"
 ARROW = "→"
 LEADERBOARD_SECTION_LIMIT = 950
@@ -541,62 +537,21 @@ def format_score(score: float) -> str:
 
 async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
-    storage_path = bot.config.get("bogotree_path", BOGOTREE_STORAGE_PATH)
     sorted_emoji = bot.discord.get_emoji("sorted")
     star_emoji = "⭐"
     bot.accounts.capabilities.register(BOGOTREE_RESET_CAPABILITY)
 
-    def load_storage_sync() -> dict[str, object]:
-        if not os.path.exists(storage_path):
-            return {}
-
-        try:
-            with open(storage_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
-
-        return data if isinstance(data, dict) else {}
-
-    def save_storage_sync(storage: dict[str, object]) -> None:
-        directory = os.path.dirname(storage_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-
-        tmp_path = f"{storage_path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(storage, f, indent=4)
-        os.replace(tmp_path, storage_path)
-
-    async def load_storage() -> dict[str, object]:
-        return await asyncio.to_thread(load_storage_sync)
-
-    async def save_storage(storage: dict[str, object]) -> None:
-        await asyncio.to_thread(save_storage_sync, storage)
-
-    def server_storage(storage: dict[str, object], guild_id: int) -> dict[str, object]:
-        raw_servers = storage.get(BOGOTREE_SERVERS_KEY)
-        servers = raw_servers if isinstance(raw_servers, dict) else {}
-        raw_server = servers.get(str(guild_id))
-        server = raw_server if isinstance(raw_server, dict) else {}
-        servers[str(guild_id)] = server
-        storage[BOGOTREE_SERVERS_KEY] = servers
-        return server
-
     async def get_state(guild_id: int) -> BogotreeState:
-        storage = await load_storage()
-        server = server_storage(storage, guild_id)
-        state = normalize_state(server.get(BOGOTREE_STATE_KEY))
+        guild_account = bot.accounts.guild(guild_id)
+        raw_state = guild_account.get(BOGOTREE_GUILD_STATE_KEY)
+        state = normalize_state(raw_state)
         state_data = state.model_dump()
-        if state_data != server.get(BOGOTREE_STATE_KEY):
-            server[BOGOTREE_STATE_KEY] = state_data
-            await save_storage(storage)
+        if state_data != guild_account.get(BOGOTREE_GUILD_STATE_KEY):
+            await guild_account.write(BOGOTREE_GUILD_STATE_KEY, state_data)
         return state
 
     async def save_state(guild_id: int, state: BogotreeState) -> None:
-        storage = await load_storage()
-        server_storage(storage, guild_id)[BOGOTREE_STATE_KEY] = state.model_dump()
-        await save_storage(storage)
+        await bot.accounts.guild(guild_id).write(BOGOTREE_GUILD_STATE_KEY, state.model_dump())
 
     async def get_leaderboard(guild_id: int) -> dict[str, BogotreeUserStats]:
         return {

@@ -70,6 +70,7 @@ class BotCore(discord.Client):
 
         self.accounts = AccountManager(
             path=self.config.get("accounts_path", "accounts.json"),
+            role_ids_for_user=self._account_role_ids,
         )
         
         self._config_lock = asyncio.Lock()
@@ -162,6 +163,21 @@ class BotCore(discord.Client):
         self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry()
         self.milestones: 'MilestoneTracker | None' = None
+
+    def _account_role_ids(self, guild_id: int, user_id: str) -> Sequence[int]:
+        guild = self.get_guild(guild_id)
+        if guild is None:
+            return ()
+
+        try:
+            member_id = int(user_id)
+        except ValueError:
+            return ()
+
+        member = guild.get_member(member_id)
+        if member is None:
+            return ()
+        return tuple(role.id for role in member.roles)
     
     def get_stream_uptime(self):
         raw_seconds = round(time.time())

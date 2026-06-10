@@ -26,6 +26,7 @@ ACCOUNT_AGE_1_DAY = 24 * 60 * 60
 ACCOUNT_AGE_7_DAYS = 7 * ACCOUNT_AGE_1_DAY
 ACCOUNT_AGE_30_DAYS = 30 * ACCOUNT_AGE_1_DAY
 CREATION_CLUSTER_SECONDS = 60 * 60
+RAID_CONFIG_ACCOUNT_KEY = "raid_protection"
 QUARANTINE_ACCOUNT_KEY = "raid_quarantine"
 UNQUARANTINE_CUSTOM_ID_PREFIX = "bogobot:raid:unquarantine"
 RAID_MANAGE_CAPABILITY = "raid.manage"
@@ -472,18 +473,18 @@ class RaidProtector:
         self.guild_states: dict[int, GuildRaidState] = {}
 
     def _load_configs(self) -> dict[int, RaidConfig]:
-        raw = self.bot.config.get("raid_protection", {})
-        root = raw if isinstance(raw, dict) else {}
-        raw_servers = root.get("servers")
-        servers = raw_servers if isinstance(raw_servers, dict) else {}
         configs: dict[int, RaidConfig] = {}
-        for raw_guild_id, raw_config in servers.items():
+        for (scope, account_type, account_id), account in self.bot.accounts.accounts.items():
+            if scope == "global" or account_type != "guild":
+                continue
+            raw_config = account.get(RAID_CONFIG_ACCOUNT_KEY)
+            if not isinstance(raw_config, dict):
+                continue
             try:
-                guild_id = int(raw_guild_id)
+                guild_id = int(scope)
             except (TypeError, ValueError):
                 continue
-            if isinstance(raw_config, dict):
-                configs[guild_id] = self._load_config(raw_config)
+            configs[guild_id] = self._load_config(raw_config)
         return configs
 
     def _float_config(self, config: dict[str, object], key: str, default: float) -> float:
@@ -529,15 +530,18 @@ class RaidProtector:
         return value if value in ("quiet", "fixed", "manual") else DEFAULT_MODE
 
     def config_for(self, guild_id: int) -> RaidConfig:
-        return self.configs.setdefault(guild_id, RaidConfig())
+        config = self.configs.get(guild_id)
+        if config is not None:
+            return config
+
+        raw_config = self.bot.accounts.guild(guild_id).get(RAID_CONFIG_ACCOUNT_KEY)
+        config = self._load_config(raw_config) if raw_config else RaidConfig()
+        self.configs[guild_id] = config
+        return config
 
     async def save_config(self, guild_id: int) -> None:
-        root = self.bot.config.get("raid_protection")
-        config_root = root if isinstance(root, dict) else {}
-        raw_servers = config_root.get("servers")
-        servers = raw_servers if isinstance(raw_servers, dict) else {}
         config = self.config_for(guild_id)
-        servers[str(guild_id)] = {
+        await self.bot.accounts.guild(guild_id).write(RAID_CONFIG_ACCOUNT_KEY, {
             "enabled": config.enabled,
             "alert_channel_id": config.alert_channel_id,
             "mode": config.mode,
@@ -547,10 +551,7 @@ class RaidProtector:
             "early_message_window_seconds": config.early_message_window_seconds,
             "trigger_score": config.trigger_score,
             "trigger_join_count": config.trigger_join_count,
-        }
-        config_root["servers"] = servers
-        self.bot.config["raid_protection"] = config_root
-        await self.bot.save_config()
+        })
 
     async def configure(
         self,
@@ -955,18 +956,14 @@ class RaidProtector:
         state.recent_quarantined_ids = state.recent_quarantined_ids[-25:]
 
     async def store_quarantine_result(self, result: QuarantineResult) -> None:
-        guild_id = str(result.member.guild.id)
-        async with self.bot.accounts.lock:
-            account = self.bot.accounts._account_locked(str(result.member.id))
-            raw_records = account.get(QUARANTINE_ACCOUNT_KEY)
-            records = raw_records if isinstance(raw_records, dict) else {}
-            records[guild_id] = {
+        await self.bot.accounts[result.member.id].local(result.member.guild.id).write(
+            QUARANTINE_ACCOUNT_KEY,
+            {
                 "removed_role_ids": [role.id for role in result.removed_roles],
                 "reason": result.reason,
                 "timestamp": result.timestamp,
-            }
-            account[QUARANTINE_ACCOUNT_KEY] = records
-            self.bot.accounts._save_sync()
+            },
+        )
 
     async def alert(
         self,
@@ -1165,12 +1162,7 @@ class RaidUnquarantineButton(
                 )
                 return
 
-        raw_records = bot.accounts[self.user_id].get(QUARANTINE_ACCOUNT_KEY)
-        raw_record = (
-            raw_records.get(str(self.guild_id))
-            if isinstance(raw_records, dict) else
-            None
-        )
+        raw_record = bot.accounts[self.user_id].local(self.guild_id).get(QUARANTINE_ACCOUNT_KEY)
         record = raw_record if isinstance(raw_record, dict) else {}
         raw_role_ids = record.get("removed_role_ids", [])
         role_ids = [
@@ -1238,15 +1230,8 @@ class RaidUnquarantineButton(
 
     async def _clear_record(self, bot: BotCore) -> None:
         async with bot.accounts.lock:
-            account = bot.accounts._account_locked(str(self.user_id))
-            raw_records = account.get(QUARANTINE_ACCOUNT_KEY)
-            if not isinstance(raw_records, dict):
-                return
-            raw_records.pop(str(self.guild_id), None)
-            if raw_records:
-                account[QUARANTINE_ACCOUNT_KEY] = raw_records
-            else:
-                account.pop(QUARANTINE_ACCOUNT_KEY, None)
+            local_account = bot.accounts._account_locked("user", str(self.user_id), self.guild_id)
+            local_account.pop(QUARANTINE_ACCOUNT_KEY, None)
             bot.accounts._save_sync()
 
 

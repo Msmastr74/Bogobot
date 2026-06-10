@@ -9,8 +9,12 @@ from pydantic import Field
 from utils.schemas import Schema
 
 AccountRecord = dict[str, Any]
+AccountType = Literal["user", "role", "guild"]
+AccountScope = str
+AccountKey = tuple[AccountScope, AccountType, str]
 PERMISSIONS_KEY = "perms"
 LOCAL_ACCOUNTS_KEY = "local"
+GLOBAL_SCOPE = "global"
 DEFAULT_COMMAND_CAPABILITY = "commands"
 DEFAULT_USER_CAPABILITY = "user"
 BANNED_CAPABILITY = "banned"
@@ -180,7 +184,37 @@ class AccountPermissions(Schema):
         scope_base, scope_operation = cls._split_operation(scope)
         if scope_operation is not None and scope_operation != operation:
             return False
-        return cls._matches_base(scope_base, capability)
+        capability_base, capability_operation = cls._split_operation(capability)
+        if capability_operation is not None:
+            operation = capability_operation
+
+        expanded_scopes = cls._expand_capability_base(scope_base)
+        expanded_capabilities = cls._expand_capability_base(capability_base)
+        return any(
+            cls._matches_expanded_capability(
+                expanded_scope,
+                expanded_capability,
+                operation=operation,
+            )
+            for expanded_scope in expanded_scopes
+            for expanded_capability in expanded_capabilities
+        )
+
+    @classmethod
+    def _matches_expanded_capability(
+        cls,
+        scope: str,
+        capability: str,
+        *,
+        operation: CapabilityOperation,
+    ) -> bool:
+        scope_base, scope_operation = cls._split_operation(scope)
+        if scope_operation is not None and scope_operation != operation:
+            return False
+        capability_base, capability_operation = cls._split_operation(capability)
+        if capability_operation is not None and capability_operation != operation:
+            return False
+        return cls._matches_expanded_base(scope_base, capability_base)
 
     @classmethod
     def _matches_base(cls, scope: str, capability: str) -> bool:
@@ -198,10 +232,14 @@ class AccountPermissions(Schema):
         expanded_bases = cls._expand_capability_base(capability_base)
         if operation is None:
             return expanded_bases
-        return tuple(
-            f"{expanded_base}.{operation}"
-            for expanded_base in expanded_bases
-        )
+        expanded_capabilities: list[str] = []
+        for expanded_base in expanded_bases:
+            base, expanded_operation = cls._split_operation(expanded_base)
+            if expanded_operation is None:
+                expanded_capabilities.append(f"{base}.{operation}")
+            else:
+                expanded_capabilities.append(f"{base}.{expanded_operation}")
+        return tuple(expanded_capabilities)
 
     @classmethod
     def has_preset_segment(cls, capability: str) -> bool:
@@ -255,7 +293,18 @@ class AccountPermissions(Schema):
         if len(part) < 3 or not part.startswith("(") or not part.endswith(")"):
             return None
         name = part[1:-1].strip()
-        return name or None
+        if not name:
+            return None
+        if name.startswith("server:"):
+            local_name = name.removeprefix("server:")
+            if not local_name:
+                return None
+            if all(char.isascii() and (char.isalnum() or char == "_") for char in local_name):
+                return name
+            return None
+        if not all(char.isascii() and (char.isalnum() or char == "_") for char in name):
+            return None
+        return name
 
     @staticmethod
     def _capability_parts(capability: str) -> tuple[str, ...]:
@@ -317,7 +366,10 @@ class AccountInheritance:
         global_value: dict[str, int],
         local_value: dict[str, int],
     ) -> dict[str, int]:
-        return {**global_value, **local_value}
+        capabilities = dict(global_value)
+        for capability, depth in local_value.items():
+            capabilities[capability] = max(capabilities.get(capability, depth), depth)
+        return capabilities
 
 
 class Account:
@@ -326,11 +378,13 @@ class Account:
         manager: "AccountManager",
         uid: int | str,
         *,
+        account_type: AccountType = "user",
         guild_id: int | None = None,
     ) -> None:
         self.manager = manager
         self.uid = str(uid)
-        self.guild_id = guild_id
+        self.account_type: AccountType = account_type
+        self.guild_id: int | None = guild_id
         self._record: AccountRecord | None = None
 
     @property
@@ -344,15 +398,21 @@ class Account:
             perms = self.manager._normalize_permissions(value)
             self.record[PERMISSIONS_KEY] = perms
             return perms
-        return self.manager._permissions(self.uid)
+        return self.manager._permissions(self.account_type, self.uid, self.guild_id)
 
     def local(self, guild_id: int | None) -> "Account":
         if guild_id is None:
             return self.copy()
-        return self.manager._local_account(self.uid, guild_id)
+        return self.manager._local_account(self.account_type, self.uid, guild_id)
 
     def copy(self) -> "Account":
-        return Account.from_record(self.manager, self.uid, self.manager._copy_record(self.uid))
+        return Account.from_record(
+            self.manager,
+            self.uid,
+            self.manager._copy_record(self.account_type, self.uid, self.guild_id),
+            account_type=self.account_type,
+            guild_id=self.guild_id,
+        )
 
     @classmethod
     def from_record(
@@ -361,9 +421,10 @@ class Account:
         uid: int | str,
         record: AccountRecord,
         *,
+        account_type: AccountType = "user",
         guild_id: int | None = None,
     ) -> "Account":
-        account = cls(manager, uid, guild_id=guild_id)
+        account = cls(manager, uid, account_type=account_type, guild_id=guild_id)
         account._record = record
         return account
 
@@ -371,7 +432,7 @@ class Account:
     def record(self) -> AccountRecord:
         if self._record is not None:
             return self._record
-        return self.manager._record_or_fake(self.uid)
+        return self.manager._record_or_fake(self.account_type, self.uid, self.guild_id)
 
     def __getitem__(self, key: str) -> Any:
         return self.record[key]
@@ -381,7 +442,7 @@ class Account:
 
     async def write(self, key: str, value: Any) -> None:
         async with self.manager.lock:
-            record = self.manager._writable_record_locked(self.uid, self.guild_id)
+            record = self.manager._writable_record_locked(self.account_type, self.uid, self.guild_id)
             if key == PERMISSIONS_KEY:
                 record[PERMISSIONS_KEY] = self.manager._normalize_permissions(value)
             else:
@@ -394,9 +455,11 @@ class AccountManager:
         self,
         *,
         path: str,
+        role_ids_for_user: Callable[[int, str], Sequence[int | str]] | None = None,
     ) -> None:
         self.path = path
-        self.accounts: dict[str, AccountRecord] = {}
+        self.role_ids_for_user = role_ids_for_user
+        self.accounts: dict[AccountKey, AccountRecord] = {}
         self.capabilities = CapabilityRegistry()
         self.inheritance = AccountInheritance()
         self._lock = asyncio.Lock()
@@ -408,7 +471,13 @@ class AccountManager:
         return self._lock
 
     def __getitem__(self, uid: int | str) -> Account:
-        return Account(self, uid)
+        return Account(self, uid, account_type="user")
+
+    def role(self, role_id: int | str) -> Account:
+        return Account(self, role_id, account_type="role")
+
+    def guild(self, guild_id: int | str) -> Account:
+        return Account(self, guild_id, account_type="guild", guild_id=int(guild_id))
 
     def _ensure_file(self) -> None:
         if os.path.exists(self.path):
@@ -419,7 +488,7 @@ class AccountManager:
             os.makedirs(directory, exist_ok=True)
 
         with open(self.path, "w", encoding="utf-8") as f:
-            json.dump({}, f)
+            json.dump({"version": 2, "accounts": []}, f)
 
     def _load_sync(self) -> None:
         try:
@@ -430,11 +499,14 @@ class AccountManager:
 
         self.accounts = self._normalize_accounts(raw_accounts)
 
-    def _normalize_accounts(self, raw_accounts: object) -> dict[str, AccountRecord]:
+    def _normalize_accounts(self, raw_accounts: object) -> dict[AccountKey, AccountRecord]:
+        if isinstance(raw_accounts, dict) and isinstance(raw_accounts.get("accounts"), list):
+            return self._normalize_account_rows(raw_accounts.get("accounts"))
+
         if not isinstance(raw_accounts, dict):
             return {}
 
-        accounts: dict[str, AccountRecord] = {}
+        accounts: dict[AccountKey, AccountRecord] = {}
         for raw_uid, raw_account in raw_accounts.items():
             uid = str(raw_uid)
             if not isinstance(raw_account, dict):
@@ -447,9 +519,34 @@ class AccountManager:
                 permissions.capabilities.setdefault(DEFAULT_COMMAND_CAPABILITY, 0)
                 permissions.capabilities.setdefault(DEFAULT_USER_CAPABILITY, 0)
             account[PERMISSIONS_KEY] = permissions
-            account[LOCAL_ACCOUNTS_KEY] = self._normalize_local_accounts(raw_account.get(LOCAL_ACCOUNTS_KEY))
-            accounts[uid] = account
+            raw_local_accounts = account.pop(LOCAL_ACCOUNTS_KEY, {})
+            accounts[self._account_key("user", uid, None)] = account
+            for guild_id, local_account in self._normalize_local_accounts(raw_local_accounts).items():
+                accounts[self._account_key("user", uid, guild_id)] = local_account
 
+        return accounts
+
+    def _normalize_account_rows(self, raw_rows: object) -> dict[AccountKey, AccountRecord]:
+        if not isinstance(raw_rows, list):
+            return {}
+        accounts: dict[AccountKey, AccountRecord] = {}
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, dict):
+                continue
+            account_type = self._normalize_account_type(raw_row.get("type"))
+            if account_type is None:
+                continue
+            account_id = str(raw_row.get("id", "")).strip()
+            if not account_id:
+                continue
+            scope = self._normalize_scope(raw_row.get("scope"))
+            raw_data = raw_row.get("data")
+            if not isinstance(raw_data, dict):
+                continue
+            accounts[(scope, account_type, account_id)] = self._normalize_account_record(
+                raw_data,
+                default_user_capabilities=account_type == "user" and scope == GLOBAL_SCOPE,
+            )
         return accounts
 
     def _normalize_local_accounts(self, value: object) -> dict[str, AccountRecord]:
@@ -466,12 +563,64 @@ class AccountManager:
             local_accounts[str(raw_guild_id)] = local_account
         return local_accounts
 
+    def _normalize_account_record(
+        self,
+        value: object,
+        *,
+        default_user_capabilities: bool = False,
+    ) -> AccountRecord:
+        if not isinstance(value, dict):
+            return {}
+        record = dict(value)
+        record.pop("perm_level", None)
+        record.pop(LOCAL_ACCOUNTS_KEY, None)
+        if PERMISSIONS_KEY in record or default_user_capabilities:
+            permissions = self._normalize_permissions(record.get(PERMISSIONS_KEY))
+            if default_user_capabilities:
+                permissions.capabilities.setdefault(DEFAULT_COMMAND_CAPABILITY, 0)
+                permissions.capabilities.setdefault(DEFAULT_USER_CAPABILITY, 0)
+            record[PERMISSIONS_KEY] = permissions
+        return record
+
+    def _normalize_account_type(self, value: object) -> AccountType | None:
+        if value in ("user", "role", "guild"):
+            return value
+        return None
+
+    def _normalize_scope(self, value: object) -> AccountScope:
+        scope = str(value).strip() if value is not None else GLOBAL_SCOPE
+        return scope if scope else GLOBAL_SCOPE
+
     def _normalize_permissions(self, value: object) -> AccountPermissions:
         if isinstance(value, AccountPermissions):
             return value
         if isinstance(value, dict):
             return AccountPermissions.model_validate(value)
         return AccountPermissions()
+
+    def _scope_key(self, guild_id: int | str | None) -> AccountScope:
+        if guild_id is None:
+            return GLOBAL_SCOPE
+        return str(guild_id)
+
+    def _account_key(
+        self,
+        account_type: AccountType,
+        account_id: int | str,
+        guild_id: int | str | None,
+    ) -> AccountKey:
+        return (self._scope_key(guild_id), account_type, str(account_id))
+
+    def _default_record(
+        self,
+        account_type: AccountType,
+        guild_id: int | None,
+    ) -> AccountRecord:
+        if account_type == "user" and guild_id is None:
+            return {
+                PERMISSIONS_KEY: AccountPermissions(capabilities=default_capabilities()),
+            }
+        return {}
 
     async def save(self) -> None:
         async with self._lock:
@@ -484,28 +633,59 @@ class AccountManager:
 
         tmp_path = f"{self.path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(self._json_accounts(), f, indent=4)
+            f.write(self._json_accounts_text())
         os.replace(tmp_path, self.path)
 
-    def _json_accounts(self) -> dict[str, AccountRecord]:
-        accounts: dict[str, AccountRecord] = {}
-        for uid, account in self.accounts.items():
-            json_account = dict(account)
+    def _json_accounts_text(self) -> str:
+        data = self._json_accounts()
+        rows = data["accounts"]
+        if not isinstance(rows, list):
+            rows = []
+
+        lines = [
+            "{",
+            '    "version": 2,',
+            '    "accounts": [',
+        ]
+        for index, row in enumerate(rows):
+            suffix = "," if index < len(rows) - 1 else ""
+            lines.append(
+                "        " +
+                json.dumps(row, separators=(",", ":")) +
+                suffix
+            )
+        lines.extend([
+            "    ]",
+            "}",
+            "",
+        ])
+        return "\n".join(lines)
+
+    def _json_accounts(self) -> dict[str, object]:
+        rows: list[dict[str, object]] = []
+        for scope, account_type, account_id in sorted(self.accounts):
+            account = self.accounts[(scope, account_type, account_id)]
+            json_account = self._json_account_record(account)
+            if not json_account:
+                continue
+            rows.append({
+                "scope": scope,
+                "type": account_type,
+                "id": account_id,
+                "data": json_account,
+            })
+        return {
+            "version": 2,
+            "accounts": rows,
+        }
+
+    def _json_account_record(self, account: AccountRecord) -> AccountRecord:
+        json_account = dict(account)
+        if PERMISSIONS_KEY in json_account:
             perms = self._normalize_permissions(json_account.get(PERMISSIONS_KEY))
             json_account[PERMISSIONS_KEY] = perms.model_dump(mode="json")
-            raw_local = json_account.get(LOCAL_ACCOUNTS_KEY)
-            if isinstance(raw_local, dict):
-                local_accounts: dict[str, AccountRecord] = {}
-                for guild_id, local_account in raw_local.items():
-                    if not isinstance(local_account, dict):
-                        continue
-                    json_local_account = dict(local_account)
-                    local_perms = self._normalize_permissions(json_local_account.get(PERMISSIONS_KEY))
-                    json_local_account[PERMISSIONS_KEY] = local_perms.model_dump(mode="json")
-                    local_accounts[str(guild_id)] = json_local_account
-                json_account[LOCAL_ACCOUNTS_KEY] = local_accounts
-            accounts[uid] = json_account
-        return accounts
+        json_account.pop(LOCAL_ACCOUNTS_KEY, None)
+        return json_account
 
     async def ensure_account(self, uid: int | str, *, save: bool = False) -> bool:
         async with self._lock:
@@ -524,111 +704,179 @@ class AccountManager:
 
     async def has_account(self, uid: int | str) -> bool:
         async with self._lock:
-            return str(uid) in self.accounts
+            return self._account_key("user", str(uid), None) in self.accounts
 
     async def items(self) -> list[tuple[str, AccountRecord]]:
         async with self._lock:
             return [
-                (uid, dict(account))
-                for uid, account in self.accounts.items()
+                (account_id, dict(account))
+                for (scope, account_type, account_id), account in self.accounts.items()
+                if scope == GLOBAL_SCOPE and account_type == "user"
             ]
 
     async def query(self, key: str) -> list[tuple[str, Any]]:
         async with self._lock:
             return [
-                (uid, account[key])
-                for uid, account in self.accounts.items()
+                (account_id, account[key])
+                for (scope, account_type, account_id), account in self.accounts.items()
+                if scope == GLOBAL_SCOPE and account_type == "user"
                 if key in account
             ]
 
-    async def query_local(self, guild_id: int | str, key: str) -> list[tuple[str, Any]]:
-        guild_key = str(guild_id)
+    async def query_local(
+        self,
+        guild_id: int | str,
+        key: str,
+        *,
+        account_type: AccountType = "user",
+    ) -> list[tuple[str, Any]]:
+        scope = self._scope_key(guild_id)
         async with self._lock:
-            results: list[tuple[str, Any]] = []
-            for uid, account in self.accounts.items():
-                raw_local = account.get(LOCAL_ACCOUNTS_KEY)
-                if not isinstance(raw_local, dict):
-                    continue
-                raw_local_account = raw_local.get(guild_key)
-                if not isinstance(raw_local_account, dict) or key not in raw_local_account:
-                    continue
-                results.append((uid, raw_local_account[key]))
-            return results
+            return [
+                (account_id, account[key])
+                for (record_scope, record_type, account_id), account in self.accounts.items()
+                if record_scope == scope and record_type == account_type
+                if key in account
+            ]
+
+    async def local_scope_ids(
+        self,
+        account_type: AccountType,
+        account_id: int | str,
+        *,
+        with_permissions: bool = False,
+    ) -> list[int]:
+        async with self._lock:
+            return self._local_scope_ids_locked(
+                account_type,
+                str(account_id),
+                with_permissions=with_permissions,
+            )
+
+    def _local_scope_ids_locked(
+        self,
+        account_type: AccountType,
+        account_id: str,
+        *,
+        with_permissions: bool = False,
+    ) -> list[int]:
+        scope_ids: list[int] = []
+        for scope, record_type, record_id in self.accounts:
+            if scope == GLOBAL_SCOPE or record_type != account_type or record_id != account_id:
+                continue
+            if with_permissions and PERMISSIONS_KEY not in self.accounts[(scope, record_type, record_id)]:
+                continue
+            try:
+                scope_ids.append(int(scope))
+            except ValueError:
+                continue
+        return sorted(scope_ids)
 
     def _ensure_account_locked(
         self,
         uid: str,
     ) -> bool:
-        if uid in self.accounts:
+        key = self._account_key("user", uid, None)
+        if key in self.accounts:
             return False
 
-        self.accounts[uid] = {
+        self.accounts[key] = {
             PERMISSIONS_KEY: AccountPermissions(capabilities=default_capabilities()),
-            LOCAL_ACCOUNTS_KEY: {},
         }
         return True
 
-    def _account_locked(self, uid: str) -> AccountRecord:
-        self._ensure_account_locked(uid)
-        return self.accounts[uid]
+    def _account_locked(
+        self,
+        account_type: AccountType,
+        account_id: str,
+        guild_id: int | None,
+    ) -> AccountRecord:
+        if account_type == "user" and guild_id is None:
+            self._ensure_account_locked(account_id)
+        key = self._account_key(account_type, account_id, guild_id)
+        if key not in self.accounts:
+            self.accounts[key] = self._default_record(account_type, guild_id)
+        return self.accounts[key]
 
     def _writable_record_locked(
         self,
-        uid: str,
+        account_type: AccountType,
+        account_id: str,
         guild_id: int | None,
     ) -> AccountRecord:
-        account = self._account_locked(uid)
-        if guild_id is None:
-            return account
+        return self._account_locked(account_type, account_id, guild_id)
 
-        raw_local = account.get(LOCAL_ACCOUNTS_KEY)
-        local_accounts = raw_local if isinstance(raw_local, dict) else {}
-        raw_local_account = local_accounts.get(str(guild_id))
-        local_account = raw_local_account if isinstance(raw_local_account, dict) else {}
-        local_accounts[str(guild_id)] = local_account
-        account[LOCAL_ACCOUNTS_KEY] = local_accounts
-        return local_account
+    def _record_or_fake(
+        self,
+        account_type: AccountType,
+        account_id: str,
+        guild_id: int | None,
+    ) -> AccountRecord:
+        return self.accounts.get(
+            self._account_key(account_type, account_id, guild_id),
+            self._default_record(account_type, guild_id),
+        )
 
-    def _record_or_fake(self, uid: str) -> AccountRecord:
-        return self.accounts.get(uid, {
-            PERMISSIONS_KEY: AccountPermissions(capabilities=default_capabilities()),
-            LOCAL_ACCOUNTS_KEY: {},
-        })
-
-    def _permissions(self, uid: str) -> AccountPermissions:
-        record = self._record_or_fake(uid)
+    def _permissions(
+        self,
+        account_type: AccountType,
+        account_id: str,
+        guild_id: int | None,
+    ) -> AccountPermissions:
+        record = self._record_or_fake(account_type, account_id, guild_id)
         perms = self._normalize_permissions(record.get(PERMISSIONS_KEY))
-        if uid in self.accounts:
+        key = self._account_key(account_type, account_id, guild_id)
+        if key in self.accounts:
             record[PERMISSIONS_KEY] = perms
         return perms
 
-    def _copy_record(self, uid: str) -> AccountRecord:
-        record = self._record_or_fake(uid)
+    def _copy_record(
+        self,
+        account_type: AccountType,
+        account_id: str,
+        guild_id: int | None,
+    ) -> AccountRecord:
+        record = self._record_or_fake(account_type, account_id, guild_id)
         copied = dict(record)
-        copied[PERMISSIONS_KEY] = self._normalize_permissions(copied.get(PERMISSIONS_KEY)).model_copy(deep=True)
-        raw_local = copied.get(LOCAL_ACCOUNTS_KEY)
-        if isinstance(raw_local, dict):
-            copied[LOCAL_ACCOUNTS_KEY] = {
-                str(guild_id): dict(local_account)
-                for guild_id, local_account in raw_local.items()
-                if isinstance(local_account, dict)
-            }
+        if PERMISSIONS_KEY in copied:
+            copied[PERMISSIONS_KEY] = self._normalize_permissions(copied.get(PERMISSIONS_KEY)).model_copy(deep=True)
         return copied
 
-    def _local_account(self, uid: str, guild_id: int) -> Account:
-        global_record = self._copy_record(uid)
-        raw_local_accounts = self._record_or_fake(uid).get(LOCAL_ACCOUNTS_KEY)
-        local_accounts = raw_local_accounts if isinstance(raw_local_accounts, dict) else {}
-        raw_local_record = local_accounts.get(str(guild_id))
-        local_record = raw_local_record if isinstance(raw_local_record, dict) else {}
+    def _role_permissions_for_user(self, account_id: str, guild_id: int) -> AccountPermissions:
+        if self.role_ids_for_user is None:
+            return AccountPermissions()
+
+        permissions = AccountPermissions()
+        for role_id in self.role_ids_for_user(guild_id, account_id):
+            role_record = self._record_or_fake("role", str(role_id), guild_id)
+            permissions = self._inherit_permissions(
+                permissions,
+                self._normalize_permissions(role_record.get(PERMISSIONS_KEY)),
+            )
+        return permissions
+
+    def _local_account(self, account_type: AccountType, account_id: str, guild_id: int) -> Account:
+        global_record = self._copy_record(account_type, account_id, None)
+        local_record = self._copy_record(account_type, account_id, guild_id)
 
         merged = dict(global_record)
         merged.update(local_record)
-        merged[PERMISSIONS_KEY] = self._inherit_permissions(
-            self._normalize_permissions(global_record.get(PERMISSIONS_KEY)),
-            self._normalize_permissions(local_record.get(PERMISSIONS_KEY)),
+        global_permissions = self._normalize_permissions(global_record.get(PERMISSIONS_KEY))
+        local_permissions = self._normalize_permissions(local_record.get(PERMISSIONS_KEY))
+        inherited_permissions = self._inherit_permissions(global_permissions, local_permissions)
+        if account_type == "user":
+            inherited_permissions = self._inherit_permissions(
+                self._inherit_permissions(global_permissions, self._role_permissions_for_user(account_id, guild_id)),
+                local_permissions,
+            )
+        merged[PERMISSIONS_KEY] = inherited_permissions
+        return Account.from_record(
+            self,
+            account_id,
+            merged,
+            account_type=account_type,
+            guild_id=guild_id,
         )
-        return Account.from_record(self, uid, merged, guild_id=guild_id)
 
     def _inherit_permissions(
         self,

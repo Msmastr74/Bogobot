@@ -47,10 +47,6 @@ Go into `config.json` and provide the main credentials:
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
  * `archive`: Optional archive configuration object. It contains compact monitor archive settings and optional visual archive settings, including appendable daily `.ts` recording and old-day remuxing to `mkv`, `mp4`, or `ts`.
- * `verification`: Optional server-specific verified/quarantine role config, usually managed through `/manage create_verification` or `/manage raid`.
- * `raid_protection`: Optional server-specific raid protection config, usually managed through `/manage raid`.
- * `bogotree_path`: Optional Bogotree storage path. Defaults to `bogotree.json`.
- * `cbogo_path`: Optional collaborative bogosort puzzle storage path. Defaults to `cbogo.json`.
  * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, `/manage ai`, and prompt/context notes.
 
 `DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup, runtime management, and provider examples.

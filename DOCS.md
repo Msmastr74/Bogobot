@@ -44,10 +44,6 @@ User-edited settings:
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 - `archive`: Optional archive configuration object. See below for fields.
-- `verification`: Server-specific Discord role configuration for verification and raid protection. It stores `verified_role_id` and `quarantine_role_id` under `servers.<guild_id>`, usually through `/manage create_verification` or `/manage raid action:config`.
-- `raid_protection`: Server-specific raid protection settings. It stores `enabled`, `alert_channel_id`, `mode`, detection windows, expiry windows, and trigger thresholds under `servers.<guild_id>`.
-- `bogotree_path`: Path to the Bogotree puzzle-state JSON file. Defaults to `bogotree.json`.
-- `cbogo_path`: Path to the collaborative bogosort puzzle-state JSON file. Defaults to `cbogo.json`.
 - `fps`: Frames received per second.
 - `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, `/manage ai`, and implementation notes.
 
@@ -62,18 +58,23 @@ Bot-managed storage:
 - `milestones`: Latest confirmed value for each milestone name.
 
 Bogotree storage:
-- `bogotree.json`, or the file named by `bogotree_path`, stores server-specific Bogotree puzzle state under `servers.<guild_id>`.
+- Server-specific Bogotree puzzle state is stored on guild account records under the `bogotree_state` field.
 - Per-user Bogotree leaderboard data is stored on local server account records under the `bogotree` field.
 
 Cbogo storage:
-- `cbogo.json`, or the file named by `cbogo_path`, stores server-specific cbogo puzzle state under `servers.<guild_id>`.
+- Server-specific cbogo puzzle state is stored on guild account records under the `cbogo_state` field.
 - Per-user cbogo leaderboard data is stored on local server account records under the `cbogo` field.
 
+Verification and raid storage:
+- Server-specific verified/quarantine role IDs are stored on guild account records under the `security_roles` field.
+- Server-specific raid protection settings are stored on guild account records under the `raid_protection` field.
+- Raid quarantine restore records are stored on each affected user's local server account record under the `raid_quarantine` field.
+
 Account storage:
-- `accounts.json`, or the file named by `accounts_path`, stores Discord user IDs mapped to account records.
-- Each account record contains a `permissions` object plus plugin-owned root-level annotation fields.
+- `accounts.json`, or the file named by `accounts_path`, stores account rows. Rows have a scope (`global` or a guild ID), a type (`user`, `role`, or `guild`), an ID, and plugin-owned data.
+- Account records may contain a `permissions` object plus plugin-owned root-level annotation fields.
 - Permissions are capability based. Normal users receive `commands` and `user`; the configured `owner_uid` receives `[all]`.
-- Server-local account data is stored under each account's `servers.<guild_id>` record. Local records inherit global permissions unless they override them.
+- Server-local user account views inherit global user permissions, then server role permissions, then server-local user overrides.
 
 Archive storage:
 - `archive/monitor.bga`, or the file named by `archive.path`, stores compact monitor value chunks.
@@ -230,7 +231,7 @@ Account storage and permission logic live in `utils.accounts`, separate from the
 
 `accounts[uid]` returns an `Account` handle. Missing accounts read as a fake account with default capabilities. `account[key]` reads root-level account data, `await account.write(key, value)` creates the account if needed and writes under the manager lock, and `account.lock` exposes that lock for larger grouped operations. Plugin annotations are root-level account fields beside `permissions`.
 
-`account.local(guild_id)` returns a server-local account view. Server-local views inherit global permissions, then apply local overrides. This is used for server-specific systems such as Bogotree, cbogo, verification, and raid protection.
+`account.local(guild_id)` returns a server-local account view. Server-local user views inherit global user permissions, then server role permissions, then server-local user overrides. Server-wide feature state such as Bogotree, cbogo, verification roles, and raid protection lives on `accounts.guild(guild_id)`.
 
 Capabilities are string permissions such as `commands`, `user.ai`, or `raid.manage`. Commands automatically register and require `commands.<qualified.command.name>`, with spaces in Discord qualified names converted to dots. Additional sensitive capabilities can be passed with `capabilities=[...]` in command decorators. See `CAPABILITIES.md` or `/capabilities` for the current capability list.
 

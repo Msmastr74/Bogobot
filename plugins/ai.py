@@ -737,16 +737,15 @@ class ContextRequestExecutor:
         guild_id = self._source_guild_id(source)
         if guild_id is None:
             return "minigame: unavailable outside a server"
+        guild_account = self.bot.accounts.guild(guild_id)
         if game in ("bogotree", "tree"):
-            data = await self._server_json_file("bogotree.json", "servers", guild_id)
-            raw_state = data.get("state")
+            raw_state = guild_account.get("bogotree_state")
             state = raw_state if isinstance(raw_state, dict) else {}
             leaderboard = await self._minigame_account_context(guild_id, "bogotree")
             return self._join_context(self._bogotree_context(state), leaderboard)
         if game in ("cbogo", "community_bogosort", "community-bogosort"):
-            data = await self._server_json_file("cbogo.json", "servers", guild_id)
-            raw_state = data.get("state")
-            state = raw_state if isinstance(raw_state, dict) else data
+            raw_state = guild_account.get("cbogo_state")
+            state = raw_state if isinstance(raw_state, dict) else {}
             leaderboard = await self._minigame_account_context(guild_id, "cbogo")
             return self._join_context(self._cbogo_context(state), leaderboard)
         return None
@@ -813,15 +812,6 @@ class ContextRequestExecutor:
             lines.append("")
         return "\n".join(lines)
 
-    async def _server_json_file(self, path: str, servers_key: str, guild_id: int) -> dict[str, Any]:
-        data = await self._json_file(path)
-        raw_servers = data.get(servers_key)
-        servers = raw_servers if isinstance(raw_servers, dict) else {}
-        raw_server = servers.get(str(guild_id))
-        if isinstance(raw_server, dict):
-            return raw_server
-        return data
-
     async def _minigame_account_context(self, guild_id: int, key: str) -> str:
         rows = await self.bot.accounts.query_local(guild_id, key)
         if not rows:
@@ -834,17 +824,6 @@ class ContextRequestExecutor:
 
     def _join_context(self, *parts: str | None) -> str:
         return "\n".join(part.strip() for part in parts if part and part.strip())
-
-    async def _json_file(self, path: str) -> dict[str, Any]:
-        def load() -> dict[str, Any]:
-            try:
-                with open(path, "r", encoding="utf-8") as file:
-                    data = json.load(file)
-            except (OSError, json.JSONDecodeError):
-                return {}
-            return data if isinstance(data, dict) else {}
-
-        return await asyncio.to_thread(load)
 
     def _int_list(self, value: Any) -> list[int]:
         if not isinstance(value, list):

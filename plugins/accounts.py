@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 import re
 from typing import Any, Literal, Protocol
 
@@ -12,7 +13,6 @@ from plugins.telemetry import format_user_usage, user_usage
 from utils import groups
 from utils.accounts import (
     BANNED_CAPABILITY,
-    LOCAL_ACCOUNTS_KEY,
     Account,
     AccountPermissions,
     AccountRecord,
@@ -22,12 +22,21 @@ from utils.accounts import (
 from utils.discord import count_characters
 
 
+DiscordMentionable = discord.Member | discord.User | discord.Role
 OWNER_CAPABILITY_DEPTH = 100
 ACCOUNT_BAN_CAPABILITY = "accounts.ban"
 MANAGE_CAPABILITIES_CAPABILITY = "capabilities.manage"
 MANAGE_PRESETS_CAPABILITY = "capabilities.manage_presets"
 CUSTOM_PRESETS_CONFIG_KEY = "account_capability_presets"
-PRESET_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+SERVER_PRESET_PREFIX = "server."
+CAPABILITY_OPERATION_SUFFIXES = {"use", "grant"}
+PRESET_NAME_RE = re.compile(r"^(?:server\.)?[A-Za-z0-9_]{1,64}$")
+PRESET_CAPABILITY_RE = re.compile(
+    r"^\((?P<name>[A-Za-z0-9_]{1,64})\)(?P<operation>\.(?:use|grant))?$"
+)
+INTERNAL_SERVER_PRESET_CAPABILITY_RE = re.compile(
+    r"^\(server:(?P<name>[A-Za-z0-9_]{1,64})\)(?P<operation>\.(?:use|grant))?$"
+)
 BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
     "default": tuple(default_capabilities()),
     "user": ("commands", "user"),
@@ -65,6 +74,14 @@ class ModelDump(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class AccountTarget:
+    mention: str
+    account: Account
+    account_id: int
+    is_role: bool = False
+
+
 def _account_perms(account: AccountRecord) -> AccountPermissions:
     value = account.get(PERMISSIONS_KEY)
     if isinstance(value, AccountPermissions):
@@ -92,15 +109,22 @@ def _overriding_capabilities(perms: AccountPermissions, capability: str) -> list
     return sorted(overriding)
 
 
+def _display_capability(capability: str) -> str:
+    match = INTERNAL_SERVER_PRESET_CAPABILITY_RE.fullmatch(capability)
+    if match is not None:
+        return f"server.({match['name']}){match['operation'] or ''}"
+    return capability
+
+
 def _format_capabilities(perms: AccountPermissions) -> str:
     if not perms.capabilities:
         return "None"
     lines: list[str] = []
     for capability, depth in sorted(perms.capabilities.items()):
-        line = f"`{capability}`: `{depth}`"
+        line = f"`{_display_capability(capability)}`: `{depth}`"
         overriding = _overriding_capabilities(perms, capability)
         if overriding:
-            line += " (overridden by " + ", ".join(f"`{item}`" for item in overriding) + ")"
+            line += " (overridden by " + ", ".join(f"`{_display_capability(item)}`" for item in overriding) + ")"
         lines.append(line)
     return "\n".join(lines)
 
@@ -123,17 +147,48 @@ def _normalize_preset_name(name: str) -> str | None:
     name = name.strip()
     if not PRESET_NAME_RE.fullmatch(name):
         return None
+    local_name = name.removeprefix(SERVER_PRESET_PREFIX)
+    if local_name == "server":
+        return None
     return name
 
 
 def _is_server_capability(capability: str) -> bool:
-    return capability.startswith("server.")
+    return capability.startswith(SERVER_PRESET_PREFIX)
+
+
+def _is_preset_capability(capability: str) -> bool:
+    local_capability = _strip_server_prefixes(capability) if _is_server_capability(capability) else capability
+    return PRESET_CAPABILITY_RE.fullmatch(local_capability) is not None
+
+
+def _normalize_operation_suffix(capability: str) -> str:
+    parts = capability.split(".")
+    if not parts or parts[-1] not in CAPABILITY_OPERATION_SUFFIXES:
+        return capability
+    operation = parts[-1]
+    base_parts = parts[:-1]
+    while base_parts and base_parts[-1] in CAPABILITY_OPERATION_SUFFIXES:
+        base_parts.pop()
+    return ".".join([*base_parts, operation]) if base_parts else operation
 
 
 def _stored_capability(capability: str) -> str:
-    if _is_server_capability(capability):
-        return capability.removeprefix("server.")
-    return capability
+    is_server = _is_server_capability(capability)
+    local_capability = _strip_server_prefixes(capability) if is_server else capability
+    preset_match = PRESET_CAPABILITY_RE.fullmatch(local_capability)
+    if preset_match is not None and is_server:
+        return f"(server:{preset_match['name']}){preset_match['operation'] or ''}"
+    return _normalize_operation_suffix(local_capability)
+
+
+def _management_capability_for_stored(capability: str, scope_id: int | None) -> str:
+    if scope_id is None:
+        return capability
+    match = INTERNAL_SERVER_PRESET_CAPABILITY_RE.fullmatch(capability)
+    if match is not None:
+        return f"server.({match['name']}){match['operation'] or ''}"
+    return f"server.{capability}"
 
 
 def _scope_id(interaction: discord.Interaction, capability: str) -> int | None:
@@ -150,7 +205,7 @@ def _custom_presets(bot: BotCore) -> dict[str, tuple[str, ...]]:
     presets: dict[str, tuple[str, ...]] = {}
     for raw_name, raw_capabilities in raw_presets.items():
         name = _normalize_preset_name(str(raw_name))
-        if name is None or name.startswith("server."):
+        if name is None:
             continue
         if not isinstance(raw_capabilities, list):
             continue
@@ -159,7 +214,7 @@ def _custom_presets(bot: BotCore) -> dict[str, tuple[str, ...]]:
             for raw_capability in raw_capabilities
             if isinstance(raw_capability, str)
             for capability in (raw_capability.strip(),)
-            if capability and not _is_server_capability(capability)
+            if capability
         )
         if capabilities:
             presets[name] = capabilities
@@ -173,8 +228,51 @@ def _all_presets(bot: BotCore) -> dict[str, tuple[str, ...]]:
     }
 
 
+def _strip_server_prefixes(capability: str) -> str:
+    while capability.startswith(SERVER_PRESET_PREFIX):
+        capability = capability.removeprefix(SERVER_PRESET_PREFIX)
+    return capability
+
+
+def _normalize_resolved_preset_capability(capability: str) -> str:
+    capability = _strip_server_prefixes(capability.strip())
+    capability_base, operation = AccountPermissions._split_operation(capability)
+    if operation is None:
+        return capability_base
+    return _normalize_operation_suffix(f"{capability_base}.{operation}")
+
+
+def _resolve_preset(bot: BotCore, name: str) -> tuple[str, ...]:
+    presets = _all_presets(bot)
+    if name.startswith("server:"):
+        server_name = f"{SERVER_PRESET_PREFIX}{name.removeprefix('server:')}"
+        if server_name in presets:
+            return tuple(_normalize_resolved_preset_capability(capability) for capability in presets[server_name])
+        return tuple(
+            _normalize_resolved_preset_capability(capability)
+            for capability in presets.get(name.removeprefix("server:"), ())
+        )
+    if name in presets:
+        return tuple(_normalize_resolved_preset_capability(capability) for capability in presets[name])
+    if name.startswith(SERVER_PRESET_PREFIX):
+        return tuple(
+            _normalize_resolved_preset_capability(capability)
+            for capability in presets.get(name.removeprefix(SERVER_PRESET_PREFIX), ())
+        )
+    return ()
+
+
 def _completion_options(bot: BotCore, *, include_server: bool) -> list[str]:
     presets = _all_presets(bot)
+    normal_presets = [
+        preset for preset in presets
+        if not preset.startswith(SERVER_PRESET_PREFIX)
+    ]
+    server_presets = [
+        preset.removeprefix(SERVER_PRESET_PREFIX)
+        for preset in presets
+        if preset.startswith(SERVER_PRESET_PREFIX)
+    ]
     registered_capabilities = [
         capability
         for capability in bot.accounts.capabilities
@@ -182,11 +280,11 @@ def _completion_options(bot: BotCore, *, include_server: bool) -> list[str]:
     ]
     options = [
         *registered_capabilities,
-        *(f"({preset})" for preset in presets),
+        *(f"({preset})" for preset in normal_presets),
     ]
     if include_server:
         options.extend(f"server.{capability}" for capability in registered_capabilities)
-        options.extend(f"server.({preset})" for preset in presets)
+        options.extend(f"server.({preset})" for preset in [*normal_presets, *server_presets])
     return sorted(dict.fromkeys(options))
 
 
@@ -246,8 +344,9 @@ def _expanded_check_capabilities(bot: BotCore, capability: str) -> tuple[str, ..
 
 def _is_registered_capability(bot: BotCore, capability: str) -> bool:
     stored_capability = _stored_capability(capability)
+    if AccountPermissions.has_preset_segment(stored_capability):
+        return _is_preset_capability(capability)
     return (
-        AccountPermissions.has_preset_segment(stored_capability) or
         stored_capability in bot.accounts.capabilities
     )
 
@@ -261,32 +360,18 @@ async def _save_custom_presets(bot: BotCore, presets: dict[str, tuple[str, ...]]
 
 
 def _local_permission_scope_ids(account: Account) -> list[int]:
-    raw_local = account.record.get(LOCAL_ACCOUNTS_KEY)
-    if not isinstance(raw_local, dict):
-        return []
-
-    scope_ids: list[int] = []
-    for raw_guild_id, raw_account in raw_local.items():
-        if not isinstance(raw_account, dict) or PERMISSIONS_KEY not in raw_account:
-            continue
-        try:
-            scope_ids.append(int(raw_guild_id))
-        except (TypeError, ValueError):
-            continue
-    return scope_ids
+    return account.manager._local_scope_ids_locked(
+        account.account_type,
+        account.uid,
+        with_permissions=True,
+    )
 
 
 def _stored_permissions_for_scope(account: Account, scope_id: int | None) -> AccountPermissions:
     if scope_id is None:
         return account.permissions.model_copy(deep=True)
 
-    raw_local = account.record.get(LOCAL_ACCOUNTS_KEY)
-    if not isinstance(raw_local, dict):
-        return AccountPermissions()
-    raw_local_account = raw_local.get(str(scope_id))
-    if not isinstance(raw_local_account, dict):
-        return AccountPermissions()
-    return _account_perms(raw_local_account).model_copy(deep=True)
+    return account.manager._permissions(account.account_type, account.uid, scope_id).model_copy(deep=True)
 
 
 def _max_effective_permission_depth(account: Account, scope_id: int | None) -> int:
@@ -309,14 +394,57 @@ def _scope_label(scope_id: int | None) -> str:
     return "global" if scope_id is None else "server"
 
 
+def _account_target(
+    bot: BotCore,
+    interaction: discord.Interaction,
+    *,
+    target: DiscordMentionable | None,
+    default_user: bool = False,
+) -> AccountTarget | None:
+    if isinstance(target, discord.Role):
+        if interaction.guild_id is None:
+            return None
+        return AccountTarget(
+            mention=target.mention,
+            account=bot.accounts.role(target.id).local(interaction.guild_id),
+            account_id=target.id,
+            is_role=True,
+        )
+    if target is None:
+        if not default_user:
+            return None
+        target = interaction.user
+    if isinstance(target, discord.Member | discord.User):
+        return AccountTarget(
+            mention=target.mention,
+            account=bot.accounts[target.id],
+            account_id=target.id,
+        )
+    return None
+
+
+def _target_scope_id(
+    interaction: discord.Interaction,
+    capability: str,
+    target: AccountTarget,
+) -> int | None:
+    if target.is_role:
+        return interaction.guild_id
+    return _scope_id(interaction, capability)
+
+
 async def _write_permissions(
     bot: BotCore,
-    uid: int,
+    target: AccountTarget,
     permissions_by_scope: dict[int | None, AccountPermissions],
 ) -> None:
     async with bot.accounts.lock:
         for scope_id, permissions in permissions_by_scope.items():
-            record = bot.accounts._writable_record_locked(str(uid), scope_id)
+            record = bot.accounts._writable_record_locked(
+                target.account.account_type,
+                target.account.uid,
+                scope_id,
+            )
             record[PERMISSIONS_KEY] = bot.accounts._normalize_permissions(permissions)
         bot.accounts._save_sync()
 
@@ -419,16 +547,31 @@ class AccountView(discord.ui.LayoutView):
         return text
 
 
-class CapabilitiesView(discord.ui.LayoutView):
+class RoleAccountView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
-        user: discord.Member | discord.User,
+        role: discord.Role,
         account: Account,
     ) -> None:
         super().__init__(timeout=None)
         self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(f"## Capabilities for {user.mention}"),
+            discord.ui.TextDisplay(f"## {role.mention}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"### Capabilities\n{_format_capabilities(account.permissions)}"),
+        ))
+
+
+class CapabilitiesView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        target: str,
+        account: Account,
+    ) -> None:
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## Capabilities for {target}"),
             discord.ui.Separator(),
             discord.ui.TextDisplay(_format_capabilities(account.permissions)),
         ))
@@ -436,7 +579,7 @@ class CapabilitiesView(discord.ui.LayoutView):
 
 async def setup(bot: BotCore) -> None:
     accounts = groups.accounts(bot)
-    AccountPermissions.configure_presets(lambda name: _all_presets(bot).get(name, ()))
+    AccountPermissions.configure_presets(lambda name: _resolve_preset(bot, name))
     bot.accounts.capabilities.register(ACCOUNT_BAN_CAPABILITY)
     bot.accounts.capabilities.register(MANAGE_CAPABILITIES_CAPABILITY)
     bot.accounts.capabilities.register(MANAGE_PRESETS_CAPABILITY)
@@ -533,7 +676,7 @@ async def setup(bot: BotCore) -> None:
     async def capabilities(
         interaction: discord.Interaction,
         action: Literal["grant", "revoke", "reset", "resolve", "show"],
-        user: discord.Member | discord.User | None = None,
+        target: DiscordMentionable | None = None,
         capabilities: str | None = None,
         depth: int = 0,
     ) -> None:
@@ -566,19 +709,42 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
+        account_target = _account_target(
+            bot,
+            interaction,
+            target=target,
+            default_user=action == "show",
+        )
         if action == "show":
-            target_user: discord.Member | discord.User = user if user is not None else interaction.user
+            if account_target is None:
+                await bot.discord.send(
+                    contents="A user or role target is required.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
             await bot.discord.send(
-                view=CapabilitiesView(user=target_user, account=bot.accounts[target_user.id].local(interaction.guild_id)),
+                view=CapabilitiesView(
+                    target=account_target.mention,
+                    account=account_target.account.local(interaction.guild_id),
+                ),
                 response=True,
                 ephemeral=True,
                 safety_filter=True,
             )
             return
 
-        if user is None:
+        if account_target is None:
             await bot.discord.send(
-                contents="A user is required for this action.",
+                contents="A user or role target is required for this action.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if account_target.is_role and interaction.guild_id is None:
+            await bot.discord.send(
+                contents="Role capabilities can only be managed inside a server.",
                 response=True,
                 ephemeral=True,
             )
@@ -631,21 +797,24 @@ async def setup(bot: BotCore) -> None:
             return
 
         scope_ids: set[int | None] = {
-            _scope_id(interaction, capability)
+            _target_scope_id(interaction, capability, account_target)
             for capability in requested_capabilities
         }
         if action == "reset":
-            scope_ids = {
-                None,
-                *_local_permission_scope_ids(bot.accounts[user.id]),
-            }
+            if account_target.is_role:
+                scope_ids = {interaction.guild_id}
+            else:
+                scope_ids = {
+                    None,
+                    *_local_permission_scope_ids(account_target.account),
+                }
 
         actor_permissions = {
             scope_id: _management_permissions(bot, interaction.user.id, scope_id)
             for scope_id in scope_ids
         }
         target_accounts = {
-            scope_id: bot.accounts[user.id].local(scope_id)
+            scope_id: account_target.account.local(scope_id)
             for scope_id in scope_ids
         }
         target_permissions = {
@@ -659,7 +828,7 @@ async def setup(bot: BotCore) -> None:
                 for capability, current_depth in target_perms.capabilities.items():
                     if AccountPermissions.is_reserved_capability(capability):
                         continue
-                    checked_capability = f"server.{capability}" if scope_id is not None else capability
+                    checked_capability = _management_capability_for_stored(capability, scope_id)
                     for check_group in _check_capability_groups(bot, checked_capability):
                         check_required_depth = max(
                             current_depth,
@@ -669,7 +838,10 @@ async def setup(bot: BotCore) -> None:
                             ),
                         )
                         display_capability = (
-                            " or ".join(f"server.{check_capability}" for check_capability in check_group)
+                            " or ".join(
+                                _management_capability_for_stored(check_capability, scope_id)
+                                for check_capability in check_group
+                            )
                             if scope_id is not None else
                             " or ".join(check_group)
                         )
@@ -680,11 +852,12 @@ async def setup(bot: BotCore) -> None:
                             check_required_depth,
                             "reset",
                         ))
-            for capability, default_depth in default_capabilities().items():
-                required_checks.append((None, capability, (capability,), default_depth, "reset"))
+            if not account_target.is_role:
+                for capability, default_depth in default_capabilities().items():
+                    required_checks.append((None, capability, (capability,), default_depth, "reset"))
         else:
             for capability in requested_capabilities:
-                scope_id = _scope_id(interaction, capability)
+                scope_id = _target_scope_id(interaction, capability, account_target)
                 stored_capability = _stored_capability(capability)
                 current_depth = target_permissions[scope_id].required_modification_depth(stored_capability)
                 required_depth = depth if action == "grant" else current_depth
@@ -723,22 +896,23 @@ async def setup(bot: BotCore) -> None:
                 **default_capabilities(),
                 **target_permissions.get(None, AccountPermissions()).reserved_capabilities(),
             }
-            target_permissions[None] = AccountPermissions(capabilities=global_capabilities)
-            message = f"Reset capabilities for {user.mention}."
+            if not account_target.is_role:
+                target_permissions[None] = AccountPermissions(capabilities=global_capabilities)
+            message = f"Reset capabilities for {account_target.mention}."
         elif action == "grant":
             for capability in requested_capabilities:
-                scope_id = _scope_id(interaction, capability)
+                scope_id = _target_scope_id(interaction, capability, account_target)
                 target_permissions[scope_id].grant(_stored_capability(capability), depth=depth)
             capability_text = ", ".join(f"`{capability}`" for capability in requested_capabilities)
-            message = f"Granted {capability_text} depth `{depth}` to {user.mention}."
+            message = f"Granted {capability_text} depth `{depth}` to {account_target.mention}."
         else:
             for capability in requested_capabilities:
-                scope_id = _scope_id(interaction, capability)
+                scope_id = _target_scope_id(interaction, capability, account_target)
                 target_permissions[scope_id].revoke(_stored_capability(capability))
             capability_text = ", ".join(f"`{capability}`" for capability in requested_capabilities)
-            message = f"Revoked {capability_text} from {user.mention}."
+            message = f"Revoked {capability_text} from {account_target.mention}."
 
-        await _write_permissions(bot, user.id, target_permissions)
+        await _write_permissions(bot, account_target, target_permissions)
 
         await bot.discord.send(
             contents=message,
@@ -761,35 +935,25 @@ async def setup(bot: BotCore) -> None:
         preset_name = _normalize_preset_name(name)
         if preset_name is None:
             await bot.discord.send(
-                contents="Preset names must start with a letter and use only letters, numbers, `_`, `.`, or `-`.",
+                contents="Preset names must use only letters, numbers, and `_`, with an optional `server.` namespace prefix.",
                 response=True,
                 ephemeral=True,
             )
             return
         if action == "show":
-            all_presets = _all_presets(bot)
             display_server_prefix = preset_name.startswith("server.")
-            shown_preset_name = preset_name.removeprefix("server.") if display_server_prefix else preset_name
-            if shown_preset_name not in all_presets:
+            shown_capabilities = _resolve_preset(bot, preset_name)
+            if not shown_capabilities:
                 await bot.discord.send(
                     contents=f"Preset `{preset_name}` does not exist.",
                     response=True,
                     ephemeral=True,
                 )
                 return
-            shown_capabilities = all_presets[shown_preset_name]
             if display_server_prefix:
                 shown_capabilities = tuple(f"server.{capability}" for capability in shown_capabilities)
             await bot.discord.send(
                 contents=", ".join(shown_capabilities),
-                response=True,
-                ephemeral=True,
-            )
-            return
-
-        if preset_name.startswith("server."):
-            await bot.discord.send(
-                contents="Custom preset names cannot start with `server.`. Use `server.(preset)` when applying a preset instead.",
                 response=True,
                 ephemeral=True,
             )
@@ -825,21 +989,6 @@ async def setup(bot: BotCore) -> None:
         if not requested_capabilities:
             await bot.discord.send(
                 contents="At least one capability is required to create a preset.",
-                response=True,
-                ephemeral=True,
-            )
-            return
-        server_capabilities = [
-            capability
-            for capability in requested_capabilities
-            if _is_server_capability(capability)
-        ]
-        if server_capabilities:
-            await bot.discord.send(
-                contents=(
-                    "Custom presets must contain unprefixed capabilities. "
-                    "Use the `server.` prefix when applying the preset."
-                ),
                 response=True,
                 ephemeral=True,
             )
@@ -908,10 +1057,27 @@ async def setup(bot: BotCore) -> None:
     async def ban(
         interaction: discord.Interaction,
         action: Literal["ban", "unban"],
-        user: discord.Member | discord.User,
+        target: DiscordMentionable,
         scope: Literal["global", "server"] = "global",
     ) -> None:
-        if user.id == interaction.user.id:
+        account_target = _account_target(bot, interaction, target=target, default_user=False)
+        if account_target is None:
+            await bot.discord.send(
+                contents="A user or role target is required.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if account_target.is_role and scope == "global":
+            await bot.discord.send(
+                contents="Role bans can only be managed in `server` scope.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if not account_target.is_role and account_target.account_id == interaction.user.id:
             await bot.discord.send(
                 contents="You cannot ban or unban yourself.",
                 response=True,
@@ -929,14 +1095,13 @@ async def setup(bot: BotCore) -> None:
 
         scope_id = interaction.guild_id if scope == "server" else None
         actor_perms = _management_permissions(bot, interaction.user.id, scope_id)
-        target_account = bot.accounts[user.id]
-        stored_target_perms = _stored_permissions_for_scope(target_account, scope_id)
-        target_max_depth = _max_effective_permission_depth(target_account, scope_id)
+        stored_target_perms = _stored_permissions_for_scope(account_target.account, scope_id)
+        target_max_depth = _max_effective_permission_depth(account_target.account, scope_id)
         actor_ban_depth = actor_perms.effective_depth(ACCOUNT_BAN_CAPABILITY, operation="use")
         if actor_ban_depth <= target_max_depth:
             await bot.discord.send(
                 contents=(
-                    f"Cannot {action} {user.mention}. "
+                    f"Cannot {action} {account_target.mention}. "
                     f"`{ACCOUNT_BAN_CAPABILITY}` depth `{actor_ban_depth}` must be greater than target max depth `{target_max_depth}`."
                 ),
                 response=True,
@@ -946,18 +1111,18 @@ async def setup(bot: BotCore) -> None:
 
         if action == "ban":
             stored_target_perms.ban(depth=target_max_depth)
-            await _write_permissions(bot, user.id, {scope_id: stored_target_perms})
+            await _write_permissions(bot, account_target, {scope_id: stored_target_perms})
             await bot.discord.send(
-                contents=f"{user.mention} has been banned from bot commands in `{scope}` scope.",
+                contents=f"{account_target.mention} has been banned from bot commands in `{scope}` scope.",
                 response=True,
                 ephemeral=True,
             )
             return
 
         stored_target_perms.unban()
-        await _write_permissions(bot, user.id, {scope_id: stored_target_perms})
+        await _write_permissions(bot, account_target, {scope_id: stored_target_perms})
         await bot.discord.send(
-            contents=f"{user.mention} has been unbanned from bot commands in `{scope}` scope.",
+            contents=f"{account_target.mention} has been unbanned from bot commands in `{scope}` scope.",
             response=True,
             ephemeral=True,
         )
@@ -999,11 +1164,21 @@ async def setup(bot: BotCore) -> None:
     )
     async def info(
         interaction: discord.Interaction,
-        user: discord.Member | discord.User | None = None,
+        target: DiscordMentionable | None = None,
         eph: bool = True,
     ) -> None:
-        if user is None:
-            user = interaction.user
-        account = bot.accounts[user.id].local(interaction.guild_id)
-        view = AccountView(user=user, account=account)
+        account_target = _account_target(bot, interaction, target=target, default_user=True)
+        if account_target is None:
+            await bot.discord.send(
+                contents="A user or role target is required.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+
+        if isinstance(target, discord.Role):
+            view = RoleAccountView(role=target, account=account_target.account)
+        else:
+            user = target if isinstance(target, discord.Member | discord.User) else interaction.user
+            view = AccountView(user=user, account=account_target.account.local(interaction.guild_id))
         await bot.discord.send(view=view, ephemeral=eph, response=True, safety_filter=True)
