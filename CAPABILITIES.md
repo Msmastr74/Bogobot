@@ -2,6 +2,26 @@
 
 Capabilities are string permissions stored on each account. A user can run a command when their effective account permissions include every capability required by that command.
 
+## Depths
+
+Each stored capability has an integer depth. Depth controls delegation authority, not basic use.
+
+- Missing capability: cannot use it and cannot delegate it.
+- Depth `0`: can use the capability, but cannot grant or revoke it for anyone else.
+- Depth `1`: can grant or revoke that capability only at depth `0`.
+- Depth `N`: can grant or revoke that capability only at depths lower than `N`.
+
+In other words, grant/revoke checks are strict: the caller's effective `.grant` depth must be greater than the target depth. This prevents users from creating equal peers. For example, `raid.grant: 1` can grant `raid` or `raid.use` at depth `0`, while `raid.grant: 50` can grant depths `0` through `49`.
+
+The same depth number is used for `.use` and `.grant`, but they are checked differently:
+
+- `.use`: depth `0` or higher is enough to use a capability.
+- `.grant`: must be greater than the depth being granted, revoked, or reset.
+
+`[all]` at a high depth is owner-like authority over every capability. `banned` disables all other capabilities regardless of depth.
+
+## Syntax
+
 - `[all]`: Owner-level wildcard. Grants every capability.
 - `commands`: Default user capability. Grants normal command access.
 - `user`: Default user capability. Grants normal user features.
