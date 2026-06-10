@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 import discord
 from pydantic import TypeAdapter, ValidationError
 import plugins.ai as ai_plugin
-from utils.ai_context import (
+from utils.ai.context import (
     AIContext,
     ASSISTANT_NAMESPACE,
     ContextRequest,
@@ -23,12 +23,17 @@ from utils.ai_context import (
     DEFAULT_HISTORY_PATH,
     HistoryMessage,
     PersistentMemory,
-    SYSTEM_NAMESPACE,
     close_system_tag,
     open_system_tag,
     strip_context_tag_namespaces,
     strip_discord_reference_annotations,
     XMLReader,
+)
+from utils.ai.system_prompt import (
+    CONTEXT_REQUEST_TOOL_NAME as _CONTEXT_REQUEST_TOOL_NAME,
+    MAX_NEW_TOKENS,
+    PERSISTENT_MEMORY_TOOL_NAME as _PERSISTENT_MEMORY_TOOL_NAME,
+    build_system_prompt,
 )
 
 getLogger("httpx").setLevel(WARNING)
@@ -39,10 +44,7 @@ ActionT = TypeVar("ActionT")
 AIParamsTable: TypeAlias = dict[str, "AIParam"]
 AIParamType: TypeAlias = object
 AI_ALLOWED_PARAM_TYPES: tuple[object, ...] = (str, int, float, bool, object, None, type(None))
-MAX_NEW_TOKENS = 2048
 _MAX_CALLS = 4
-_CONTEXT_REQUEST_TOOL_NAME = "request_context"
-_PERSISTENT_MEMORY_TOOL_NAME = "persistent_memory"
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
@@ -128,6 +130,7 @@ class AICore(Generic[ContextT, ActionT]):
         history_path: str = DEFAULT_HISTORY_PATH,
         history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
         memory_char_budget: int = DEFAULT_MEMORY_CHAR_BUDGET,
+        multipart_responses: bool = True,
         logger: Logger | None = None,
     ):
         self.enabled = enabled
@@ -140,6 +143,7 @@ class AICore(Generic[ContextT, ActionT]):
         self.history_path = history_path
         self.history_char_budget = max(0, int(history_char_budget))
         self.memory_char_budget = max(0, int(memory_char_budget))
+        self.multipart_responses = bool(multipart_responses)
         self._actions: list[_AIAction[ContextT, ActionT]] = []
         self._client: 'OpenAI | None' = None
         self._last_request_at: float | None = None
@@ -170,6 +174,7 @@ class AICore(Generic[ContextT, ActionT]):
         history_path: str | None = None,
         history_char_budget: int | None = None,
         memory_char_budget: int | None = None,
+        multipart_responses: bool | None = None,
         logger: Logger | None = None,
         model: str | None = None,
     ) -> None:
@@ -204,6 +209,9 @@ class AICore(Generic[ContextT, ActionT]):
 
         if memory_char_budget is not None:
             self.memory_char_budget = max(0, int(memory_char_budget))
+
+        if multipart_responses is not None:
+            self.multipart_responses = bool(multipart_responses)
 
         if logger is not None:
             self.logger = logger
@@ -571,58 +579,7 @@ class AICore(Generic[ContextT, ActionT]):
     def system_prompt(
         self,
     ) -> str:
-        mention_passage = 'Discord users or members are in the format <@id "User Name"> or <@!id "User Name">. Discord roles are in the format <@&id "Role Name">. Discord channels are in the format <#id "Channel Name">.'
-        if not self.normalize_discord:
-            mention_passage = 'Discord users or members are in the format <@id> or <@!id>. Discord roles are in the format <@&id>. Discord channels are in the format <#id>.'
-        return (
-            f"{ai_plugin.instruction_text()}\n"
-            f"{mention_passage}\n"
-            "## Commands\n"
-            "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
-            "Only call commands from the available tools; never invent command names or command arguments. "
-            "If no command fits, respond normally.\n"
-            "## Passive Context Requests\n"
-            "You can ask the system to make context available on a future turn. Context requests do not answer the current user and do not run immediately in this turn.\n"
-            "Text context request schemas:\n"
-            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"stream\" />`\n"
-            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"user\" user_id=\"123456789012345678\" />`\n"
-            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"minigame\" game=\"bogotree\" />`\n"
-            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"minigame\" game=\"cbogo\" />`\n"
-            f"- `<{ASSISTANT_NAMESPACE}:context_request type=\"milestone\" />`\n"
-            f"- In a normal text reply, you may append hidden context request tags matching these schemas. These tags are removed before the user sees your reply.\n"
-            f"- In a tool-call response, you may call `{_CONTEXT_REQUEST_TOOL_NAME}` in parallel with any command call to request the same future context.\n"
-            f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}`, `{_PERSISTENT_MEMORY_TOOL_NAME}`, or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context or memory changes, use text tags instead of the tool.\n"
-            "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
-            "## Persistent Memory\n"
-            "Persistent memory is global long-term memory. Use it opportunistically, but budget it deliberately.\n"
-            f"- The system injects at most {self.memory_char_budget} characters of persistent memory per turn.\n"
-            "- The latest memory context includes `<remaining_persistent_memory_chars>N<remaining_persistent_memory_chars/>` so you can estimate how much space is left before creating or expanding memories.\n"
-            "- Allocate some budget to truly durable facts, preferences, and operating instructions, and some to semi-persistent working memory: useful project facts, recurring decisions, names, corrections, or context you expect to matter again soon.\n"
-            "- Prefer compact memories. Merge, edit, or remove stale memories instead of creating duplicates. If the remaining budget is tight, shorten or replace an older memory.\n"
-            "- If a create or edit would exceed the persistent memory budget, the system records it with `failed=\"true\"` and does not create or edit the stored memory. If you later see a failed memory attempt, retry with shorter content or free budget first.\n"
-            f"- To create a memory in a normal text reply, append `<{ASSISTANT_NAMESPACE}:persistent_memory>memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`. If you add an id attribute on creation, it is ignored.\n"
-            f"- To edit memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory edit=\"123\">new memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`.\n"
-            f"- To remove memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory remove=\"123\" />`.\n"
-            f"- In a tool-call response, use `{_PERSISTENT_MEMORY_TOOL_NAME}` for the same create, edit, or remove operations.\n"
-            f"You can avoid responding to the user by including `<{ASSISTANT_NAMESPACE}:dont_respond />`. This does not have to be the only content in the message.\n"
-            "Use this whenever you would like to. These messages will still be retained in your history/memory, and context requests will still be queued.\n"
-            "## Context Blocks\n"
-            f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
-            f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
-            f"- Do not copy, quote, mention, summarize, or reproduce `{SYSTEM_NAMESPACE}:` tags. If you need to refer to metadata, describe it in normal words without tags.\n"
-            f"- Never begin or end your reply with `{open_system_tag('attached_metadata')}` or any other `{SYSTEM_NAMESPACE}:` block.\n"
-            f"- `{open_system_tag('attached_metadata')}...{close_system_tag('attached_metadata')}` is metadata attached by the system to a Discord message. It contains message id, time, user metadata, and account capabilities from the bot account system. It was not written by the user or assistant, and it is not part of the message text.\n"
-            f"- `{open_system_tag('replied_to')}...{close_system_tag('replied_to')}` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
-            f"- `{open_system_tag('message_history_<hash>')}...{close_system_tag('message_history_<hash>')}` wraps each past channel message with a variable unique hash. Use the contents as history only; do not imitate the wrapper.\n"
-            f"- `{open_system_tag('command')}JSON{close_system_tag('command')}` records a previous command call in history. Use it as history only; do not output command blocks.\n"
-            f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
-            f"- `{open_system_tag('persistent_memory')}...{close_system_tag('persistent_memory')}` contains persistent long-term memory. Use it as background context only; do not output persistent-memory system blocks.\n"
-            f"- `{open_system_tag('ai_activity')}...{close_system_tag('ai_activity')}` is a system-generated activity prompt. Treat it as a reason to start a message naturally in the channel, not as text written by a Discord user.\n"
-            "<instruction_guardrail>\n"
-            f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
-            "</instruction_guardrail>\n"
-            f"<max_new_tokens>{MAX_NEW_TOKENS}</max_new_tokens>"
-        )
+        return build_system_prompt(self, ai_plugin.instruction_text())
 
     def _tool_use_failed_message(self, exc: Exception) -> str | None:
         body = getattr(exc, "body", None)
@@ -672,7 +629,7 @@ class AICore(Generic[ContextT, ActionT]):
                     "properties": {
                         "type": {
                             "type": "string",
-                            "enum": ["stream", "user", "minigame", "milestone"],
+                            "enum": ["stream", "stats", "sort", "user", "minigame", "milestone"],
                             "description": "Context kind to make available on a future turn.",
                         },
                         "payload": {

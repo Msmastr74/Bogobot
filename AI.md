@@ -3,7 +3,7 @@
 Bogobot can use an OpenAI-compatible chat API to respond to mentions, power `/ai`, and choose Discord commands from registered AI actions.
 
 The AI system is optional. It is configured with the top-level `ai` object in `config.json` or `local_config.json`.
-Responses currently use a fixed 1024-token generation budget.
+Responses currently use a fixed 2048-token generation budget.
 
 ## Configuration
 
@@ -17,10 +17,12 @@ Responses currently use a fixed 1024-token generation budget.
     "custom_instruction_text": "",
     "request_interval_seconds": 60,
     "normalize_discord": true,
+    "multipart_responses": true,
     "history": {
         "enabled": true,
         "path": "ai_history.sqlite3",
-        "char_budget": 10000
+        "char_budget": 10000,
+        "persistent_char_budget": 5000
     },
     "breaks": {
         "enabled": true,
@@ -40,9 +42,11 @@ Fields:
 - `custom_instruction_text`: Optional admin-controlled instruction text appended after the base Bogobot instructions. Defaults to an empty string.
 - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to `60`; use `0` for local providers.
 - `normalize_discord`: Annotates Discord mentions and channels with readable names before sending context to the model. Defaults to `true`.
+- `multipart_responses`: Teaches the model that it may return normal text and tool calls in the same response. Defaults to `true`. When enabled, prompt examples use native tool-call JSON instead of hidden assistant XML tags.
 - `history.enabled`: Enables per-channel short-term AI history. Defaults to `true`.
 - `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
 - `history.char_budget`: Per-channel character budget. Oldest stored messages are deleted first. Defaults to `10000`.
+- `history.persistent_char_budget`: Global persistent memory injection budget. Defaults to `5000`.
 - `breaks.enabled`: Enables AI break periods. Defaults to `true`.
 - `breaks.active_minutes`: Minutes AI stays active before a break. Defaults to `20`.
 - `breaks.break_minutes`: Minutes AI ignores mentions and `/ai` while on break. Defaults to `10`.
@@ -91,10 +95,12 @@ Example config:
     "custom_instruction_text": "",
     "request_interval_seconds": 0,
     "normalize_discord": true,
+    "multipart_responses": true,
     "history": {
         "enabled": true,
         "path": "ai_history.sqlite3",
-        "char_budget": 10000
+        "char_budget": 10000,
+        "persistent_char_budget": 5000
     },
     "breaks": {
         "enabled": true,
@@ -118,10 +124,12 @@ Groq can be used through its OpenAI-compatible API. A longer request interval is
     "custom_instruction_text": "",
     "request_interval_seconds": 60,
     "normalize_discord": true,
+    "multipart_responses": true,
     "history": {
         "enabled": false,
         "path": "ai_history.sqlite3",
-        "char_budget": 10000
+        "char_budget": 10000,
+        "persistent_char_budget": 5000
     },
     "breaks": {
         "enabled": true,
@@ -145,10 +153,12 @@ Gemini/Gemma models can be used through Google's OpenAI-compatible endpoint.
     "custom_instruction_text": "",
     "request_interval_seconds": 30,
     "normalize_discord": true,
+    "multipart_responses": true,
     "history": {
         "enabled": true,
         "path": "ai_history.sqlite3",
-        "char_budget": 10000
+        "char_budget": 10000,
+        "persistent_char_budget": 5000
     },
     "breaks": {
         "enabled": true,
@@ -228,17 +238,33 @@ Hi.
 
 The model can ask Bogobot to make extra context available on a future AI turn. These requests do not run a second model call in the current turn. They are queued in SQLite, resolved before the next matching channel/user AI turn, injected as `{SYSTEM_TAG}:requested_context`, recorded into history, then discarded.
 
-For normal text replies, the model can append hidden XML request tags. These are removed before sending the visible Discord reply:
+With `ai.multipart_responses` enabled, Bogobot instructs the model to use the native `request_context` tool. The model can call this tool alongside normal assistant text when it wants to answer now and queue future context in the same turn.
+
+JSON argument examples:
+
+```json
+{"type":"stream"}
+{"type":"stats"}
+{"type":"sort"}
+{"type":"user","payload":{"user_id":"123456789012345678"}}
+{"type":"minigame","payload":{"game":"bogotree"}}
+{"type":"minigame","payload":{"game":"cbogo"}}
+{"type":"milestone"}
+```
+
+When `ai.multipart_responses` is disabled, Bogobot falls back to legacy hidden XML request tags in normal text replies. These are removed before sending the visible Discord reply:
 
 ```xml
 <{ASSISTANT_TAG}:context_request type="stream" />
+<{ASSISTANT_TAG}:context_request type="stats" />
+<{ASSISTANT_TAG}:context_request type="sort" />
 <{ASSISTANT_TAG}:context_request type="user" user_id="123456789012345678" />
 <{ASSISTANT_TAG}:context_request type="minigame" game="bogotree" />
 <{ASSISTANT_TAG}:context_request type="minigame" game="cbogo" />
 <{ASSISTANT_TAG}:context_request type="milestone" />
 ```
 
-For tool-call turns, Bogobot also exposes a `request_context` tool:
+The same tool is still available in legacy mode for tool-only turns:
 
 ```json
 {
@@ -249,14 +275,34 @@ For tool-call turns, Bogobot also exposes a `request_context` tool:
 }
 ```
 
-The tool version is useful when the model is already making tool calls. If the model needs to answer with normal text and request future context, it should use the hidden XML form instead, because tool-call turns cannot also send normal text reliably.
-
 Supported context request types:
 
-- `stream`: Adds current stream/bot state such as stream uptime.
-- `user`: Resolves a Discord user id into known username/display name/bot metadata.
-- `minigame`: Adds compact state for `bogotree` or `cbogo`.
+- `stream`: Adds current stats plus sort context.
+- `stats`: Adds stream uptime, stats source, last refresh time, and the cached stream stats.
+- `sort`: Adds section count, current color-derived sort values, and current best-shuffle section state.
+- `user`: Resolves a Discord user id into known username/display name/member metadata and account capabilities.
+- `minigame`: Adds server-local compact state and account entries for `bogotree` or `cbogo`.
 - `milestone`: Adds all milestone names, current values, and recent text history. Images are intentionally omitted.
+
+Queued context requests are channel-scoped. If a request also has a `user_id`, it is only consumed by that user's next matching AI turn.
+
+## Persistent Memory
+
+The model can maintain global persistent memory in SQLite. The configured memory budget is injected each turn, along with the remaining character count. Memories are intended for durable preferences, stable project facts, recurring decisions, and useful semi-persistent working context.
+
+With `ai.multipart_responses` enabled, Bogobot instructs the model to use the native `persistent_memory` tool. The model can call this tool alongside normal assistant text when it wants to answer now and update memory in the same turn.
+
+JSON argument examples:
+
+```json
+{"operation":"create","content":"The user prefers concise answers."}
+{"operation":"edit","id":123,"content":"The user prefers concise answers with concrete examples."}
+{"operation":"remove","id":123}
+```
+
+If a create or edit would exceed `ai.history.persistent_char_budget`, Bogobot records the attempt with `failed=true` and does not create or edit the stored memory.
+
+When `ai.multipart_responses` is disabled, Bogobot falls back to legacy hidden assistant XML tags for memory changes in normal text replies.
 
 ## AI Actions
 

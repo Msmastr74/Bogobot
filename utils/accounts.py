@@ -217,7 +217,15 @@ class AccountPermissions(Schema):
         )
 
     @classmethod
-    def _expand_capability_base(cls, capability: str) -> tuple[str, ...]:
+    def _expand_capability_base(
+        cls,
+        capability: str,
+        seen: set[str] | None = None,
+    ) -> tuple[str, ...]:
+        seen = set() if seen is None else seen
+        if capability in seen:
+            return ()
+        seen = {*seen, capability}
         expanded: list[tuple[str, ...]] = [()]
         for part in cls._capability_parts(capability):
             preset_name = cls._preset_name(part)
@@ -236,7 +244,7 @@ class AccountPermissions(Schema):
             next_expanded: list[tuple[str, ...]] = []
             for path in expanded:
                 for preset_capability in preset_capabilities:
-                    for preset_path in cls._expand_capability_base(preset_capability):
+                    for preset_path in cls._expand_capability_base(preset_capability, seen):
                         next_expanded.append((*path, *cls._capability_parts(preset_path)))
             expanded = next_expanded
 

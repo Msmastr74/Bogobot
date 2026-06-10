@@ -14,8 +14,8 @@ from discord.poll import Poll
 from discord.ui.view import BaseView
 from pydantic import AliasPath, Field, field_validator
 
-from typing import TYPE_CHECKING, Any, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
-from utils.ai_context import ContextRequest, close_system_tag, open_system_tag
+from typing import TYPE_CHECKING, Any, Awaitable, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
+from utils.ai.context import ContextRequest, close_system_tag, open_system_tag
 from utils.discord import chunk_text, split_text_to_character_limit
 from utils import groups
 from utils.schemas import Schema
@@ -61,6 +61,8 @@ BotAction: TypeAlias = Callable[..., Coro[None]]
 MAX_ASSISTANT_CONTEXT_CHARS = 4500
 MAX_REPLY_CHARS = 2000
 USER_AI_CAPABILITY = "user.ai"
+ContextSource: TypeAlias = 'discord.Message | discord.Interaction | discord.abc.MessageableChannel'
+ContextHandler: TypeAlias = Callable[[ContextRequest, ContextSource, str], Awaitable[str | None]]
 
 
 class AIHistoryConfig(Schema):
@@ -100,6 +102,7 @@ class AIConfig(Schema):
     custom_instruction_text: str = ""
     request_interval_seconds: float = 60.0
     normalize_discord: bool = True
+    multipart_responses: bool = True
     history: AIHistoryConfig = Field(default_factory=lambda: AIHistoryConfig.model_validate({}))
     breaks: AIBreakConfig = Field(default_factory=lambda: AIBreakConfig.model_validate({}))
 
@@ -145,6 +148,7 @@ def setup_ai(bot: "BotCore"):
         base_url=ai_config.base_url,
         request_interval_seconds=ai_config.request_interval_seconds,
         normalize_discord=ai_config.normalize_discord,
+        multipart_responses=ai_config.multipart_responses,
         history_enabled=ai_config.history.enabled,
         history_path=ai_config.history.path,
         history_char_budget=ai_config.history.char_budget,
@@ -578,13 +582,24 @@ class ContextRequestExecutor:
 
         self.bot = bot
         self.ai_core = ai_core
+        self.handlers: dict[str, ContextHandler] = {
+            "user": self._user_context,
+            "stream": self._stream_context,
+            "stats": self._stats_context,
+            "sort": self._sort_context,
+            "minigame": self._minigame_context,
+            "milestone": self._milestone_context,
+        }
 
     async def execute(
         self,
-        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
+        source: ContextSource,
         text: str,
     ) -> str | None:
         channel_id = self._source_channel_id(source)
+        if channel_id is None:
+            return None
+        source_user_id = self._source_user_id(source)
         requests = self.ai_core.context.query_context_requests(
             channel_id=channel_id
         )
@@ -593,6 +608,8 @@ class ContextRequestExecutor:
 
         blocks: list[str] = []
         for request in requests:
+            if request.user_id is not None and request.user_id != source_user_id:
+                continue
             content = await self._execute_request(request, source, text)
             self.ai_core.context.discard_context_request(request)
             if content is None:
@@ -604,53 +621,134 @@ class ContextRequestExecutor:
     async def _execute_request(
         self,
         request: ContextRequest,
-        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
+        source: ContextSource,
         text: str,
     ) -> str | None:
-        if request.type == "user":
-            return self._user_context(request, source)
-        if request.type == "stream":
-            return self._stream_context()
-        if request.type == "minigame":
-            return await self._minigame_context(request)
-        if request.type == "milestone":
-            return await self._milestone_context()
-        return None
+        handler = self.handlers.get(request.type)
+        if handler is None:
+            return None
+        try:
+            return await handler(request, source, text)
+        except Exception:
+            self.bot.logger.getChild("AI.Context").exception(
+                f"AI context request {request.type!r} failed"
+            )
+            return None
 
-    def _user_context(
+    async def _user_context(
         self,
         request: ContextRequest,
-        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
+        source: ContextSource,
+        text: str,
     ) -> str | None:
         user_id = self._payload_user_id(request) or self._source_user_id(source)
         if user_id is None:
             return None
         guild = getattr(source, "guild", None)
         user = guild.get_member(user_id) if guild is not None else self.bot.get_user(user_id)
+        account = self.bot.accounts[user_id].local(getattr(guild, "id", None))
+        capability_text = ", ".join(
+            f"{capability}:{depth}"
+            for capability, depth in sorted(account.permissions.capabilities.items())
+        ) or "none"
         if user is None:
-            return f"user_id: {user_id}\nknown: false"
-        return (
-            f"user_id: {user.id}\n"
-            f"username: {user.name}\n"
-            f"display_name: {json_string(user.display_name)}\n"
-            f"bot: {user.bot}"
-        )
+            return (
+                f"user_id: {user_id}\n"
+                "known: false\n"
+                f"capabilities: {capability_text}"
+            )
 
-    def _stream_context(self) -> str:
-        return f"stream_uptime: {self.bot.get_stream_uptime()}"
+        lines = [
+            f"user_id: {user.id}",
+            "known: true",
+            f"mention: <@{user.id}>",
+            f"username: {user.name}",
+            f"display_name: {json_string(user.display_name)}",
+            f"bot: {user.bot}",
+            f"created_at: {user.created_at.isoformat()}",
+            f"capabilities: {capability_text}",
+        ]
+        if isinstance(user, discord.Member):
+            lines.extend((
+                f"guild_id: {user.guild.id}",
+                f"guild_name: {json_string(user.guild.name)}",
+                f"joined_at: {user.joined_at.isoformat() if user.joined_at is not None else 'None'}",
+                "roles: " + ", ".join(
+                    f"{role.name}:{role.id}"
+                    for role in user.roles
+                    if role.name != "@everyone"
+                ),
+            ))
+        return "\n".join(lines)
 
-    async def _minigame_context(self, request: ContextRequest) -> str | None:
+    async def _stream_context(
+        self,
+        request: ContextRequest,
+        source: ContextSource,
+        text: str,
+    ) -> str:
+        return "\n".join((
+            await self._stats_context(request, source, text),
+            "",
+            await self._sort_context(request, source, text),
+        ))
+
+    async def _stats_context(
+        self,
+        request: ContextRequest,
+        source: ContextSource,
+        text: str,
+    ) -> str:
+        lines = [
+            f"stream_uptime: {self.bot.get_stream_uptime()}",
+            f"stats_source: {self.bot.config.get('stats_source', 'api')}",
+            f"last_stats_refresh_unix: {self.bot._last_ocr_refresh or 0}",
+            "stats:",
+        ]
+        if self.bot.stats:
+            for key, value in sorted(self.bot.stats.items()):
+                lines.append(f"- {key}: {value}")
+        else:
+            lines.append("- none")
+        return "\n".join(lines)
+
+    async def _sort_context(
+        self,
+        request: ContextRequest,
+        source: ContextSource,
+        text: str,
+    ) -> str:
+        correct_count = sum(1 for correct, _value in self.bot.new_values if correct)
+        return "\n".join((
+            f"sort_section_count: {self.bot.SORT_SECTION_COUNT}",
+            f"best_shuffle_correct_count: {correct_count}",
+            f"best_shuffle_sections: {self.bot.best_shuffle_sections}",
+            f"sort_values: {self.bot.sort_values}",
+            f"new_values: {self.bot.new_values}",
+        ))
+
+    async def _minigame_context(
+        self,
+        request: ContextRequest,
+        source: ContextSource,
+        text: str,
+    ) -> str | None:
         game = str(request.payload.get("game") or request.payload.get("query") or "").strip().casefold()
+        guild_id = self._source_guild_id(source)
+        if guild_id is None:
+            return "minigame: unavailable outside a server"
         if game in ("bogotree", "tree"):
-            data = await self._json_file("bogotree.json")
+            data = await self._server_json_file("bogotree.json", "servers", guild_id)
             raw_state = data.get("state")
             state = raw_state if isinstance(raw_state, dict) else {}
-            return self._bogotree_context(state)
+            leaderboard = await self._minigame_account_context(guild_id, "bogotree")
+            return self._join_context(self._bogotree_context(state), leaderboard)
         if game in ("cbogo", "community_bogosort", "community-bogosort"):
-            data = await self._json_file("cbogo.json")
+            data = await self._server_json_file("cbogo.json", "servers", guild_id)
             raw_state = data.get("state")
             state = raw_state if isinstance(raw_state, dict) else data
-            return self._cbogo_context(state)
+            leaderboard = await self._minigame_account_context(guild_id, "cbogo")
+            return self._join_context(self._cbogo_context(state), leaderboard)
         return None
 
     def _bogotree_context(self, state: dict[str, Any]) -> str:
@@ -683,7 +781,12 @@ class ContextRequestExecutor:
             f"last_user: {state.get('last_user')}",
         ))
 
-    async def _milestone_context(self) -> str | None:
+    async def _milestone_context(
+        self,
+        request: ContextRequest,
+        source: ContextSource,
+        text: str,
+    ) -> str | None:
         if self.bot.milestones is None:
             return "milestones: unavailable"
 
@@ -709,6 +812,28 @@ class ContextRequestExecutor:
                 lines.append("- (empty)")
             lines.append("")
         return "\n".join(lines)
+
+    async def _server_json_file(self, path: str, servers_key: str, guild_id: int) -> dict[str, Any]:
+        data = await self._json_file(path)
+        raw_servers = data.get(servers_key)
+        servers = raw_servers if isinstance(raw_servers, dict) else {}
+        raw_server = servers.get(str(guild_id))
+        if isinstance(raw_server, dict):
+            return raw_server
+        return data
+
+    async def _minigame_account_context(self, guild_id: int, key: str) -> str:
+        rows = await self.bot.accounts.query_local(guild_id, key)
+        if not rows:
+            return "leaderboard: none"
+        lines = [f"leaderboard_entries: {len(rows)}"]
+        for uid, raw_stats in rows[:10]:
+            compact_stats = json.dumps(raw_stats, ensure_ascii=False, separators=(",", ":"), default=str)
+            lines.append(f"- user_id: {uid}, stats: {compact_stats}")
+        return "\n".join(lines)
+
+    def _join_context(self, *parts: str | None) -> str:
+        return "\n".join(part.strip() for part in parts if part and part.strip())
 
     async def _json_file(self, path: str) -> dict[str, Any]:
         def load() -> dict[str, Any]:
@@ -767,13 +892,22 @@ class ContextRequestExecutor:
 
     def _source_user_id(
         self,
-        source: 'discord.Message | discord.Interaction | discord.abc.MessageableChannel',
+        source: ContextSource,
     ) -> int | None:
         if isinstance(source, discord.Message):
             return source.author.id
         if isinstance(source, discord.Interaction):
             return source.user.id
         return None
+
+    def _source_guild_id(self, source: ContextSource) -> int | None:
+        if isinstance(source, discord.Message):
+            return source.guild.id if source.guild is not None else None
+        if isinstance(source, discord.Interaction):
+            return source.guild_id
+        guild = getattr(source, "guild", None)
+        guild_id = getattr(guild, "id", None)
+        return guild_id if isinstance(guild_id, int) else None
 
     def _payload_user_id(self, request: ContextRequest) -> int | None:
         raw_user_id = request.payload.get("user_id")
