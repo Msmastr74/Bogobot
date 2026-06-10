@@ -675,6 +675,20 @@ class AIContext:
             for memory_id, created_at, updated_at, content in rows
         ]
 
+    def next_persistent_memory_id(self) -> int:
+        with closing(self._history_connection()) as connection:
+            self._ensure_persistent_memory_schema(connection)
+            sequence_row = connection.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = ?",
+                ("ai_persistent_memories",),
+            ).fetchone()
+            if sequence_row is not None and sequence_row[0] is not None:
+                return int(sequence_row[0]) + 1
+            max_row = connection.execute(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM ai_persistent_memories"
+            ).fetchone()
+        return int(max_row[0]) if max_row is not None else 1
+
     def create_persistent_memory(self, content: str) -> PersistentMemory | None:
         content = content.strip()
         if not content:

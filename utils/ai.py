@@ -383,10 +383,11 @@ class AICore(Generic[ContextT, ActionT]):
                         )
                     continue
                 if call.name == _PERSISTENT_MEMORY_TOOL_NAME:
-                    if self._apply_persistent_memory_tool_call(call):
+                    memory_history = self._apply_persistent_memory_tool_call(call)
+                    if memory_history is not None:
                         self.context.record_message(
                             "assistant",
-                            self.context.format_command_call(call.name, call.arguments),
+                            self.context.format_command_call(call.name, memory_history),
                             None,
                             channel_id=channel_id,
                         )
@@ -593,9 +594,12 @@ class AICore(Generic[ContextT, ActionT]):
             f"- If you call `{_CONTEXT_REQUEST_TOOL_NAME}`, `{_PERSISTENT_MEMORY_TOOL_NAME}`, or any other tool, you cannot also respond with normal text in that same turn. To answer the user now and request future context or memory changes, use text tags instead of the tool.\n"
             "- Use passive context requests when they feel relevant or likely to make a future reply more useful.\n"
             "## Persistent Memory\n"
-            "Persistent memory is global long-term memory. Use it only for durable facts, preferences, and operating instructions worth retaining across channels and restarts.\n"
+            "Persistent memory is global long-term memory. Use it opportunistically, but budget it deliberately.\n"
             f"- The system injects at most {self.memory_char_budget} characters of persistent memory per turn.\n"
-            "- You may create, edit, or remove persistent memories when it feels useful, especially for stable preferences, durable project facts, recurring decisions, and corrections likely to matter later. Do not store transient chatter.\n"
+            "- The latest memory context includes `<remaining_persistent_memory_chars>N<remaining_persistent_memory_chars/>` so you can estimate how much space is left before creating or expanding memories.\n"
+            "- Allocate some budget to truly durable facts, preferences, and operating instructions, and some to semi-persistent working memory: useful project facts, recurring decisions, names, corrections, or context you expect to matter again soon.\n"
+            "- Prefer compact memories. Merge, edit, or remove stale memories instead of creating duplicates. If the remaining budget is tight, shorten or replace an older memory.\n"
+            "- If a create or edit would exceed the persistent memory budget, the system records it with `failed=\"true\"` and does not create or edit the stored memory. If you later see a failed memory attempt, retry with shorter content or free budget first.\n"
             f"- To create a memory in a normal text reply, append `<{ASSISTANT_NAMESPACE}:persistent_memory>memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`. If you add an id attribute on creation, it is ignored.\n"
             f"- To edit memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory edit=\"123\">new memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`.\n"
             f"- To remove memory id 123, append `<{ASSISTANT_NAMESPACE}:persistent_memory remove=\"123\" />`.\n"
@@ -815,12 +819,7 @@ class AICore(Generic[ContextT, ActionT]):
         for memory in memories:
             if memory.id is None or not memory.content.strip():
                 continue
-            attrs = f'id={json.dumps(str(memory.id), ensure_ascii=False)}'
-            block = (
-                f"{open_system_tag('persistent_memory').replace('>', f' {attrs}>')}\n"
-                f"{memory.content.strip()}\n"
-                f"{close_system_tag('persistent_memory')}"
-            )
+            block = self._persistent_memory_context_block(memory.id, memory.content)
             block_len = len(block)
             if total + block_len > self.memory_char_budget:
                 break
@@ -831,6 +830,75 @@ class AICore(Generic[ContextT, ActionT]):
             f"<remaining_persistent_memory_chars>{remaining}<remaining_persistent_memory_chars/>"
         )
         return blocks
+
+    def _persistent_memory_context_block(self, memory_id: int, content: str) -> str:
+        attrs = f'id={json.dumps(str(memory_id), ensure_ascii=False)}'
+        return (
+            f"{open_system_tag('persistent_memory').replace('>', f' {attrs}>')}\n"
+            f"{content.strip()}\n"
+            f"{close_system_tag('persistent_memory')}"
+        )
+
+    def _persistent_memory_projected_chars(
+        self,
+        *,
+        edit_id: int | None = None,
+        edit_content: str | None = None,
+        create_id: int | None = None,
+        create_content: str | None = None,
+    ) -> int:
+        total = 0
+        for memory in self.context.persistent_memories():
+            if memory.id is None:
+                continue
+            content = edit_content if memory.id == edit_id and edit_content is not None else memory.content
+            if content.strip():
+                total += len(self._persistent_memory_context_block(memory.id, content))
+        if create_id is not None and create_content is not None and create_content.strip():
+            total += len(self._persistent_memory_context_block(create_id, create_content))
+        return total
+
+    def _persistent_memory_create_fits(self, content: str) -> tuple[bool, int]:
+        memory_id = self.context.next_persistent_memory_id()
+        projected = self._persistent_memory_projected_chars(
+            create_id=memory_id,
+            create_content=content,
+        )
+        return projected <= self.memory_char_budget, memory_id
+
+    def _persistent_memory_edit_fits(self, memory_id: int, content: str) -> bool:
+        projected = self._persistent_memory_projected_chars(
+            edit_id=memory_id,
+            edit_content=content,
+        )
+        return projected <= self.memory_char_budget
+
+    def _persistent_memory_assistant_tag(
+        self,
+        *,
+        content: str = "",
+        memory_id: int | None = None,
+        edit_id: int | None = None,
+        remove_id: int | None = None,
+        failed: bool = False,
+    ) -> str:
+        attrs: list[str] = []
+        if memory_id is not None:
+            attrs.append(f"id={json.dumps(str(memory_id), ensure_ascii=False)}")
+        if edit_id is not None:
+            attrs.append(f"edit={json.dumps(str(edit_id), ensure_ascii=False)}")
+        if remove_id is not None:
+            attrs.append(f"remove={json.dumps(str(remove_id), ensure_ascii=False)}")
+        if failed:
+            attrs.append('failed="true"')
+        attr_text = f" {' '.join(attrs)}" if attrs else ""
+        if remove_id is not None and not content.strip():
+            return f"<{ASSISTANT_NAMESPACE}:persistent_memory{attr_text} />"
+        return (
+            f"<{ASSISTANT_NAMESPACE}:persistent_memory{attr_text}>"
+            f"{content.strip()}"
+            f"</{ASSISTANT_NAMESPACE}:persistent_memory>"
+        )
 
     def _extract_text_persistent_memories(self, value: str) -> tuple[str, str]:
         reader = XMLReader(value)
@@ -845,16 +913,31 @@ class AICore(Generic[ContextT, ActionT]):
                 removed = self.context.remove_persistent_memory(remove_id)
                 self.logger.debug(f"persistent memory remove id={remove_id} removed={removed}.")
             elif edit_id is not None:
+                if not self._persistent_memory_edit_fits(edit_id, body):
+                    replacements[tag.start] = self._persistent_memory_assistant_tag(
+                        content=body,
+                        edit_id=edit_id,
+                        failed=True,
+                    )
+                    self.logger.debug(f"persistent memory edit id={edit_id} failed over budget.")
+                    continue
                 edited = self.context.edit_persistent_memory(edit_id, body)
                 self.logger.debug(f"persistent memory edit id={edit_id} edited={edited is not None}.")
             else:
+                fits, _memory_id = self._persistent_memory_create_fits(body)
+                if not fits:
+                    replacements[tag.start] = self._persistent_memory_assistant_tag(
+                        content=body,
+                        failed=True,
+                    )
+                    self.logger.debug("persistent memory create failed over budget.")
+                    continue
                 created = self.context.create_persistent_memory(body)
                 self.logger.debug(f"persistent memory create id={created.id if created is not None else None}.")
                 if created is not None and created.id is not None:
-                    replacements[tag.start] = (
-                        f"<{ASSISTANT_NAMESPACE}:persistent_memory id={json.dumps(str(created.id), ensure_ascii=False)}>"
-                        f"{created.content}"
-                        f"</{ASSISTANT_NAMESPACE}:persistent_memory>"
+                    replacements[tag.start] = self._persistent_memory_assistant_tag(
+                        content=created.content,
+                        memory_id=created.id,
                     )
         return reader.remove(tags), reader.rewrite(replacements)
 
@@ -890,26 +973,35 @@ class AICore(Generic[ContextT, ActionT]):
             user_id=user_id,
         )
 
-    def _apply_persistent_memory_tool_call(self, call: _ToolCall) -> bool:
+    def _apply_persistent_memory_tool_call(self, call: _ToolCall) -> dict[str, Any] | None:
         raw_operation = call.arguments.get("operation")
         operation = raw_operation.strip().casefold() if isinstance(raw_operation, str) else ""
         memory_id = self._coerce_memory_id(call.arguments.get("id"))
         raw_content = call.arguments.get("content")
         content = raw_content.strip() if isinstance(raw_content, str) else ""
         if operation == "create":
+            fits, _memory_id = self._persistent_memory_create_fits(content)
+            if not fits:
+                self.logger.debug("persistent memory tool create failed over budget.")
+                return {**call.arguments, "failed": True}
             created = self.context.create_persistent_memory(content)
             self.logger.debug(f"persistent memory tool create id={created.id if created is not None else None}.")
-            return created is not None
+            if created is None:
+                return None
+            return {**call.arguments, "id": created.id}
         if operation == "edit" and memory_id is not None:
+            if not self._persistent_memory_edit_fits(memory_id, content):
+                self.logger.debug(f"persistent memory tool edit id={memory_id} failed over budget.")
+                return {**call.arguments, "failed": True}
             edited = self.context.edit_persistent_memory(memory_id, content)
             self.logger.debug(f"persistent memory tool edit id={memory_id} edited={edited is not None}.")
-            return edited is not None
+            return call.arguments if edited is not None else None
         if operation == "remove" and memory_id is not None:
             removed = self.context.remove_persistent_memory(memory_id)
             self.logger.debug(f"persistent memory tool remove id={memory_id} removed={removed}.")
-            return removed
+            return call.arguments if removed else None
         self.logger.debug(f"persistent memory tool call ignored: {call.arguments!r}.")
-        return False
+        return None
 
     def _coerce_memory_id(self, value: Any) -> int | None:
         try:
