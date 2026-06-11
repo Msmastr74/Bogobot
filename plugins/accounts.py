@@ -42,9 +42,9 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
     "user": ("commands", "user"),
     "ai": ("user.ai",),
     "moderator": (
-        "capabilities.manage",
         "accounts.ban.use",
         "ai.activity.use",
+        "ai.manage.memory.channel.use",
         "games.bogotree.use",
         "games.cbogo.use",
         "milestones.use",

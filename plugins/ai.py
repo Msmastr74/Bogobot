@@ -14,10 +14,10 @@ from discord.poll import Poll
 from discord.ui.view import BaseView
 from pydantic import AliasPath, Field, field_validator
 
-from typing import TYPE_CHECKING, Any, Awaitable, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Literal, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
-from utils.ai.context import ContextRequest, close_system_tag, open_system_tag
-from utils.discord import chunk_text, split_text_to_character_limit
+from utils.ai.context import ContextRequest, HistoryMessage, PersistentMemory, close_system_tag, open_system_tag
+from utils.discord import chunk_text, count_characters, split_text_to_character_limit
 from utils import groups
 from utils.schemas import Schema
 from utils.type import Coro
@@ -62,6 +62,10 @@ BotAction: TypeAlias = Callable[..., Coro[None]]
 MAX_ASSISTANT_CONTEXT_CHARS = 4500
 MAX_REPLY_CHARS = 2000
 USER_AI_CAPABILITY = "user.ai"
+AI_MANAGE_CONFIG_CAPABILITY = "ai.manage.config"
+AI_MANAGE_MEMORY_CAPABILITY = "ai.manage.memory.[any]"
+AI_MANAGE_MEMORY_CHANNEL_CAPABILITY = "ai.manage.memory.channel"
+AI_MANAGE_MEMORY_PERSISTENT_CAPABILITY = "ai.manage.memory.persistent"
 ContextSource: TypeAlias = 'discord.Message | discord.Interaction | discord.abc.MessageableChannel'
 ContextHandler: TypeAlias = Callable[[ContextRequest, ContextSource, str], Awaitable[str | None]]
 
@@ -926,7 +930,12 @@ async def capture_interaction_output(interaction: discord.Interaction):
 async def setup(bot: 'BotCore'):
     ai_core = setup_ai(bot)
     manage = groups.manage(bot)
-    bot.accounts.capabilities.register(USER_AI_CAPABILITY)
+    bot.accounts.capabilities.register(
+        USER_AI_CAPABILITY,
+        AI_MANAGE_CONFIG_CAPABILITY,
+        AI_MANAGE_MEMORY_CHANNEL_CAPABILITY,
+        AI_MANAGE_MEMORY_PERSISTENT_CAPABILITY,
+    )
 
     bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
@@ -1098,7 +1107,7 @@ async def setup(bot: 'BotCore'):
             self.submitted = True
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
-            await interaction.followup.send("Updated custom instructions.")
+            await interaction.followup.send("Updated custom instructions.", ephemeral=True)
 
     class AIBreaksModal(discord.ui.Modal, title="AI Breaks"):
         def __init__(self) -> None:
@@ -1135,17 +1144,422 @@ async def setup(bot: 'BotCore'):
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
-            await interaction.followup.send("Updated AI break settings.")
+            await interaction.followup.send("Updated AI break settings.", ephemeral=True)
+
+    MEMORY_PAGE_MAX_ITEMS = 5
+    MEMORY_PAGE_TEXT_LIMIT = 3800
+    MEMORY_ITEM_TEXT_LIMIT = 900
+    MEMORY_MODAL_TEXT_LIMIT = 4000
+
+    def user_has_capability(interaction: discord.Interaction, capability: str) -> bool:
+        return bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(capability)
+
+    def memory_tab_available(interaction: discord.Interaction, tab: str) -> tuple[bool, str | None]:
+        if tab == "channel":
+            if interaction.channel_id is None:
+                return False, "Channel memory is only available from a Discord channel."
+            if not user_has_capability(interaction, AI_MANAGE_MEMORY_CHANNEL_CAPABILITY):
+                return False, f"Missing `{AI_MANAGE_MEMORY_CHANNEL_CAPABILITY}`."
+            return True, None
+        if not user_has_capability(interaction, AI_MANAGE_MEMORY_PERSISTENT_CAPABILITY):
+            return False, f"Missing `{AI_MANAGE_MEMORY_PERSISTENT_CAPABILITY}`."
+        return True, None
+
+    def short_memory_text(value: str, chunk_index: int) -> tuple[str, int]:
+        chunks = split_text_to_character_limit(value.strip() or "\u200d", MEMORY_ITEM_TEXT_LIMIT)
+        if not chunks:
+            return "\u200d", 1
+        chunk_index = min(max(0, chunk_index), len(chunks) - 1)
+        return chunks[chunk_index], len(chunks)
+
+    def memory_content_display(value: str) -> str:
+        value = value.strip() or "\u200d"
+        if "```" in value:
+            value = value.replace("```", "'''")
+        return f"```text\n{value}\n```"
+
+    class AIMemoryButton(discord.ui.Button[discord.ui.LayoutView]):
+        def __init__(
+            self,
+            view_ref: "AIMemoryView",
+            action: Literal["add", "edit", "delete", "chunk"],
+            *,
+            item: HistoryMessage | PersistentMemory | None = None,
+            key: str | None = None,
+            delta: int = 0,
+            label: str | None = None,
+            emoji: str | None = None,
+            style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+            disabled: bool = False,
+        ) -> None:
+            super().__init__(
+                label=label,
+                emoji=emoji,
+                style=style,
+                disabled=disabled,
+            )
+            self.view_ref = view_ref
+            self.action = action
+            self.item = item
+            self.key = key
+            self.delta = delta
+
+        async def callback(self, interaction: discord.Interaction) -> None:
+            view = self.view_ref
+            if self.action == "chunk" and self.key is not None:
+                view.chunk_indexes[self.key] = max(0, view.chunk_indexes.get(self.key, 0) + self.delta)
+                view.render()
+                await interaction.response.edit_message(view=view)
+                return
+
+            if self.action == "edit" and self.item is not None:
+                modal = AIMemoryEditModal(view, self.item)
+                await interaction.response.send_modal(modal)
+                await modal.wait()
+                if modal.submitted:
+                    view.render()
+                    await interaction.edit_original_response(view=view)
+                return
+
+            if self.action == "delete" and self.item is not None:
+                if isinstance(self.item, HistoryMessage):
+                    ai_core.context.remove_history_message(int(self.item.id or 0))
+                else:
+                    ai_core.context.remove_persistent_memory(int(self.item.id or 0))
+                view.render()
+                await interaction.response.edit_message(view=view)
+                return
+
+            if self.action == "add":
+                modal = AIMemoryCreateModal(view)
+                await interaction.response.send_modal(modal)
+                await modal.wait()
+                if modal.submitted:
+                    view.render()
+                    await interaction.edit_original_response(view=view)
+
+    class AIMemoryView(discord.ui.LayoutView):
+        def __init__(
+            self,
+            interaction: discord.Interaction,
+            *,
+            tab: str = "channel",
+            page: int = 0,
+            chunk_indexes: dict[str, int] | None = None,
+        ) -> None:
+            super().__init__(timeout=300)
+            self.source_interaction = interaction
+            self.tab = tab
+            self.page = max(0, page)
+            self.chunk_indexes = dict(chunk_indexes or {})
+            self.render()
+
+        def render(self) -> None:
+            self.clear_items()
+            container = discord.ui.Container()
+            container.add_item(discord.ui.TextDisplay("## AI Memory"))
+            container.add_item(discord.ui.Separator())
+            channel_button = discord.ui.Button(
+                label="Channel Memory",
+                style=discord.ButtonStyle.primary if self.tab == "channel" else discord.ButtonStyle.secondary,
+            )
+            persistent_button = discord.ui.Button(
+                label="Persistent Memory",
+                style=discord.ButtonStyle.primary if self.tab == "persistent" else discord.ButtonStyle.secondary,
+            )
+            channel_button.callback = self.show_channel
+            persistent_button.callback = self.show_persistent
+            container.add_item(discord.ui.ActionRow(channel_button, persistent_button))
+            container.add_item(discord.ui.Separator())
+
+            available, unavailable_reason = memory_tab_available(self.source_interaction, self.tab)
+            if not available:
+                container.add_item(discord.ui.TextDisplay(
+                    "### Unavailable\n"
+                    f"{unavailable_reason or 'This memory panel is unavailable here.'}"
+                ))
+                self.add_item(container)
+                return
+
+            items = self.current_items()
+            pages = self.paginated_items(items)
+            total_pages = max(1, len(pages))
+            self.page = min(self.page, total_pages - 1)
+            page_items = pages[self.page] if pages else []
+
+            add_button = AIMemoryButton(
+                self,
+                "add",
+                label="Add Memory" if self.tab == "persistent" else "Add Message",
+                emoji="➕",
+                style=discord.ButtonStyle.secondary,
+            )
+            container.add_item(discord.ui.ActionRow(add_button))
+
+            if not page_items:
+                container.add_item(discord.ui.TextDisplay("No memory entries."))
+            else:
+                for item in page_items:
+                    self.add_memory_item(container, item)
+
+            container.add_item(discord.ui.Separator())
+            previous_page = discord.ui.Button(
+                label="Previous",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page <= 0,
+            )
+            next_page = discord.ui.Button(
+                label="Next",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page >= total_pages - 1,
+            )
+            previous_page.callback = self.previous_page
+            next_page.callback = self.next_page
+            container.add_item(discord.ui.ActionRow(
+                previous_page,
+                next_page,
+                discord.ui.Button(
+                    label=f"{self.page + 1}/{total_pages}",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                ),
+            ))
+            self.add_item(container)
+
+        def current_items(self) -> list[HistoryMessage | PersistentMemory]:
+            if self.tab == "channel":
+                channel_id = self.source_interaction.channel_id
+                return list(ai_core.context.channel_history_messages(channel_id)) if channel_id is not None else []
+            return list(ai_core.context.persistent_memories())
+
+        def paginated_items(
+            self,
+            items: list[HistoryMessage | PersistentMemory],
+        ) -> list[list[HistoryMessage | PersistentMemory]]:
+            pages: list[list[HistoryMessage | PersistentMemory]] = []
+            current_page: list[HistoryMessage | PersistentMemory] = []
+            current_length = 0
+            for item in items:
+                body = self.memory_item_body(item)
+                item_length = count_characters(body)
+                if (
+                    current_page
+                    and (
+                        len(current_page) >= MEMORY_PAGE_MAX_ITEMS
+                        or current_length + item_length > MEMORY_PAGE_TEXT_LIMIT
+                    )
+                ):
+                    pages.append(current_page)
+                    current_page = []
+                    current_length = 0
+                current_page.append(item)
+                current_length += item_length
+            if current_page:
+                pages.append(current_page)
+            return pages
+
+        def add_memory_item(
+            self,
+            container: discord.ui.Container,
+            item: HistoryMessage | PersistentMemory,
+        ) -> None:
+            body = self.memory_item_body(item)
+            key = self.memory_item_key(item)
+            _chunk, chunk_count = short_memory_text(item.content, self.chunk_indexes.get(key, 0))
+            self.chunk_indexes[key] = min(self.chunk_indexes.get(key, 0), chunk_count - 1)
+
+            edit_button = AIMemoryButton(
+                self,
+                "edit",
+                item=item,
+                label="Edit",
+                emoji="✏️",
+                style=discord.ButtonStyle.secondary,
+            )
+            delete_button = AIMemoryButton(
+                self,
+                "delete",
+                item=item,
+                label="Delete",
+                emoji="🗑️",
+                style=discord.ButtonStyle.danger,
+            )
+            previous_chunk = AIMemoryButton(
+                self,
+                "chunk",
+                key=key,
+                delta=-1,
+                label="Text",
+                emoji="⬆️",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.chunk_indexes[key] <= 0,
+            )
+            next_chunk = AIMemoryButton(
+                self,
+                "chunk",
+                key=key,
+                delta=1,
+                label="Text",
+                emoji="⬇️",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.chunk_indexes[key] >= chunk_count - 1,
+            )
+
+            container.add_item(discord.ui.TextDisplay(body))
+            container.add_item(discord.ui.ActionRow(previous_chunk, next_chunk, edit_button, delete_button))
+            container.add_item(discord.ui.Separator())
+
+        def memory_item_key(self, item: HistoryMessage | PersistentMemory) -> str:
+            item_id = int(item.id or 0)
+            return f"{self.tab}:{item_id}"
+
+        def memory_item_body(self, item: HistoryMessage | PersistentMemory) -> str:
+            key = self.memory_item_key(item)
+            content = item.content
+            chunk_index = self.chunk_indexes.get(key, 0)
+            chunk, chunk_count = short_memory_text(content, chunk_index)
+            self.chunk_indexes[key] = min(chunk_index, chunk_count - 1)
+            title = self.item_title(item)
+            body = f"### {title}\n{memory_content_display(chunk)}"
+            if chunk_count > 1:
+                body += f"\n-# Chunk {self.chunk_indexes[key] + 1}/{chunk_count}"
+            return body
+
+        def item_title(self, item: HistoryMessage | PersistentMemory) -> str:
+            if isinstance(item, HistoryMessage):
+                created = (
+                    discord.utils.format_dt(item.created_at, style="R")
+                    if item.created_at is not None else
+                    "Unknown time"
+                )
+                return f"Message `{item.id}` `{item.role}` {created}"
+            updated = (
+                discord.utils.format_dt(item.updated_at, style="R")
+                if item.updated_at is not None else
+                "Unknown time"
+            )
+            return f"Memory `{item.id}` {updated}"
+
+        async def show_channel(self, interaction: discord.Interaction) -> None:
+            await self.switch_tab(interaction, "channel")
+
+        async def show_persistent(self, interaction: discord.Interaction) -> None:
+            await self.switch_tab(interaction, "persistent")
+
+        async def switch_tab(self, interaction: discord.Interaction, tab: str) -> None:
+            self.tab = tab
+            self.page = 0
+            self.render()
+            await interaction.response.edit_message(view=self)
+
+        async def previous_page(self, interaction: discord.Interaction) -> None:
+            self.page = max(0, self.page - 1)
+            self.render()
+            await interaction.response.edit_message(view=self)
+
+        async def next_page(self, interaction: discord.Interaction) -> None:
+            self.page += 1
+            self.render()
+            await interaction.response.edit_message(view=self)
+
+    class AIMemoryEditModal(discord.ui.Modal, title="Edit AI Memory"):
+        def __init__(self, view: AIMemoryView, item: HistoryMessage | PersistentMemory) -> None:
+            super().__init__()
+            self.view_ref = view
+            self.item = item
+            self.submitted = False
+            self.content = discord.ui.TextInput(
+                label="Content",
+                style=discord.TextStyle.paragraph,
+                required=True,
+                default=truncate_text_to_character_limit(item.content, MEMORY_MODAL_TEXT_LIMIT),
+                max_length=MEMORY_MODAL_TEXT_LIMIT,
+            )
+            self.add_item(self.content)
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            value = self.content.value.strip()
+            if not value:
+                await interaction.response.send_message("Memory content cannot be empty.", ephemeral=True)
+                return
+            if isinstance(self.item, HistoryMessage):
+                ai_core.context.edit_history_message(int(self.item.id or 0), value)
+            else:
+                ai_core.context.edit_persistent_memory(int(self.item.id or 0), value)
+            self.submitted = True
+            await interaction.response.defer(ephemeral=True)
+
+    class AIMemoryCreateModal(discord.ui.Modal, title="Create AI Memory"):
+        def __init__(self, view: AIMemoryView) -> None:
+            super().__init__()
+            self.view_ref = view
+            self.submitted = False
+            self.role = discord.ui.TextInput(
+                label="Role",
+                required=view.tab == "channel",
+                default="assistant" if view.tab == "channel" else "",
+                max_length=16,
+            )
+            self.content = discord.ui.TextInput(
+                label="Content",
+                style=discord.TextStyle.paragraph,
+                required=True,
+                max_length=MEMORY_MODAL_TEXT_LIMIT,
+            )
+            if view.tab == "channel":
+                self.add_item(self.role)
+            self.add_item(self.content)
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            value = self.content.value.strip()
+            if not value:
+                await interaction.response.send_message("Memory content cannot be empty.", ephemeral=True)
+                return
+            if self.view_ref.tab == "channel":
+                raw_role = self.role.value.strip().casefold()
+                if raw_role not in ("user", "assistant"):
+                    await interaction.response.send_message("Role must be `user` or `assistant`.", ephemeral=True)
+                    return
+                channel_id = self.view_ref.source_interaction.channel_id
+                if channel_id is None:
+                    await interaction.response.send_message("Channel history is unavailable here.", ephemeral=True)
+                    return
+                ai_core.context.create_history_message(channel_id, cast(Literal["user", "assistant"], raw_role), value)
+            else:
+                ai_core.context.create_persistent_memory(value)
+            self.submitted = True
+            await interaction.response.defer(ephemeral=True)
 
     @manage.command(
         name="ai",
         description="Manage AI settings",
-        capabilities=["ai.manage"],
+        capabilities=["ai.manage.[any]"],
         defer=False,
     )
-    async def manage_ai(interaction: discord.Interaction) -> None:
+    async def manage_ai(
+        interaction: discord.Interaction,
+        action: Literal["config", "memory"] = "config",
+    ) -> None:
+        if action == "config":
+            if not user_has_capability(interaction, AI_MANAGE_CONFIG_CAPABILITY):
+                await bot.discord.send(
+                    contents=f"Missing `{AI_MANAGE_CONFIG_CAPABILITY}`.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            view: discord.ui.LayoutView = AIManagementView()
+        else:
+            if not user_has_capability(interaction, AI_MANAGE_MEMORY_CAPABILITY):
+                await bot.discord.send(
+                    contents=f"Missing `{AI_MANAGE_MEMORY_CAPABILITY}`.",
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+            view = AIMemoryView(interaction)
         await bot.discord.send(
-            view=AIManagementView(),
+            view=view,
             response=True,
             ephemeral=True,
         )

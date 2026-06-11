@@ -309,6 +309,8 @@ class HistoryMessage:
     role: Literal["user", "assistant"]
     content: str
     id: int | None = None
+    channel_id: int | None = None
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,6 +551,75 @@ class AIContext:
             for row_id, role, content in rows
         ]
 
+    def channel_history_messages(self, channel_id: int) -> list[HistoryMessage]:
+        with closing(self._history_connection()) as connection:
+            self._ensure_history_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT id, channel_id, created_at, role, content
+                FROM ai_history_messages
+                WHERE channel_id = ?
+                ORDER BY id
+                """,
+                (channel_id,),
+            ).fetchall()
+        return [
+            HistoryMessage(
+                id=int(row_id),
+                channel_id=int(row_channel_id),
+                created_at=datetime.fromisoformat(created_at),
+                role=role,
+                content=str(content),
+            )
+            for row_id, row_channel_id, created_at, role, content in rows
+        ]
+
+    def edit_history_message(self, message_id: int, content: str) -> HistoryMessage | None:
+        content = content.strip()
+        if not content:
+            return None
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_history_schema(connection)
+                cursor = connection.execute(
+                    """
+                    UPDATE ai_history_messages
+                    SET content = ?
+                    WHERE id = ?
+                    """,
+                    (content, message_id),
+                )
+                if cursor.rowcount < 1:
+                    return None
+                row = connection.execute(
+                    """
+                    SELECT id, channel_id, created_at, role, content
+                    FROM ai_history_messages
+                    WHERE id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        row_id, channel_id, created_at, role, row_content = row
+        return HistoryMessage(
+            id=int(row_id),
+            channel_id=int(channel_id),
+            created_at=datetime.fromisoformat(created_at),
+            role=role,
+            content=str(row_content),
+        )
+
+    def remove_history_message(self, message_id: int) -> bool:
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_history_schema(connection)
+                cursor = connection.execute(
+                    "DELETE FROM ai_history_messages WHERE id = ?",
+                    (message_id,),
+                )
+        return cursor.rowcount > 0
+
     def record_history_message(
         self,
         channel_id: int,
@@ -557,17 +628,42 @@ class AIContext:
         if not message.content:
             return
 
+        self.create_history_message(channel_id, message.role, message.content)
         with closing(self._history_connection()) as connection:
             with connection:
                 self._ensure_history_schema(connection)
-                connection.execute(
+                self._evict_history(connection, channel_id)
+
+    def create_history_message(
+        self,
+        channel_id: int,
+        role: Literal["user", "assistant"],
+        content: str,
+    ) -> HistoryMessage | None:
+        content = content.strip()
+        if not content:
+            return None
+        created_at = datetime.now(timezone.utc)
+        with closing(self._history_connection()) as connection:
+            with connection:
+                self._ensure_history_schema(connection)
+                cursor = connection.execute(
                     """
                     INSERT INTO ai_history_messages(channel_id, created_at, role, content)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (channel_id, datetime.now(timezone.utc).isoformat(), message.role, message.content),
+                    (channel_id, created_at.isoformat(), role, content),
                 )
-                self._evict_history(connection, channel_id)
+                if cursor.lastrowid is None:
+                    raise RuntimeError("SQLite did not return an id for the AI history message.")
+                message_id = int(cursor.lastrowid)
+        return HistoryMessage(
+            id=message_id,
+            channel_id=channel_id,
+            created_at=created_at,
+            role=role,
+            content=content,
+        )
 
     def queue_context_request(self, request: ContextRequest) -> ContextRequest:
         created_at = request.created_at or datetime.now(timezone.utc)

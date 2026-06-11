@@ -430,7 +430,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
 
         await self.protector.save_config(self.guild.id)
         
-        await interaction.followup.send("Updated raid settings.")
+        await interaction.followup.send("Updated raid settings.", ephemeral=True)
 
     def _parse_assignments(
         self,

@@ -53,7 +53,7 @@ Fields:
 
 ## Runtime Management
 
-`/manage ai` opens an ephemeral Components v2 panel for AI controls. It requires `ai.manage` and shows the base instructions, the configured custom instructions, the current AI enabled state, and break timing.
+`/manage ai action:config` opens an ephemeral Components v2 panel for AI controls. It requires `ai.manage.config` and shows the base instructions, the configured custom instructions, the current AI enabled state, and break timing.
 
 The panel can:
 
@@ -64,7 +64,9 @@ The panel can:
 
 Changing break settings restarts the break timer immediately. Disabling breaks clears the current break state and restores the bot presence to online.
 
-For security, `/manage ai` does not expose or edit API keys, provider URLs, model names, request interval, or history settings. AI history remains config-file only because changing history paths or budgets from Discord would allow unsafe runtime data movement or retention changes.
+`/manage ai action:memory` opens an ephemeral memory portal. It requires `ai.manage.memory.channel` for current-channel history and `ai.manage.memory.persistent` for global persistent memories. The portal has tabs for channel history and persistent memory, paginates entries by stored message/memory id, supports text chunk paging for long entries, and exposes create/edit/delete controls.
+
+For security, `/manage ai` does not expose or edit API keys, provider URLs, model names, request interval, or history path/budget settings. Runtime memory editing changes existing SQLite contents but not retention configuration.
 
 ## Local Ollama
 

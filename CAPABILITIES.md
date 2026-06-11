@@ -100,7 +100,9 @@ Account info and account listing are intentionally public through normal `comman
 
 ## AI
 
-- `ai.manage`: Manage AI settings.
+- `ai.manage.config`: Manage AI runtime configuration, custom instructions, and break timing.
+- `ai.manage.memory.channel`: View, create, edit, and delete the current channel's AI history.
+- `ai.manage.memory.persistent`: View, create, edit, and delete global persistent AI memories.
 - `ai.activity.manage`: Schedule or remove AI activities.
 - `ai.activity.trigger`: Trigger an AI activity immediately.
 - `user.ai`: Use user-facing AI entry points, including `/ai` and mention/reply AI chat.
