@@ -42,7 +42,7 @@ Fields:
 - `custom_instruction_text`: Optional admin-controlled instruction text appended after the base Bogobot instructions. Defaults to an empty string.
 - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to `60`; use `0` for local providers.
 - `normalize_discord`: Annotates Discord mentions and channels with readable names before sending context to the model. Defaults to `true`.
-- `multipart_responses`: Teaches the model that it may return normal text and tool calls in the same response. Defaults to `true`. When enabled, prompt examples use native tool-call JSON for context and memory changes; `<assistant:dont_respond />` remains supported as the visible-reply suppression tag.
+- `multipart_responses`: Teaches the model that it may return normal text and tool calls in the same response. Defaults to `true`. When enabled, prompt examples use native tool-call JSON for context requests, memory changes, and visible-reply suppression.
 - `history.enabled`: Enables per-channel short-term AI history. Defaults to `true`.
 - `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
 - `history.char_budget`: Per-channel character budget. Oldest stored messages are deleted first. Defaults to `10000`.
@@ -172,7 +172,7 @@ For Gemini/Gemma models on Google endpoints, Bogobot strips the first `<thought>
 
 ## Context Format
 
-Bogobot sends Discord metadata as XML-style context blocks with a system namespace prefix. In the examples below, `{SYSTEM_TAG}` represents `utils.ai_context.SYSTEM_NAMESPACE`, which currently defaults to `system`. `{ASSISTANT_TAG}` represents `utils.ai_context.ASSISTANT_NAMESPACE`, which currently defaults to `assistant`.
+Bogobot sends Discord metadata as XML-style context blocks with a system namespace prefix. In the examples below, `{SYSTEM_TAG}` represents `utils.ai.context.SYSTEM_NAMESPACE`, which currently defaults to `|system|`. `{ASSISTANT_TAG}` represents `utils.ai.context.ASSISTANT_NAMESPACE`, which currently defaults to `|assistant|`.
 
 `{SYSTEM_TAG}:...` blocks are system-supplied model input. The model is instructed not to output them. User input and model output have reserved system-tag namespaces stripped before they can be treated as normal text.
 
@@ -201,10 +201,10 @@ previous bot message
 </{SYSTEM_TAG}:replied_to>
 ```
 
-Command calls are recorded in history like this:
+Tool and command calls are recorded in history like this:
 
 ```xml
-<{SYSTEM_TAG}:command>{"name":"ping","arguments":{}}</{SYSTEM_TAG}:command>
+<{SYSTEM_TAG}:recorded_tool_use name="ping">{}</{SYSTEM_TAG}:recorded_tool_use>
 ```
 
 Requested context is recorded and injected as an assistant-role history/context message:
@@ -304,7 +304,9 @@ If a create or edit would exceed `ai.history.persistent_char_budget`, Bogobot re
 
 When `ai.multipart_responses` is disabled, Bogobot falls back to legacy hidden assistant XML tags for memory changes in normal text replies.
 
-In both modes, the model can include `<assistant:dont_respond />` to suppress the visible Discord reply while still leaving the turn in history.
+With `ai.multipart_responses` enabled, Bogobot exposes a native `dont_respond` tool. The model can call it by itself or alongside normal assistant text and other tool calls. If normal assistant text is included with `dont_respond`, that text is recorded in history but not displayed in Discord. Inline assistant XML controls are disabled in multipart mode and are treated as normal text.
+
+When `ai.multipart_responses` is disabled, the model can include `<{ASSISTANT_TAG}:dont_respond />` to suppress the visible Discord reply while still leaving the turn in history.
 
 ## AI Actions
 

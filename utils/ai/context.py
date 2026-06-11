@@ -9,8 +9,8 @@ from typing import Any, Callable, Literal
 
 import discord
 
-SYSTEM_NAMESPACE = "system"
-ASSISTANT_NAMESPACE = "assistant"
+SYSTEM_NAMESPACE = "|system|"
+ASSISTANT_NAMESPACE = "|assistant|"
 DEFAULT_HISTORY_PATH = "ai_history.sqlite3"
 DEFAULT_HISTORY_CHAR_BUDGET = 10_000
 ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
@@ -235,7 +235,7 @@ class XMLReader:
         return name.strip()
 
     def _is_name_char(self, char: str) -> bool:
-        return char.isalnum() or char in "_-."
+        return char.isalnum() or char in "_-.|"
 
     def _parse_attrs(self, text: str) -> dict[str, str]:
         attrs: dict[str, str] = {}
@@ -477,14 +477,12 @@ class AIContext:
         return content.strip()
 
     def format_command_call(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
-        payload = {
-            "name": command_name,
-            "arguments": self._json_safe(arguments or {}),
-        }
+        attrs = f'name={json.dumps(command_name, ensure_ascii=False)}'
+        open_tag = open_system_tag("recorded_tool_use").replace(">", f" {attrs}>")
         return (
-            f"{open_system_tag('command')}"
-            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-            f"{close_system_tag('command')}"
+            f"{open_tag}"
+            f"{json.dumps(self._json_safe(arguments or {}), ensure_ascii=False, separators=(',', ':'))}"
+            f"{close_system_tag('recorded_tool_use')}"
         )
 
     def format_reply(self, content: str, source: discord.Message | discord.Interaction | None = None) -> str:

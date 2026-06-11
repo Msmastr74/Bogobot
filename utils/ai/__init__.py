@@ -31,6 +31,7 @@ from utils.ai.context import (
 )
 from utils.ai.system_prompt import (
     CONTEXT_REQUEST_TOOL_NAME as _CONTEXT_REQUEST_TOOL_NAME,
+    DONT_RESPOND_TOOL_NAME as _DONT_RESPOND_TOOL_NAME,
     MAX_NEW_TOKENS,
     PERSISTENT_MEMORY_TOOL_NAME as _PERSISTENT_MEMORY_TOOL_NAME,
     build_system_prompt,
@@ -326,13 +327,24 @@ class AICore(Generic[ContextT, ActionT]):
             matches: list[AIMatch[ContextT, ActionT]] = []
             user_id = self._source_user_id(source)
             content = self._strip_first_thought_block(content)
-            memory_visible_content, history_content = self._extract_text_persistent_memories(content)
-            visible_content, requests = self._extract_text_context_requests(
-                memory_visible_content,
-                channel_id=channel_id,
-                user_id=user_id,
+            if self.multipart_responses:
+                history_content = content
+                visible_content = content
+                requests: list[ContextRequest] = []
+                text_dont_respond = False
+            else:
+                memory_visible_content, history_content = self._extract_text_persistent_memories(content)
+                visible_content, requests = self._extract_text_context_requests(
+                    memory_visible_content,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                )
+                visible_content, text_dont_respond = self._extract_dont_respond(visible_content)
+            tool_dont_respond = self.multipart_responses and any(
+                call.name == _DONT_RESPOND_TOOL_NAME
+                for call in calls[:_MAX_CALLS]
             )
-            dont_respond = self._extract_dont_respond(visible_content)
+            dont_respond = text_dont_respond or tool_dont_respond
             self._queue_context_requests(requests)
             reply = self._coerce_reply(visible_content)
             if reply is not None:
@@ -399,6 +411,14 @@ class AICore(Generic[ContextT, ActionT]):
                             None,
                             channel_id=channel_id,
                         )
+                    continue
+                if call.name == _DONT_RESPOND_TOOL_NAME:
+                    self.context.record_message(
+                        "assistant",
+                        self.context.format_command_call(call.name, call.arguments),
+                        None,
+                        channel_id=channel_id,
+                    )
                     continue
 
                 action = action_by_tool.get(call.name)
@@ -531,6 +551,8 @@ class AICore(Generic[ContextT, ActionT]):
         tools = [self._tool_schema(action) for action in actions]
         tools.append(self._context_request_tool_schema())
         tools.append(self._persistent_memory_tool_schema())
+        if self.multipart_responses:
+            tools.append(self._dont_respond_tool_schema())
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
         ]
@@ -681,6 +703,30 @@ class AICore(Generic[ContextT, ActionT]):
             },
         }
 
+    def _dont_respond_tool_schema(self) -> 'ChatCompletionToolParam':
+        return {
+            "type": "function",
+            "function": {
+                "name": _DONT_RESPOND_TOOL_NAME,
+                "description": (
+                    "Suppress the visible Discord reply for this turn. "
+                    "If normal assistant text is included in the same response, it is recorded in history but not displayed."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": ["string", "null"],
+                            "description": "Short optional reason for suppressing the visible reply.",
+                            "default": None,
+                        },
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
     def _param_schema(self, param: AIParam) -> dict[str, Any]:
         choices = self._literal_choices(param.type)
         if choices is not None:
@@ -765,8 +811,10 @@ class AICore(Generic[ContextT, ActionT]):
     def _extract_dont_respond(
         self,
         value: str
-    ) -> bool:
-        return bool(XMLReader(value).tags(ASSISTANT_NAMESPACE, "dont_respond"))
+    ) -> tuple[str, bool]:
+        reader = XMLReader(value)
+        tags = reader.tags(ASSISTANT_NAMESPACE, "dont_respond")
+        return reader.remove(tags), bool(tags)
 
     def _format_persistent_memory_contexts(self, memories: list[PersistentMemory]) -> list[str]:
         if self.memory_char_budget <= 0:

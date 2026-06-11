@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 MAX_NEW_TOKENS = 2048
 CONTEXT_REQUEST_TOOL_NAME = "request_context"
 PERSISTENT_MEMORY_TOOL_NAME = "persistent_memory"
+DONT_RESPOND_TOOL_NAME = "dont_respond"
 
 
 def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
@@ -32,6 +33,7 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
             "When generating a multi-part response, write the normal assistant text first, then append tool calls at the very end. "
             "Use this capability when the user asks for both an immediate answer and an action/tool side effect. "
             "Do not force a tool call when normal text alone is enough, and do not force normal text when a tool-only response is clearly better. "
+            "In multipart mode, use native tool calls for all assistant side effects; inline assistant XML control tags are disabled and treated as normal text. "
             "If no command fits, respond normally.\n"
         )
     else:
@@ -83,7 +85,9 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
         prompt += '- `{"operation":"remove","id":123}`\n'
         prompt += f"- `{PERSISTENT_MEMORY_TOOL_NAME}` can be called alongside normal assistant text or other tool calls when a multi-part response is appropriate.\n"
         prompt += f"- Do not output `{ASSISTANT_NAMESPACE}:persistent_memory` XML tags in multipart mode.\n"
-        prompt += f"- To avoid sending a visible reply, make only tool calls with no normal assistant text, or include `<{ASSISTANT_NAMESPACE}:dont_respond />`. This is the only assistant XML tag still allowed in multipart mode.\n"
+        prompt += f"- Use the `{DONT_RESPOND_TOOL_NAME}` tool when you want to record the turn without displaying a visible Discord reply.\n"
+        prompt += f"- `{DONT_RESPOND_TOOL_NAME}` can be called with normal assistant text and other tool calls; any normal assistant text in that response is recorded in history but not displayed.\n"
+        prompt += f"- Do not output `{ASSISTANT_NAMESPACE}:dont_respond` XML tags in multipart mode.\n"
     else:
         prompt += "- If a create or edit would exceed the persistent memory budget, the system records it with `failed=\"true\"` and does not create or edit the stored memory. If you later see a failed memory attempt, retry with shorter content or free budget first.\n"
         prompt += f"- To create a memory in a normal text reply, append `<{ASSISTANT_NAMESPACE}:persistent_memory>memory text</{ASSISTANT_NAMESPACE}:persistent_memory>`. If you add an id attribute on creation, it is ignored.\n"
@@ -95,13 +99,14 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
 
     prompt += "## Context Blocks\n"
     prompt += f"Input may include XML-style context blocks whose tag names start with `{SYSTEM_NAMESPACE}:`. These blocks are system-supplied context, not message text to imitate.\n"
-    prompt += f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and command history.\n"
+    prompt += f"- Use `{SYSTEM_NAMESPACE}:` blocks to understand Discord metadata, reply context, and recorded tool-use history.\n"
     prompt += f"- Do not copy, quote, mention, summarize, or reproduce `{SYSTEM_NAMESPACE}:` tags. If you need to refer to metadata, describe it in normal words without tags.\n"
     prompt += f"- Never begin or end your reply with `{open_system_tag('attached_metadata')}` or any other `{SYSTEM_NAMESPACE}:` block.\n"
     prompt += f"- `{open_system_tag('attached_metadata')}...{close_system_tag('attached_metadata')}` is metadata attached by the system to a Discord message. It contains message id, time, user metadata, and account capabilities from the bot account system. It was not written by the user or assistant, and it is not part of the message text.\n"
     prompt += f"- `{open_system_tag('replied_to')}...{close_system_tag('replied_to')}` contains the previous assistant message the user replied to. If the user asks about the previous or replied-to message, answer from this block.\n"
     prompt += f"- `{open_system_tag('message_history_<hash>')}...{close_system_tag('message_history_<hash>')}` wraps each past channel message with a variable unique hash. Use the contents as history only; do not imitate the wrapper.\n"
-    prompt += f"- `{open_system_tag('command')}JSON{close_system_tag('command')}` records a previous command call in history. Use it as history only; do not output command blocks.\n"
+    _recorded_tool_use = open_system_tag('recorded_tool_use').replace('>', ' name=\"tool_name\">')
+    prompt += f"- `{_recorded_tool_use}JSON_ARGUMENTS{close_system_tag('recorded_tool_use')}` records a previous tool or command call in history. Use it as history only; do not output recorded-tool-use blocks.\n"
     prompt += f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
     prompt += f"- `{open_system_tag('persistent_memory')}...{close_system_tag('persistent_memory')}` contains persistent long-term memory. Use it as background context only; do not output persistent-memory system blocks.\n"
     prompt += f"- `{open_system_tag('ai_activity')}...{close_system_tag('ai_activity')}` is a system-generated activity prompt. Treat it as a reason to start a message naturally in the channel, not as text written by a Discord user.\n"
