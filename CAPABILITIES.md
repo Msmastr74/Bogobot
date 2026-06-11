@@ -122,7 +122,6 @@ Account info and account listing are intentionally public through normal `comman
 
 ## Milestones
 
-- `milestones.info`: View milestone history.
 - `milestones.manage`: Manage milestone subscriptions, spoofing, and rate-limit state.
 
 ## Raid Protection

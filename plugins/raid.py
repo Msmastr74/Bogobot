@@ -415,6 +415,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
         except ValueError as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
 
         await self.protector.save_config(self.guild.id)
         
@@ -425,7 +426,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
                     guild=self.guild,
                 ),
             )
-        await interaction.response.send_message("Updated raid settings.")
+        await interaction.followup.send("Updated raid settings.")
 
     def _parse_assignments(
         self,
