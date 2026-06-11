@@ -8,21 +8,10 @@ if os.path.exists('local_config.json'):
 else:
     bot = BotCore()
 
-async def run_session():
+async def start():
     async with bot:
         await bot.load_plugins("plugins")
         await bot.run_bot()
-
-async def start():
-    task = asyncio.create_task(run_session())
-    try:
-        await asyncio.shield(task)
-    except asyncio.CancelledError:
-        task.cancel()
-        try:
-            await task 
-        except asyncio.CancelledError:
-            pass 
 
 def log_fatal_exception(exc_type, exc, traceback):
     if issubclass(exc_type, KeyboardInterrupt):

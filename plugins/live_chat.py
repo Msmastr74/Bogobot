@@ -115,7 +115,7 @@ async def setup(bot: BotCore):
 
         terminate_chat()
 
-        chat = pytchat.create(video_id=TARGET_VIDEO_ID, hold_exception=False)
+        chat = pytchat.create(video_id=TARGET_VIDEO_ID, hold_exception=False, interruptable=False)
 
         next_retry_at = 0.0
 
@@ -143,7 +143,7 @@ async def setup(bot: BotCore):
                 create_chat()
             assert chat is not None
 
-            chat_data = chat.get()
+            chat_data = await asyncio.to_thread(chat.get)
             assert isinstance(chat_data, Chatdata)
 
             chat_buffer.extend(chat_data.items)
