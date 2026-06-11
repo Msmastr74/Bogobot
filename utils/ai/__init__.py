@@ -718,11 +718,6 @@ class AICore(Generic[ContextT, ActionT]):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "reason": {
-                            "type": ["string", "null"],
-                            "description": "Short optional reason for suppressing the visible reply.",
-                            "default": None,
-                        },
                     },
                     "required": [],
                     "additionalProperties": False,
