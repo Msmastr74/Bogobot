@@ -1346,7 +1346,7 @@ async def setup(bot: 'BotCore'):
                 await bot.discord.cleanup_defer_status(interaction)
                 await bot.discord.send(
                     contents="The assistant did not provide a response.",
-                    ephemeral=True
+                    ephemeral=True, response=True
                 )
         finally:
             lock_token.release()
