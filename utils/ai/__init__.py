@@ -9,7 +9,7 @@ import time
 import types
 from typing import Any, Callable, Generic, Literal, TypeAlias, TypeVar, Union, Unpack, cast, get_args, get_origin, TYPE_CHECKING
 if TYPE_CHECKING:
-    from openai import OpenAI
+    from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionToolParam, ChatCompletionMessageToolCallUnion
 
 import discord
@@ -146,7 +146,7 @@ class AICore(Generic[ContextT, ActionT]):
         self.memory_char_budget = max(0, int(memory_char_budget))
         self.multipart_responses = bool(multipart_responses)
         self._actions: list[_AIAction[ContextT, ActionT]] = []
-        self._client: 'OpenAI | None' = None
+        self._client: 'AsyncOpenAI | None' = None
         self._last_request_at: float | None = None
         self._lock = asyncio.Lock()
         self._channel_locks: dict[int, asyncio.Lock] = {}
@@ -313,8 +313,7 @@ class AICore(Generic[ContextT, ActionT]):
             async with self._lock:
                 client = self._ensure_client()
                 await self._wait_for_rate_limit()
-                content, calls = await asyncio.to_thread(
-                    self._complete,
+                content, calls = await self._complete(
                     client,
                     formatted_text,
                     self._actions,
@@ -525,19 +524,19 @@ class AICore(Generic[ContextT, ActionT]):
     def _ensure_client(self):
         if self._client is None:
             try:
-                from openai import OpenAI
+                from openai import AsyncOpenAI
             except ImportError as exc:
                 raise RuntimeError("The openai package is required when AI is enabled.") from exc
 
             api_key = os.environ.get(self.api_key_env)
             if not api_key:
                 raise RuntimeError(f"AI is enabled but {self.api_key_env} is not set.")
-            self._client = OpenAI(api_key=api_key, base_url=self.base_url)
+            self._client = AsyncOpenAI(api_key=api_key, base_url=self.base_url)
         return self._client
 
-    def _complete(
+    async def _complete(
         self,
-        client: 'OpenAI',
+        client: 'AsyncOpenAI',
         text: str,
         actions: list[_AIAction[ContextT, ActionT]],
         reply_message: str | None,
@@ -576,7 +575,7 @@ class AICore(Generic[ContextT, ActionT]):
             messages.append({"role": "assistant", "content": requested_context})
         messages.append({"role": "user", "content": text})
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
                 tools=tools,
@@ -615,7 +614,7 @@ class AICore(Generic[ContextT, ActionT]):
                     return f"I tried to use a command incorrectly: {details}\n`{failed_generation}`"
                 return f"I tried to use a command incorrectly: {details}"
         if "tool_use_failed" in str(exc):
-            return "I tried to use a command incorrectly, but OpenAI did not provide details."
+            return "I tried to use a command incorrectly, but AsyncOpenAI did not provide details."
         return None
 
     def _tool_schema(self, action: _AIAction[ContextT, ActionT]) -> 'ChatCompletionToolParam':
