@@ -58,12 +58,12 @@ Bot-managed storage:
 - `milestones`: Latest confirmed value for each milestone name.
 
 Bogotree storage:
-- Server-specific Bogotree puzzle state is stored on guild account records under the `bogotree_state` field.
-- Per-user Bogotree leaderboard data is stored on local server account records under the `bogotree` field.
+- Server-specific Bogotree puzzle state is stored on guild account records under the `bogotree_state` field. Outside servers, Bogotree uses guild account id `0` as a shared global game bucket.
+- Per-user Bogotree leaderboard data is stored on local account records under the `bogotree` field, using the same server id or `0` bucket as the puzzle state.
 
 Cbogo storage:
-- Server-specific cbogo puzzle state is stored on guild account records under the `cbogo_state` field.
-- Per-user cbogo leaderboard data is stored on local server account records under the `cbogo` field.
+- Server-specific cbogo puzzle state is stored on guild account records under the `cbogo_state` field. Outside servers, cbogo uses guild account id `0` as a shared global game bucket.
+- Per-user cbogo leaderboard data is stored on local account records under the `cbogo` field, using the same server id or `0` bucket as the puzzle state.
 
 Verification and raid storage:
 - Server-specific verified/quarantine role IDs are stored on guild account records under the `security_roles` field.

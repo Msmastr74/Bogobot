@@ -4,8 +4,8 @@
 Migrates:
 - old account maps into {"version": 2, "accounts": [...]} rows
 - old per-account local records into scoped user rows
-- bogotree.json server state into guild account rows
-- cbogo.json server state into guild account rows
+- bogotree.json server/global state into guild account rows
+- cbogo.json server/global state into guild account rows
 - optionally config verification/raid server config into guild account rows
 
 This script intentionally does not import Bogobot runtime modules.
@@ -397,8 +397,8 @@ def main() -> None:
     parser.add_argument("--cbogo", default="cbogo.json")
     parser.add_argument(
         "--default-guild",
-        default=None,
-        help="Guild ID used for original root-level bogotree/cbogo state files without a servers map.",
+        default="0",
+        help="Guild ID used for original root-level bogotree/cbogo state files without a servers map. Defaults to 0 for the global game bucket.",
     )
     parser.add_argument(
         "--config",

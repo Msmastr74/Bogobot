@@ -15,6 +15,7 @@ from discord.ui.view import BaseView
 from pydantic import AliasPath, Field, field_validator
 
 from typing import TYPE_CHECKING, Any, Awaitable, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
+from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from utils.ai.context import ContextRequest, close_system_tag, open_system_tag
 from utils.discord import chunk_text, split_text_to_character_limit
 from utils import groups
@@ -734,9 +735,7 @@ class ContextRequestExecutor:
         text: str,
     ) -> str | None:
         game = str(request.payload.get("game") or request.payload.get("query") or "").strip().casefold()
-        guild_id = self._source_guild_id(source)
-        if guild_id is None:
-            return "minigame: unavailable outside a server"
+        guild_id = self._source_guild_id(source) or GLOBAL_GUILD_ACCOUNT_ID
         guild_account = self.bot.accounts.guild(guild_id)
         if game in ("bogotree", "tree"):
             raw_state = guild_account.get("bogotree_state")

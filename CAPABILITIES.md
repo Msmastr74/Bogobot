@@ -4,7 +4,7 @@ Capabilities are string permissions stored on each account. A user can run a com
 
 ## Account Targets
 
-Capabilities can be stored on user, role, and guild account rows. The row `scope` describes which server an account row is local to, so guild account rows live in the global scope and use the guild snowflake as their account id. Runtime permission checks currently use user and role rows.
+Capabilities can be stored on user, role, and guild account rows. The row `scope` describes which server an account row is local to, so guild account rows live in the global scope and use the guild snowflake as their account id. Guild account id `0` is reserved as the shared non-server game bucket for Bogotree and cbogo. Runtime permission checks currently use user and role rows.
 
 User accounts are the normal access pattern. A global user account stores default/global capabilities, and a server-local user account stores per-server overrides.
 

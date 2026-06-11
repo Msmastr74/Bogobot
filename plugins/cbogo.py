@@ -8,6 +8,7 @@ from pydantic import AliasChoices, Field, ValidationError, field_validator, mode
 
 from bogobot_core import BotCore
 from utils.ai import AIParam, action
+from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from utils.discord import count_characters
 from utils.schemas import Schema
 
@@ -516,6 +517,9 @@ async def setup(bot: BotCore):
     bot.accounts.capabilities.register(CBOGO_RESET_CAPABILITY)
     bot.accounts.capabilities.register(CBOGO_RESET_LAST_USER_CAPABILITY)
 
+    def game_guild_id(interaction: discord.Interaction) -> int:
+        return interaction.guild_id if interaction.guild_id is not None else GLOBAL_GUILD_ACCOUNT_ID
+
     async def get_state(guild_id: int) -> CbogoState:
         guild_account = bot.accounts.guild(guild_id)
         raw_state = guild_account.get(CBOGO_GUILD_STATE_KEY)
@@ -538,10 +542,7 @@ async def setup(bot: BotCore):
         interaction: discord.Interaction,
         target: discord.Member | discord.User | None = None,
     ):
-        if interaction.guild_id is None:
-            await bot.discord.send("cbogo leaderboards are server-specific.", response=True, ephemeral=True)
-            return
-        leaderboard = await get_leaderboard(interaction.guild_id)
+        leaderboard = await get_leaderboard(game_guild_id(interaction))
         await bot.discord.send(
             view=CbogoLeaderboard(
                 leaderboard=leaderboard,
@@ -567,9 +568,7 @@ async def setup(bot: BotCore):
         best_run: int,
     ) -> None:
         uid = str(interaction.user.id)
-        if interaction.guild_id is None:
-            return
-        account = bot.accounts[uid].local(interaction.guild_id)
+        account = bot.accounts[uid].local(game_guild_id(interaction))
         stats = normalize_user_stats(
             account.get(CBOGO_ACCOUNT_KEY),
             str(interaction.user),
@@ -600,13 +599,7 @@ async def setup(bot: BotCore):
         action: Literal["run", "info", "leaderboard", "reset", "reset_last_user"] = "run",
         target: discord.Member | discord.User | None = None,
     ):
-        if interaction.guild_id is None:
-            await bot.discord.send(
-                "cbogo is server-specific and can only be used in a server.",
-                response=True,
-                ephemeral=True,
-            )
-            return
+        guild_id = game_guild_id(interaction)
         if action == "reset":
             if not bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
                 CBOGO_RESET_CAPABILITY,
@@ -620,8 +613,8 @@ async def setup(bot: BotCore):
 
             async with state_lock:
                 state = default_state()
-                await save_state(interaction.guild_id, state)
-                await reset_user_scores(interaction.guild_id)
+                await save_state(guild_id, state)
+                await reset_user_scores(guild_id)
             await bot.discord.send(
                 view=CbogoView(title="cbogo reset", state=state),
                 response=True,
@@ -639,10 +632,10 @@ async def setup(bot: BotCore):
                 )
                 return
             async with state_lock:
-                state = await get_state(interaction.guild_id)
+                state = await get_state(guild_id)
                 old_last_user = state.last_user
                 state.last_user = None
-                await save_state(interaction.guild_id, state)
+                await save_state(guild_id, state)
             if old_last_user is None:
                 await bot.discord.send(
                     "No last user was set.",
@@ -663,7 +656,7 @@ async def setup(bot: BotCore):
             return
 
         if action == "info":
-            state = await get_state(interaction.guild_id)
+            state = await get_state(guild_id)
             await bot.discord.send(
                 view=CbogoView(
                     title="cbogo info",
@@ -676,7 +669,7 @@ async def setup(bot: BotCore):
             return
 
         async with state_lock:
-            state = await get_state(interaction.guild_id)
+            state = await get_state(guild_id)
             if state.solved:
                 await bot.discord.send(
                     view=CbogoView(title=f"cbogo {sorted_emoji}", state=state),
@@ -720,7 +713,7 @@ async def setup(bot: BotCore):
                 shuffles=performed,
                 best_run=run_best_score,
             )
-            await save_state(interaction.guild_id, state)
+            await save_state(guild_id, state)
 
         message = await bot.discord.send(
             view=CbogoView(

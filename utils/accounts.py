@@ -15,6 +15,7 @@ AccountKey = tuple[AccountScope, AccountType, str]
 PERMISSIONS_KEY = "perms"
 LOCAL_ACCOUNTS_KEY = "local"
 GLOBAL_SCOPE = "global"
+GLOBAL_GUILD_ACCOUNT_ID = 0
 DEFAULT_COMMAND_CAPABILITY = "commands"
 DEFAULT_USER_CAPABILITY = "user"
 BANNED_CAPABILITY = "banned"
@@ -844,6 +845,8 @@ class AccountManager:
 
     def _role_permissions_for_user(self, account_id: str, guild_id: int) -> AccountPermissions:
         if self.role_ids_for_user is None:
+            return AccountPermissions()
+        if guild_id == GLOBAL_GUILD_ACCOUNT_ID:
             return AccountPermissions()
 
         permissions = AccountPermissions()
