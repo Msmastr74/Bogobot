@@ -4,7 +4,7 @@ Capabilities are string permissions stored on each account. A user can run a com
 
 ## Account Targets
 
-Capabilities can be stored on user, role, and guild account rows. Guild account rows exist for future use; runtime permission checks currently use user and role rows.
+Capabilities can be stored on user, role, and guild account rows. The row `scope` describes which server an account row is local to, so guild account rows live in the global scope and use the guild snowflake as their account id. Runtime permission checks currently use user and role rows.
 
 User accounts are the normal access pattern. A global user account stores default/global capabilities, and a server-local user account stores per-server overrides.
 
@@ -56,7 +56,7 @@ Use `.use` and `.grant` when you need different effective depths. For example, `
 
 `server.<capability>` is not checked directly by commands. It is only used while granting, revoking, filtering, or expanding presets. Runtime permission checks still use the unprefixed capability on the server-local account view. For example, `/accounts capabilities action:grant capabilities:server.discord.announce target:@user` stores `discord.announce` under that user's current-server permissions, and `/manage announce` then sees `discord.announce` through `account.local(guild_id)`.
 
-Role targets are implicitly server-local. For example, `/accounts capabilities action:grant target:@Moderators capabilities:discord.announce` stores `discord.announce` on the `@Moderators` role account in the current server.
+Role targets are server-local, but grants and revokes must still use explicit `server.` capability names. For example, `/accounts capabilities action:grant target:@Moderators capabilities:server.discord.announce` stores `discord.announce` on the `@Moderators` role account in the current server.
 
 Preset references are stored dynamically instead of being flattened. For example, granting `(moderator)` means later edits to the `moderator` preset automatically affect users with that capability. Granting `server.(moderator)` stores a separate server-local preset reference; if a `server.moderator` preset exists, it is used instead of `moderator`. A preset segment that does not exist expands to nothing and matches nothing.
 
@@ -67,9 +67,9 @@ Global management capabilities can affect global or server-local targets. Server
 ## Managing Capabilities
 
 - `/accounts capabilities action:grant target:@user capabilities:a,b,c`: Grants a comma-separated capability list.
-- `/accounts capabilities action:grant target:@role capabilities:a,b,c`: Grants a comma-separated capability list to a server-local role account.
+- `/accounts capabilities action:grant target:@role capabilities:server.a,server.b`: Grants a comma-separated explicit server-local capability list to a role account.
 - `/accounts capabilities action:revoke target:@user capabilities:a,b,c`: Revokes a comma-separated capability list.
-- `/accounts capabilities action:revoke target:@role capabilities:a,b,c`: Revokes a comma-separated capability list from a server-local role account.
+- `/accounts capabilities action:revoke target:@role capabilities:server.a,server.b`: Revokes a comma-separated explicit server-local capability list from a role account.
 - `/accounts capabilities action:reset target:@user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides. It fails without changing anything if the caller cannot revoke every current capability and grant every default capability.
 - `/accounts capabilities action:reset target:@role`: Atomically clears a role's server-local capabilities except reserved capabilities.
 - `/accounts capabilities action:resolve capabilities:a,b,c`: Shows the concrete capabilities produced by the comma-separated capability list.

@@ -788,6 +788,23 @@ async def setup(bot: BotCore) -> None:
             )
             return
 
+        if account_target.is_role and action in ("grant", "revoke"):
+            global_role_capabilities = [
+                capability
+                for capability in requested_capabilities
+                if not _is_server_capability(capability)
+            ]
+            if global_role_capabilities:
+                await bot.discord.send(
+                    contents=(
+                        "Role targets require explicit server-local capabilities. Use `server.` prefixes: " +
+                        ", ".join(f"`server.{capability}`" for capability in global_role_capabilities)
+                    ),
+                    response=True,
+                    ephemeral=True,
+                )
+                return
+
         if any(_is_server_capability(capability) for capability in requested_capabilities) and interaction.guild_id is None:
             await bot.discord.send(
                 contents="`server.*` capabilities can only be managed inside a server.",

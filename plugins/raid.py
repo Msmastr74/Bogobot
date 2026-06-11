@@ -475,13 +475,13 @@ class RaidProtector:
     def _load_configs(self) -> dict[int, RaidConfig]:
         configs: dict[int, RaidConfig] = {}
         for (scope, account_type, account_id), account in self.bot.accounts.accounts.items():
-            if scope == "global" or account_type != "guild":
+            if scope != "global" or account_type != "guild":
                 continue
             raw_config = account.get(RAID_CONFIG_ACCOUNT_KEY)
             if not isinstance(raw_config, dict):
                 continue
             try:
-                guild_id = int(scope)
+                guild_id = int(account_id)
             except (TypeError, ValueError):
                 continue
             configs[guild_id] = self._load_config(raw_config)

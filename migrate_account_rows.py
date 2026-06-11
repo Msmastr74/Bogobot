@@ -295,7 +295,7 @@ def migrate_game_state(
             continue
         put_account(
             accounts,
-            str(raw_guild_id),
+            GLOBAL_SCOPE,
             "guild",
             str(raw_guild_id),
             {destination_key: state},
@@ -346,7 +346,7 @@ def migrate_server_map(
             continue
         put_account(
             accounts,
-            guild_id,
+            GLOBAL_SCOPE,
             "guild",
             guild_id,
             {destination_key: dict(raw_server)},

@@ -477,7 +477,7 @@ class AccountManager:
         return Account(self, role_id, account_type="role")
 
     def guild(self, guild_id: int | str) -> Account:
-        return Account(self, guild_id, account_type="guild", guild_id=int(guild_id))
+        return Account(self, guild_id, account_type="guild")
 
     def _ensure_file(self) -> None:
         if os.path.exists(self.path):
