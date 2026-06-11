@@ -1146,7 +1146,7 @@ async def setup(bot: 'BotCore'):
             await restart_break_task()
             await interaction.followup.send("Updated AI break settings.", ephemeral=True)
 
-    MEMORY_PAGE_MAX_ITEMS = 5
+    MEMORY_PAGE_MAX_ITEMS = 4
     MEMORY_PAGE_TEXT_LIMIT = 3800
     MEMORY_ITEM_TEXT_LIMIT = 900
     MEMORY_MODAL_TEXT_LIMIT = 4000
@@ -1290,19 +1290,18 @@ async def setup(bot: 'BotCore'):
             add_button = AIMemoryButton(
                 self,
                 "add",
-                label="Add Memory" if self.tab == "persistent" else "Add Message",
-                emoji="➕",
+                label="Add Memory" if self.tab == "persistent" else "Add Record",
                 style=discord.ButtonStyle.secondary,
             )
             container.add_item(discord.ui.ActionRow(add_button))
 
             if not page_items:
                 container.add_item(discord.ui.TextDisplay("No memory entries."))
+                container.add_item(discord.ui.Separator())
             else:
                 for item in page_items:
                     self.add_memory_item(container, item)
 
-            container.add_item(discord.ui.Separator())
             previous_page = discord.ui.Button(
                 label="Previous",
                 style=discord.ButtonStyle.secondary,
@@ -1373,7 +1372,6 @@ async def setup(bot: 'BotCore'):
                 "edit",
                 item=item,
                 label="Edit",
-                emoji="✏️",
                 style=discord.ButtonStyle.secondary,
             )
             delete_button = AIMemoryButton(
@@ -1381,32 +1379,32 @@ async def setup(bot: 'BotCore'):
                 "delete",
                 item=item,
                 label="Delete",
-                emoji="🗑️",
                 style=discord.ButtonStyle.danger,
-            )
-            previous_chunk = AIMemoryButton(
-                self,
-                "chunk",
-                key=key,
-                delta=-1,
-                label="Text",
-                emoji="⬆️",
-                style=discord.ButtonStyle.secondary,
-                disabled=self.chunk_indexes[key] <= 0,
-            )
-            next_chunk = AIMemoryButton(
-                self,
-                "chunk",
-                key=key,
-                delta=1,
-                label="Text",
-                emoji="⬇️",
-                style=discord.ButtonStyle.secondary,
-                disabled=self.chunk_indexes[key] >= chunk_count - 1,
             )
 
             container.add_item(discord.ui.TextDisplay(body))
-            container.add_item(discord.ui.ActionRow(previous_chunk, next_chunk, edit_button, delete_button))
+            if chunk_count > 1:
+                previous_chunk = AIMemoryButton(
+                    self,
+                    "chunk",
+                    key=key,
+                    delta=-1,
+                    label="Up",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.chunk_indexes[key] <= 0,
+                )
+                next_chunk = AIMemoryButton(
+                    self,
+                    "chunk",
+                    key=key,
+                    delta=1,
+                    label="Down",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.chunk_indexes[key] >= chunk_count - 1,
+                )
+                container.add_item(discord.ui.ActionRow(edit_button, delete_button, previous_chunk, next_chunk))
+            else:
+                container.add_item(discord.ui.ActionRow(edit_button, delete_button))
             container.add_item(discord.ui.Separator())
 
         def memory_item_key(self, item: HistoryMessage | PersistentMemory) -> str:
@@ -1426,19 +1424,19 @@ async def setup(bot: 'BotCore'):
             return body
 
         def item_title(self, item: HistoryMessage | PersistentMemory) -> str:
+            created = (
+                discord.utils.format_dt(item.created_at, style="R")
+                if item.created_at is not None else
+                "Unknown time"
+            )
             if isinstance(item, HistoryMessage):
-                created = (
-                    discord.utils.format_dt(item.created_at, style="R")
-                    if item.created_at is not None else
-                    "Unknown time"
-                )
-                return f"Message `{item.id}` `{item.role}` {created}"
+                return f"`{item.id}` — `{item.role}` {created}"
             updated = (
                 discord.utils.format_dt(item.updated_at, style="R")
                 if item.updated_at is not None else
                 "Unknown time"
             )
-            return f"Memory `{item.id}` {updated}"
+            return f"`{item.id}` — updated {updated} — created {created}"
 
         async def show_channel(self, interaction: discord.Interaction) -> None:
             await self.switch_tab(interaction, "channel")
