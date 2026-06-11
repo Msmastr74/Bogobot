@@ -1048,7 +1048,13 @@ async def setup(bot: 'BotCore'):
             await self.set_enabled(interaction, False)
 
         async def edit_custom_prompt(self, interaction: discord.Interaction) -> None:
-            await interaction.response.send_modal(AICustomInstructionModal())
+            modal = AICustomInstructionModal()
+            await interaction.response.send_modal(modal)
+            await modal.wait()
+            if modal.submitted:
+                await interaction.edit_original_response(
+                    view=AIManagementView(),
+                )
 
         async def set_breaks_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
             ai_config.breaks.enabled = enabled
@@ -1063,7 +1069,13 @@ async def setup(bot: 'BotCore'):
             await self.set_breaks_enabled(interaction, False)
 
         async def edit_breaks(self, interaction: discord.Interaction) -> None:
-            await interaction.response.send_modal(AIBreaksModal())
+            modal = AIBreaksModal()
+            await interaction.response.send_modal(modal)
+            await modal.wait()
+            if modal.submitted:
+                await interaction.edit_original_response(
+                    view=AIManagementView(),
+                )
 
     class AICustomInstructionModal(discord.ui.Modal, title="AI Custom Instructions"):
         def __init__(self) -> None:
@@ -1079,15 +1091,13 @@ async def setup(bot: 'BotCore'):
                 max_length=4000,
             )
             self.add_item(self.custom_instruction_text)
+            self.submitted = False
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True)
+            self.submitted = True
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
-            if interaction.message:
-                await interaction.message.edit(
-                    view=AIManagementView(),
-                )
             await interaction.followup.send("Updated custom instructions.")
 
     class AIBreaksModal(discord.ui.Modal, title="AI Breaks"):
@@ -1119,15 +1129,12 @@ async def setup(bot: 'BotCore'):
                 )
                 return
             await interaction.response.defer(ephemeral=True)
+            self.submitted = True
 
             ai_config.breaks.active_minutes = active_minutes
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
-            if interaction.message:
-                await interaction.message.edit(
-                    view=AIManagementView(),
-                )
             await interaction.followup.send("Updated AI break settings.")
 
     @manage.command(

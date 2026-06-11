@@ -319,10 +319,19 @@ class RaidConfigView(discord.ui.LayoutView):
         ))
 
     async def edit_numbers(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(RaidNumbersModal(
+        modal = RaidNumbersModal(
             protector=self.protector,
             guild=self.guild,
-        ))
+        )
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        if modal.submitted:
+            await interaction.edit_original_response(
+                view=RaidConfigView(
+                    protector=self.protector,
+                    guild=self.guild,
+                ),
+            )
 
 class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
     def __init__(
@@ -372,6 +381,7 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
             self.triggers,
         ):
             self.add_item(item)
+        self.submitted = False
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -416,16 +426,10 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
             await interaction.response.send_message(str(error), ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
+        self.submitted = True
 
         await self.protector.save_config(self.guild.id)
         
-        if interaction.message:
-            await interaction.message.edit(
-                view=RaidConfigView(
-                    protector=self.protector,
-                    guild=self.guild,
-                ),
-            )
         await interaction.followup.send("Updated raid settings.")
 
     def _parse_assignments(
