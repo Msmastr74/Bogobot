@@ -5,6 +5,7 @@ from utils.ai.context import (
     SYSTEM_NAMESPACE,
     close_system_tag,
     open_system_tag,
+    MAX_COMMANDS
 )
 
 if TYPE_CHECKING:
@@ -114,4 +115,5 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
     prompt += f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
     prompt += "</instruction_guardrail>\n"
     prompt += f"<max_new_tokens>{MAX_NEW_TOKENS}</max_new_tokens>"
+    prompt += f"You can execute up to {MAX_COMMANDS} commands per turn."
     return prompt

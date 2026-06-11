@@ -12,6 +12,7 @@ import discord
 SYSTEM_NAMESPACE = "|system|"
 ASSISTANT_NAMESPACE = "|assistant|"
 DEFAULT_HISTORY_PATH = "ai_history.sqlite3"
+MAX_COMMANDS = 4
 DEFAULT_HISTORY_CHAR_BUDGET = 10_000
 ANNOTATED_DISCORD_REFERENCE_RE = re.compile(r"<(@!?|@&|#)([0-9]{15,20}) \"(?:\\.|[^\"\\])*\">")
 USER_MENTION_RE = re.compile(r"<(@!?)([0-9]{15,20})>")

@@ -1157,7 +1157,7 @@ async def setup(bot: 'BotCore'):
     def memory_tab_available(interaction: discord.Interaction, tab: str) -> tuple[bool, str | None]:
         if tab == "channel":
             if interaction.channel_id is None:
-                return False, "Channel memory is only available from a Discord channel."
+                return False, "Channel history is only available from a Discord channel."
             if not user_has_capability(interaction, AI_MANAGE_MEMORY_CHANNEL_CAPABILITY):
                 return False, f"Missing `{AI_MANAGE_MEMORY_CHANNEL_CAPABILITY}`."
             return True, None
@@ -1260,7 +1260,7 @@ async def setup(bot: 'BotCore'):
             container.add_item(discord.ui.TextDisplay("## AI Memory"))
             container.add_item(discord.ui.Separator())
             channel_button = discord.ui.Button(
-                label="Channel Memory",
+                label="Channel History",
                 style=discord.ButtonStyle.primary if self.tab == "channel" else discord.ButtonStyle.secondary,
             )
             persistent_button = discord.ui.Button(
@@ -1290,13 +1290,13 @@ async def setup(bot: 'BotCore'):
             add_button = AIMemoryButton(
                 self,
                 "add",
-                label="Add Memory" if self.tab == "persistent" else "Add Record",
+                label="Add Memory" if self.tab == "persistent" else "Add History",
                 style=discord.ButtonStyle.secondary,
             )
             container.add_item(discord.ui.ActionRow(add_button))
 
             if not page_items:
-                container.add_item(discord.ui.TextDisplay("No memory entries."))
+                container.add_item(discord.ui.TextDisplay("No memory entries." if self.tab == "persistent" else "No history entries."))
                 container.add_item(discord.ui.Separator())
             else:
                 for item in page_items:

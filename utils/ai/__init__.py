@@ -28,6 +28,7 @@ from utils.ai.context import (
     strip_context_tag_namespaces,
     strip_discord_reference_annotations,
     XMLReader,
+    MAX_COMMANDS
 )
 from utils.ai.system_prompt import (
     CONTEXT_REQUEST_TOOL_NAME as _CONTEXT_REQUEST_TOOL_NAME,
@@ -45,7 +46,6 @@ ActionT = TypeVar("ActionT")
 AIParamsTable: TypeAlias = dict[str, "AIParam"]
 AIParamType: TypeAlias = object
 AI_ALLOWED_PARAM_TYPES: tuple[object, ...] = (str, int, float, bool, object, None, type(None))
-_MAX_CALLS = 4
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
@@ -341,7 +341,7 @@ class AICore(Generic[ContextT, ActionT]):
                 visible_content, text_dont_respond = self._extract_dont_respond(visible_content)
             tool_dont_respond = self.multipart_responses and any(
                 call.name == _DONT_RESPOND_TOOL_NAME
-                for call in calls[:_MAX_CALLS]
+                for call in calls
             )
             dont_respond = text_dont_respond or tool_dont_respond
             self._queue_context_requests(requests)
@@ -385,7 +385,8 @@ class AICore(Generic[ContextT, ActionT]):
             action_by_tool = {action.tool_name: action for action in self._actions}
             message_source = source if isinstance(source, discord.Message) else None
             interaction_source = source if isinstance(source, discord.Interaction) else None
-            for call in calls[:_MAX_CALLS]:
+            command_count = 0
+            for call in calls:
                 if call.name == _CONTEXT_REQUEST_TOOL_NAME:
                     request = self._context_request_from_tool_call(
                         call,
@@ -424,6 +425,9 @@ class AICore(Generic[ContextT, ActionT]):
                 if action is None:
                     self.logger.debug(f"tool call rejected unknown action {call.name!r}.")
                     continue
+                if command_count >= MAX_COMMANDS:
+                    continue
+                command_count += 1
 
                 kwargs = self._coerce_arguments(
                     action,
