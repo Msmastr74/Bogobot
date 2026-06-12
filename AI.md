@@ -207,6 +207,12 @@ Tool and command calls are recorded in history as event history:
 
 ```xml
 <{SYSTEM_TAG}:event_history type="tool_use">
+<{SYSTEM_TAG}:attached_metadata>
+id: 1508656142996340787
+time: 2026-05-26T02:20:53.966000+00:00
+user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
+capabilities: *:100
+</{SYSTEM_TAG}:attached_metadata>
 {"name":"ping","arguments":{}}
 </{SYSTEM_TAG}:event_history>
 ```

@@ -419,7 +419,7 @@ class AICore(Generic[ContextT, ActionT]):
                 self.logger.debug(f"match succeeded for {text} with action {action.name}.")
                 def record_command(source: discord.Message | None, command_name: str = action.command_name, kwargs: dict[str, Any] = kwargs) -> None:
                     try:
-                        self.context.record_tool_use(command_name, kwargs, channel_id=channel_id)
+                        self.context.record_tool_use(command_name, kwargs, source, channel_id=channel_id)
                     finally:
                         release_token.release()
 
@@ -533,10 +533,19 @@ class AICore(Generic[ContextT, ActionT]):
             messages.append({"role": "assistant", "content": memory_context})
         for item in history:
             if item.history_type == "event":
+                event_type = item.event_type or "event"
+                open_tag = open_system_tag("event_history").replace(
+                    ">",
+                    f" type={json.dumps(event_type, ensure_ascii=False)}>",
+                )
                 messages.append(
                     {
                         "role": item.role,
-                        "content": item.content.strip(),
+                        "content": (
+                            f"{open_tag}\n"
+                            f"{item.content.strip()}\n"
+                            f"{close_system_tag('event_history')}"
+                        ),
                     }
                 )
                 continue

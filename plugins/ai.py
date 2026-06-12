@@ -1430,7 +1430,10 @@ async def setup(bot: 'BotCore'):
                 "Unknown time"
             )
             if isinstance(item, HistoryMessage):
-                return f"`{item.id}` — `{item.role}` {created}"
+                if item.history_type == "event":
+                    event_type = item.event_type or "event"
+                    return f"`{item.id}` — `{item.role}` — `{item.history_type}/{event_type}` {created}"
+                return f"`{item.id}` — `{item.role}` — `{item.history_type}` {created}"
             updated = (
                 discord.utils.format_dt(item.updated_at, style="R")
                 if item.updated_at is not None else

@@ -481,26 +481,57 @@ class AIContext:
     ) -> str:
         return content.strip()
 
-    def format_tool_use_event(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
-        open_tag = open_system_tag("event_history").replace(">", ' type="tool_use">')
+    def format_tool_use_event(
+        self,
+        command_name: str,
+        arguments: dict[str, Any] | None = None,
+        source: discord.Message | discord.Interaction | None = None,
+    ) -> str:
         payload = {
             "name": command_name,
             "arguments": self._json_safe(arguments or {}),
         }
-        return (
-            f"{open_tag}\n"
-            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
-            f"{close_system_tag('event_history')}"
+        metadata = self.format_attached_metadata(source)
+        return "\n".join(
+            part
+            for part in (
+                metadata,
+                json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+            )
+            if part
         )
+
+    def format_attached_metadata(
+        self,
+        source: discord.Message | discord.Interaction | None,
+    ) -> str:
+        if isinstance(source, discord.Message):
+            return self._format_attached_metadata(
+                user=source.author,
+                message_id=source.id,
+                interaction=False,
+                interaction_data=source.interaction_metadata,
+                created_at=source.created_at,
+            )
+        if isinstance(source, discord.Interaction):
+            return self._format_attached_metadata(
+                user=source.user,
+                message_id=None,
+                interaction=True,
+                created_at=source.created_at,
+            )
+        return ""
 
     def record_tool_use(
         self,
         command_name: str,
         arguments: dict[str, Any] | None = None,
+        source: discord.Message | discord.Interaction | None = None,
         *,
         channel_id: int | None = None,
     ) -> None:
-        content = self.format_tool_use_event(command_name, arguments)
+        channel_id = channel_id if channel_id is not None else self.source_channel_id(source)
+        content = self.format_tool_use_event(command_name, arguments, source)
         self.logger.debug(f"\n[role=assistant channel_id={channel_id} history_type=event event_type=tool_use]\n{content}")
         if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
             return
@@ -905,12 +936,26 @@ class AIContext:
         interaction_data: discord.MessageInteractionMetadata | None = None,
         created_at: datetime,
     ) -> str:
+        content = content.strip()
+        return (
+            f"{self._format_attached_metadata(user=user, message_id=message_id, interaction=interaction, interaction_data=interaction_data, created_at=created_at)}\n"
+            f"{content}"
+        )
+
+    def _format_attached_metadata(
+        self,
+        *,
+        user: discord.User | discord.Member,
+        message_id: int | None,
+        interaction: bool,
+        interaction_data: discord.MessageInteractionMetadata | None = None,
+        created_at: datetime,
+    ) -> str:
         id_line = f"id: {message_id}\n" if message_id is not None else ""
         interaction_line = "interaction: true\n" if interaction else ""
         interaction_text = f"from interaction: {self._format_interaction_metadata(interaction_data)}\n" if interaction_data is not None else ""
         timestamp = created_at.astimezone(timezone.utc).isoformat()
         capabilities = self._user_capabilities_text(user.id)
-        content = content.strip()
         return (
             f"{open_system_tag('attached_metadata')}\n"
             f"{id_line}"
@@ -919,8 +964,7 @@ class AIContext:
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
             f"capabilities: {capabilities}\n"
-            f"{close_system_tag('attached_metadata')}\n"
-            f"{content}"
+            f"{close_system_tag('attached_metadata')}"
         )
 
     def _user_capabilities(self, user_id: int) -> dict[str, int]:
