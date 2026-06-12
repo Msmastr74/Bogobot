@@ -14,6 +14,7 @@ from utils.schemas import BogostreamApiStats
 BOGOSTREAM_STATS_API_URL = "https://bogo.swapjs.dev/api/stats"
 BOGOSTREAM_STATS_API_INTERVAL_SECONDS = 1.0
 MILESTONE_ROUND_TO_PREFIX = [1, 2, 3, 5]
+SORT_SECTION_SIDE_TRIM_RATIO = 0.2
 
 STAT_SUFFIX_POWERS = {
     "": 0,
@@ -440,7 +441,11 @@ class SortSectionReader:
         for index in range(section_count):
             x1 = round(index * mask.shape[1] / section_count)
             x2 = round((index + 1) * mask.shape[1] / section_count)
-            scores.append(self.solid_section_score(mask[:, x1:x2]))
+            width = x2 - x1
+            trim = round(width * SORT_SECTION_SIDE_TRIM_RATIO)
+            section_x1 = min(x2, x1 + trim)
+            section_x2 = max(section_x1, x2 - trim)
+            scores.append(self.solid_section_score(mask[:, section_x1:section_x2]))
 
         present_indices = [
             index
