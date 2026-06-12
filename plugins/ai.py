@@ -1703,7 +1703,7 @@ async def setup(bot: 'BotCore'):
         if ai_on_break():
             return
 
-        await bot.discord.defer(ephemeral=False)
+        await bot.discord.defer(ephemeral=False, thinking=True)
         requested_context = await context_request_executor.execute(interaction, prompt)
         lock_token = ai_core.lock_token()
         try:
