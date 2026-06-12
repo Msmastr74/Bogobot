@@ -491,19 +491,33 @@ class AIContext:
             "name": command_name,
             "arguments": self._json_safe(arguments or {}),
         }
-        metadata = self.format_attached_metadata(source)
+        metadata = self.format_output_message_metadata(source)
         return "\n".join(
             part
             for part in (
-                metadata,
                 json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+                metadata,
             )
             if part
         )
 
+    def format_output_message_metadata(
+        self,
+        source: discord.Message | discord.Interaction | None,
+    ) -> str:
+        return self._format_source_metadata(source, tag_name="output_message_metadata")
+
     def format_attached_metadata(
         self,
         source: discord.Message | discord.Interaction | None,
+    ) -> str:
+        return self._format_source_metadata(source, tag_name="attached_metadata")
+
+    def _format_source_metadata(
+        self,
+        source: discord.Message | discord.Interaction | None,
+        *,
+        tag_name: str,
     ) -> str:
         if isinstance(source, discord.Message):
             return self._format_attached_metadata(
@@ -512,6 +526,7 @@ class AIContext:
                 interaction=False,
                 interaction_data=source.interaction_metadata,
                 created_at=source.created_at,
+                tag_name=tag_name,
             )
         if isinstance(source, discord.Interaction):
             return self._format_attached_metadata(
@@ -519,6 +534,7 @@ class AIContext:
                 message_id=None,
                 interaction=True,
                 created_at=source.created_at,
+                tag_name=tag_name,
             )
         return ""
 
@@ -950,6 +966,7 @@ class AIContext:
         interaction: bool,
         interaction_data: discord.MessageInteractionMetadata | None = None,
         created_at: datetime,
+        tag_name: str = "attached_metadata",
     ) -> str:
         id_line = f"id: {message_id}\n" if message_id is not None else ""
         interaction_line = "interaction: true\n" if interaction else ""
@@ -957,14 +974,14 @@ class AIContext:
         timestamp = created_at.astimezone(timezone.utc).isoformat()
         capabilities = self._user_capabilities_text(user.id)
         return (
-            f"{open_system_tag('attached_metadata')}\n"
+            f"{open_system_tag(tag_name)}\n"
             f"{id_line}"
             f"{interaction_line}"
             f"{interaction_text}"
             f"time: {timestamp}\n"
             f"user: {user.id} {user.name} {json.dumps(user.display_name, ensure_ascii=False)}\n"
             f"capabilities: {capabilities}\n"
-            f"{close_system_tag('attached_metadata')}"
+            f"{close_system_tag(tag_name)}"
         )
 
     def _user_capabilities(self, user_id: int) -> dict[str, int]:
