@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 
 from utils.transformers import ColourTransformer, IntTransformer
-from bogobot_core import BotCore, current_interaction
+from bogobot_core import BotCore
 from utils import groups
 from utils.ai import AIParam, action
 
@@ -403,6 +403,7 @@ async def setup(bot: BotCore):
             accent_colour: discord.Colour | None,
             attachments: list[discord.Attachment],
             message_id: int | None,
+            command_continuation,
         ):
             super().__init__()
             self.message_title = title
@@ -411,6 +412,7 @@ async def setup(bot: BotCore):
             self.accent_colour = accent_colour
             self.attachments = attachments
             self.message_id = message_id
+            self.command_continuation = command_continuation
             self.message = discord.ui.TextInput(
                 style=discord.TextStyle.long,
                 required=False,
@@ -419,34 +421,40 @@ async def setup(bot: BotCore):
             self.add_item(discord.ui.Label(text="Message", component=self.message))
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
-            token = current_interaction.set(interaction)
-            try:
-                if not self.message.value and not self.message_title and not self.attachments:
-                    await bot.discord.send(
-                        contents="The message cannot be empty.",
-                        response=True,
-                        ephemeral=True
-                    )
-                    return
-                applied = await apply_announcement(
-                    interaction=interaction,
-                    message_id=self.message_id,
-                    title=self.message_title,
-                    message=self.message.value or None,
-                    message_container=self.message_container,
-                    attachments_container=self.attachments_container,
-                    accent_colour=self.accent_colour,
-                    attachments=self.attachments,
-                )
-                if not applied:
-                    return
+            await self.command_continuation.resume_command(
+                interaction,
+                self._submit,
+                (),
+                {},
+                eph=True,
+                defer=False,
+            )
+
+        async def _submit(self, interaction: discord.Interaction) -> None:
+            if not self.message.value and not self.message_title and not self.attachments:
                 await bot.discord.send(
-                    contents=f"The announcement message was successfully {'edited' if self.message_id is not None else 'sent'}.",
+                    contents="The message cannot be empty.",
                     response=True,
                     ephemeral=True
                 )
-            finally:
-                current_interaction.reset(token)
+                return
+            applied = await apply_announcement(
+                interaction=interaction,
+                message_id=self.message_id,
+                title=self.message_title,
+                message=self.message.value or None,
+                message_container=self.message_container,
+                attachments_container=self.attachments_container,
+                accent_colour=self.accent_colour,
+                attachments=self.attachments,
+            )
+            if not applied:
+                return
+            await bot.discord.send(
+                contents=f"The announcement message was successfully {'edited' if self.message_id is not None else 'sent'}.",
+                response=True,
+                ephemeral=True
+            )
     
     @manage.command(
         name='announce',
@@ -503,6 +511,7 @@ async def setup(bot: BotCore):
             if attachment is not None
         ]
         if message is None:
+            command_continuation = bot.setup.pause_command(("discord.announce",))
             await interaction.response.send_modal(
                 AnnounceModal(
                     title=title,
@@ -511,6 +520,7 @@ async def setup(bot: BotCore):
                     accent_colour=accent_colour,
                     attachments=attachments,
                     message_id=message_id,
+                    command_continuation=command_continuation,
                 )
             )
             return

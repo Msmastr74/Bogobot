@@ -13,7 +13,6 @@ import numpy as np
 from PIL import Image, ImageSequence
 
 from typing import Optional, overload
-from bogobot_core import current_interaction
 from utils.ai import AIParam, action
 from utils.logger_pipe import log_subprocess_pipe
 from utils.type import Coro
@@ -853,11 +852,13 @@ async def setup(bot: BotCore):
             content: str,
             embeds: list[discord.Embed],
             attachments: list[discord.Attachment],
+            command_continuation,
         ):
             super().__init__()
             self.content = content
             self.embeds = embeds
             self.attachments = attachments
+            self.command_continuation = command_continuation
             self.rows = discord.ui.TextInput(
                 default=str(DEFAULT_SCRAMBLE_SHAPE[0]),
                 required=True,
@@ -872,7 +873,16 @@ async def setup(bot: BotCore):
             self.add_item(discord.ui.Label(text="Columns", component=self.columns))
         
         async def on_submit(self, interaction: discord.Interaction):
-            token = current_interaction.set(interaction)
+            await self.command_continuation.resume_command(
+                interaction,
+                self._submit,
+                (),
+                {},
+                eph=False,
+                defer=False,
+            )
+
+        async def _submit(self, interaction: discord.Interaction):
             await bot.discord.defer(ephemeral=False)
             try:
                 try:
@@ -890,8 +900,6 @@ async def setup(bot: BotCore):
                 )
             except BogoUserError as e:
                 await send_bogo_error(interaction, e)
-            finally:
-                current_interaction.reset(token)
     @bot.setup.context_menu(
         name="Custom Bogoscramble",
         eph=False,
@@ -899,11 +907,13 @@ async def setup(bot: BotCore):
     )
     async def CustomBogoscramble(interaction: discord.Interaction, message: discord.Message):
         content, embeds, attachments = message_bogoscramble_inputs(message)
+        command_continuation = bot.setup.pause_command((bot.setup._default_capability("Custom Bogoscramble"),))
         await interaction.response.send_modal(
             CustomBogoscrambleModal(
                 content=content,
                 embeds=embeds,
                 attachments=attachments,
+                command_continuation=command_continuation,
             )
         )
     @bot.setup.command(

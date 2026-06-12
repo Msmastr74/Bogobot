@@ -57,6 +57,9 @@ logging.captureWarnings(True)
 current_interaction: 'contextvars.ContextVar[discord.Interaction | None]' = contextvars.ContextVar(
     "current_interaction", default=None
 )
+current_command_completions: 'contextvars.ContextVar[list[asyncio.Future[None]] | None]' = contextvars.ContextVar(
+    "current_command_completions", default=None
+)
 
 if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
@@ -684,7 +687,7 @@ class BotCore(discord.Client):
                 self.outer.accounts.capabilities.register(*capabilities)
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-                    await self._run_command(
+                    await self.run_command(
                         interaction,
                         func,
                         args,
@@ -725,7 +728,7 @@ class BotCore(discord.Client):
                     self.setup.outer.accounts.capabilities.register(*capabilities)
                     @functools.wraps(func)
                     async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-                        await self.setup._run_command(
+                        await self.setup.run_command(
                             interaction,
                             func,
                             args,
@@ -766,7 +769,7 @@ class BotCore(discord.Client):
                 @self.outer.tree.context_menu(name=name)
                 @functools.wraps(func)
                 async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-                    await self._run_command(
+                    await self.run_command(
                         interaction,
                         func,
                         args,
@@ -812,7 +815,76 @@ class BotCore(discord.Client):
 
             return group_obj
 
-        async def _run_command(
+        class CommandContinuation:
+            def __init__(
+                self,
+                setup: "BotCore._Setup",
+                future: asyncio.Future[None],
+                capabilities: Sequence[str],
+            ) -> None:
+                self.setup = setup
+                self.future = future
+                self.capabilities = tuple(capabilities)
+
+            async def resume_command(
+                self,
+                interaction: discord.Interaction,
+                func: Callable[Concatenate[discord.Interaction, ...], Coro[Any]],
+                args,
+                kwargs,
+                *,
+                eph,
+                defer,
+            ) -> None:
+                token = current_interaction.set(interaction)
+                try:
+                    missing_capabilities = self.setup.missing_capabilities(interaction, self.capabilities)
+                    if missing_capabilities:
+                        missing_text = ", ".join(f"`{capability}`" for capability in missing_capabilities)
+                        message = f"❌ Missing capabilities: {missing_text}"
+                        if interaction.response.is_done():
+                            await self.setup.outer.discord.cleanup_defer_status(interaction)
+                            await interaction.followup.send(message, ephemeral=True)
+                        else:
+                            await interaction.response.send_message(message, ephemeral=True)
+                        return
+                    if defer and not interaction.response.is_done():
+                        await interaction.response.defer(ephemeral=eph)
+                    await func(interaction, *args, **kwargs)
+                    if not self.future.done():
+                        self.future.set_result(None)
+                except BaseException as exc:
+                    if not self.future.done():
+                        self.future.set_exception(exc)
+                    raise
+                finally:
+                    current_interaction.reset(token)
+
+        def pause_command(
+            self,
+            capabilities: Sequence[str],
+        ) -> "BotCore._Setup.CommandContinuation":
+            completions = current_command_completions.get()
+            if completions is None:
+                raise RuntimeError("No active command context to delay.")
+
+            future = asyncio.get_running_loop().create_future()
+            completions.append(future)
+            return self.CommandContinuation(self, future, capabilities)
+
+        def missing_capabilities(
+            self,
+            interaction: discord.Interaction,
+            capabilities: Sequence[str],
+        ) -> list[str]:
+            user_perms = self.outer.accounts[interaction.user.id].local(interaction.guild_id).permissions
+            return [
+                capability
+                for capability in capabilities
+                if not user_perms.can_use(capability, registry=self.outer.accounts.capabilities)
+            ]
+
+        async def run_command(
             self,
             interaction: discord.Interaction,
             func: Callable[Concatenate[discord.Interaction, ...], Coro[Any]],
@@ -822,9 +894,11 @@ class BotCore(discord.Client):
             capabilities: Sequence[str],
             eph,
             defer,
+            command: app_commands.Command[Any, ..., Any] | app_commands.ContextMenu | str | None = None,
         ):
-            command_obj = interaction.command
+            command_obj = command or interaction.command
             command_name = (
+                command_obj if isinstance(command_obj, str) else
                 getattr(command_obj, "qualified_name", None) or
                 getattr(command_obj, "name", None) or
                 getattr(func, "__name__", "unknown")
@@ -841,12 +915,8 @@ class BotCore(discord.Client):
             error: str | None = None
 
             token = current_interaction.set(interaction)
-            user_perms = self.outer.accounts[interaction.user.id].local(interaction.guild_id).permissions
-            missing_capabilities = [
-                capability
-                for capability in capabilities
-                if not user_perms.can_use(capability, registry=self.outer.accounts.capabilities)
-            ]
+            completion_token = current_command_completions.set([])
+            missing_capabilities = self.missing_capabilities(interaction, capabilities)
 
             started_at = time.monotonic()
             try:
@@ -866,6 +936,9 @@ class BotCore(discord.Client):
                 if defer and not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=(eph))
                 await func(interaction, *args, **kwargs)
+                completions = current_command_completions.get() or []
+                if completions:
+                    await asyncio.gather(*completions)
             except Exception as e:
                 status = "error"
                 error = f"{type(e).__qualname__}: {str(e)}"
@@ -890,4 +963,5 @@ class BotCore(discord.Client):
                     "duration_ms": round((time.monotonic() - started_at) * 1000, 1),
                     "error": error,
                 })
+                current_command_completions.reset(completion_token)
                 current_interaction.reset(token)

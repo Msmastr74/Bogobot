@@ -94,7 +94,7 @@ async def trigger_ai_activity(
                     bot.setup._default_capability(match.command_name),
                     *match.context.get("capabilities", ()),
                 ))
-                await bot.setup._run_command(
+                await bot.setup.run_command(
                     interaction,
                     match.action,
                     (),
@@ -102,6 +102,7 @@ async def trigger_ai_activity(
                     capabilities=capabilities,
                     eph=False,
                     defer=False,
+                    command=match.command_name,
                 )
             if output_messages:
                 followup_only = True

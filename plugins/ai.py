@@ -1663,7 +1663,7 @@ async def setup(bot: 'BotCore'):
                         bot.setup._default_capability(match.command_name),
                         *match.context.get("capabilities", ()),
                     ))
-                    await bot.setup._run_command(
+                    await bot.setup.run_command(
                         interaction,
                         match.action,
                         (),
@@ -1671,6 +1671,7 @@ async def setup(bot: 'BotCore'):
                         capabilities=capabilities,
                         eph=False,
                         defer=False,
+                        command=match.command_name,
                     )
                 if len(output_messages) > 0:
                     followup_only = True
@@ -1753,7 +1754,7 @@ async def setup(bot: 'BotCore'):
                         bot.setup._default_capability(match.command_name),
                         *match.context.get("capabilities", ()),
                     ))
-                    await bot.setup._run_command(
+                    await bot.setup.run_command(
                         interaction,
                         match.action,
                         (),
@@ -1761,6 +1762,7 @@ async def setup(bot: 'BotCore'):
                         capabilities=capabilities,
                         eph=False,
                         defer=False,
+                        command=match.command_name,
                     )
                 has_responded = has_responded or len(output_messages) > 0
                 if match.after_execution is not None:
@@ -1775,9 +1777,14 @@ async def setup(bot: 'BotCore'):
             lock_token.release()
 
     class AIMessageModal(discord.ui.Modal, title="AI"):
-        def __init__(self, target_message: discord.Message) -> None:
+        def __init__(
+            self,
+            target_message: discord.Message,
+            command_continuation,
+        ) -> None:
             super().__init__()
             self.target_message = target_message
+            self.command_continuation = command_continuation
             self.target_text = read_text_from_message(
                 self.target_message
             ) or ""
@@ -1800,18 +1807,19 @@ async def setup(bot: 'BotCore'):
             ))
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
-            from bogobot_core import current_interaction
-
-            token = current_interaction.set(interaction)
-            try:
-                await run_ai_interaction(
-                    interaction,
+            await self.command_continuation.resume_command(
+                interaction,
+                run_ai_interaction,
+                (
                     str(self.prompt.value),
-                    assistant_context=self.target_text,
-                    assistant_context_source=self.target_message,
-                )
-            finally:
-                current_interaction.reset(token)
+                ),
+                {
+                    "assistant_context": self.target_text,
+                    "assistant_context_source": self.target_message,
+                },
+                eph=False,
+                defer=False,
+            )
 
     @bot.setup.context_menu(
         name="AI",
@@ -1820,7 +1828,8 @@ async def setup(bot: 'BotCore'):
         eph=False,
     )
     async def AI(interaction: discord.Interaction, message: discord.Message) -> None:
-        await interaction.response.send_modal(AIMessageModal(message))
+        command_continuation = bot.setup.pause_command((USER_AI_CAPABILITY,))
+        await interaction.response.send_modal(AIMessageModal(message, command_continuation))
 
     @bot.setup.command(
         name="ai",

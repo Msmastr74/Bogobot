@@ -4,7 +4,7 @@ from typing import Any, Awaitable, Callable
 
 import discord
 
-from bogobot_core import BotCore, current_interaction
+from bogobot_core import BotCore
 from utils.ai import AIParam, action
 from utils.discord import chunk_text
 from utils.sandboxed_executor import Language, SandboxedExecutor, PythonLanguage, JavascriptLanguage
@@ -50,10 +50,12 @@ async def setup(bot: BotCore) -> None:
         )
         async def command(interaction: discord.Interaction, code: str | None = None):
             if code is None:
+                command_continuation = bot.setup.pause_command((bot.setup._default_capability(language.name),))
                 await interaction.response.send_modal(ProgramInputModal(
                     bot,
                     callback=lambda code: execute_code(code, executor),
-                    label_text=f"{language.name.capitalize()} code"
+                    label_text=f"{language.name.capitalize()} code",
+                    command_continuation=command_continuation,
                 ))
                 return
             await execute_code(code, executor)
@@ -98,11 +100,13 @@ class ProgramInputModal(discord.ui.Modal, title="Program"):
         bot: BotCore,
         *,
         callback: Callable[[str], Awaitable[Any]],
-        label_text: str
+        label_text: str,
+        command_continuation,
     ) -> None:
         super().__init__()
         self.bot = bot
         self.callback = callback
+        self.command_continuation = command_continuation
         self.code = discord.ui.TextInput(
             style=discord.TextStyle.paragraph,
             required=False,
@@ -121,32 +125,36 @@ class ProgramInputModal(discord.ui.Modal, title="Program"):
         ))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        token = current_interaction.set(interaction)
+        await self.command_continuation.resume_command(
+            interaction,
+            self._submit,
+            (),
+            {},
+            eph=False,
+            defer=False,
+        )
+
+    async def _submit(self, interaction: discord.Interaction) -> None:
         await self.bot.discord.defer(ephemeral=False)
-
         try:
-            try:
-                code = await self._read_code()
-            except ValueError as exc:
-                await self.bot.discord.send(
-                    str(exc),
-                    response=True,
-                    ephemeral=True,
-                )
-                return
-            
-            if not code.strip():
-                await self.bot.discord.send(
-                    "Provide code in the text box or upload a source file.",
-                    response=True,
-                    ephemeral=True,
-                )
-                return
+            code = await self._read_code()
+        except ValueError as exc:
+            await self.bot.discord.send(
+                str(exc),
+                response=True,
+                ephemeral=True,
+            )
+            return
+        
+        if not code.strip():
+            await self.bot.discord.send(
+                "Provide code in the text box or upload a source file.",
+                response=True,
+                ephemeral=True,
+            )
+            return
 
-            await self.callback(code)
-
-        finally:
-            current_interaction.reset(token)
+        await self.callback(code)
 
     async def _read_code(self) -> str:
         code = ""
