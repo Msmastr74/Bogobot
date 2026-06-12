@@ -3,6 +3,7 @@
     "owner_uid": 12345678901234567,
     "sync": true,
     "debug": false,
+    "debug_frame_processing": false,
     "save_ocr_debug": false,
     "save_live_frame": false,
     "channels": {}

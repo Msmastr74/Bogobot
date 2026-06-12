@@ -1,6 +1,7 @@
 import numpy as np
 import time
 from decimal import Decimal, InvalidOperation
+from logging import Logger
 from PIL import Image
 
 import aiohttp
@@ -79,8 +80,10 @@ def format_duration(seconds: int) -> str:
 
 
 async def setup(bot: BotCore):
+    log = bot.logger.getChild("Stats")
     stats_source = str(bot.config.get("stats_source", "api")).lower()
     api_enabled = stats_source in {"api", "event", "events"}
+    debug_frame_processing = bool(bot.config.get("debug_frame_processing", False))
     api_url = str(bot.config.get("bogostream_stats_api_url", BOGOSTREAM_STATS_API_URL))
     api_interval = max(
         0.25,
@@ -115,7 +118,7 @@ async def setup(bot: BotCore):
     async def fetch_api_stats(session: aiohttp.ClientSession) -> BogostreamApiStats | None:
         async with session.get(api_url) as response:
             if response.status != 200:
-                bot.logger.warning(f"Bogostream stats API returned HTTP {response.status}")
+                log.warning(f"Bogostream stats API returned HTTP {response.status}")
                 return None
             try:
                 return BogostreamApiStats.model_validate(
@@ -123,7 +126,7 @@ async def setup(bot: BotCore):
                     context={"section_count": bot.SORT_SECTION_COUNT},
                 )
             except ValidationError:
-                bot.logger.warning("Bogostream stats API returned an unexpected payload shape")
+                log.warning("Bogostream stats API returned an unexpected payload shape")
                 return None
 
     async def api_stats_loop() -> None:
@@ -143,14 +146,14 @@ async def setup(bot: BotCore):
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    bot.logger.exception("Bogostream stats API update failed")
+                    log.exception("Bogostream stats API update failed")
 
                 await asyncio.sleep(api_interval)
 
     async def update_ocr_data(img: Image.Image, *, sort_changed: bool = True) -> None:
         ocr = bot.ocr
         if ocr is None:
-            bot.logger.warning("OCR stats source is selected, but OCR is disabled. Set `ocr_enabled` to true to use OCR.")
+            log.warning("OCR stats source is selected, but OCR is disabled. Set `ocr_enabled` to true to use OCR.")
             return
 
         try:
@@ -189,7 +192,7 @@ async def setup(bot: BotCore):
 
             bot._last_ocr_refresh = time.time()
         except Exception:
-            bot.logger.exception("OCR processing error")
+            log.exception("OCR processing error")
 
     async def update_milestones(img: Image.Image | None, frame_received_at: float):
         if bot.milestones is None:
@@ -295,7 +298,7 @@ async def setup(bot: BotCore):
 
         return f"{int(number):,}"
 
-    sort_reader = SortSectionReader(bot)
+    sort_reader = SortSectionReader(bot, logger=log, debug=debug_frame_processing)
 
     last_frame_monotonic = time.monotonic()
     @bot.new_frame_callback
@@ -306,7 +309,8 @@ async def setup(bot: BotCore):
         frame_received_monotonic = time.monotonic()
         dt = frame_received_monotonic - last_frame_monotonic
         last_frame_monotonic = frame_received_monotonic
-        bot.logger.debug(f"New frame received (dt={dt:.2f}s)")
+        if debug_frame_processing:
+            log.debug(f"New frame received (dt={dt:.2f}s)")
         
         if bot.config.get("save_live_frame", False):
             img.save("live_720p.png", format="PNG")
@@ -321,7 +325,8 @@ async def setup(bot: BotCore):
             sort_values,
             new_values,
         ) = sort_reader.analyze(img)
-        bot.logger.debug(f"Sort sections analyzed (dt={time.monotonic() - sort_changed_start:.2f}s)")
+        if debug_frame_processing:
+            log.debug(f"Sort sections analyzed (dt={time.monotonic() - sort_changed_start:.2f}s)")
 
         if sort_changed:
             bot.best_shuffle_sections = best_shuffle_sections
@@ -335,18 +340,21 @@ async def setup(bot: BotCore):
                 best_shuffle_count,
                 timestamp=frame_received_at,
             )
-            bot.logger.debug(
-                f"New value callbacks executed (dt={time.monotonic() - new_value_start:.2f}s)"
-            )
+            if debug_frame_processing:
+                log.debug(
+                    f"New value callbacks executed (dt={time.monotonic() - new_value_start:.2f}s)"
+                )
         
         update_ocr_start = time.monotonic()
         await update_ocr_data(img, sort_changed=sort_changed)
-        bot.logger.debug(f"OCR data updated (dt={time.monotonic() - update_ocr_start:.2f}s)")
+        if debug_frame_processing:
+            log.debug(f"OCR data updated (dt={time.monotonic() - update_ocr_start:.2f}s)")
         
         if bot.milestones:
             milestones_start = time.monotonic()
             await update_milestones(img, frame_received_at)
-            bot.logger.debug(f"Milestones updated (dt={time.monotonic() - milestones_start:.2f}s)")
+            if debug_frame_processing:
+                log.debug(f"Milestones updated (dt={time.monotonic() - milestones_start:.2f}s)")
 
     @bot.init_callback
     async def start_api_stats_pipeline():
@@ -358,7 +366,7 @@ async def setup(bot: BotCore):
         if api_task is not None and not api_task.done():
             return
 
-        bot.logger.info(f"Using Bogostream stats API pipeline: {api_url}")
+        log.info(f"Using Bogostream stats API pipeline: {api_url}")
         api_task = asyncio.create_task(api_stats_loop())
 
     @bot.close_callback
@@ -373,11 +381,13 @@ async def setup(bot: BotCore):
             pass
 
 class SortSectionReader:
-    def __init__(self, bot: BotCore):
+    def __init__(self, bot: BotCore, *, logger: Logger | None = None, debug: bool = False):
         self.last_signature: np.ndarray | None = None
         self.open_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         self.close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
         self.bot = bot
+        self.logger = logger if logger is not None else bot.logger.getChild("Stats")
+        self.debug = debug
 
     def analyze(
         self,
@@ -428,9 +438,10 @@ class SortSectionReader:
             green_pixels = strip_green[:, section_x1:section_x2].sum()
             sections.append(bool(green_pixels > red_pixels))
 
-        self.bot.logger.debug(
-            f"Sort strip green sections={sum(sections)}/{section_count}"
-        )
+        if self.debug:
+            self.logger.debug(
+                f"Sort strip green sections={sum(sections)}/{section_count}"
+            )
         return sections
 
     def read_sort_values(self, colour_mask: np.ndarray) -> list[int]:
@@ -460,7 +471,8 @@ class SortSectionReader:
         ):
             values[index] = value
 
-        self.bot.logger.debug(f"Sort section scores={scores}, values={values}")
+        if self.debug:
+            self.logger.debug(f"Sort section scores={scores}, values={values}")
         return values
 
     def test_changed(self, sort_rgb: np.ndarray) -> bool:
@@ -494,7 +506,8 @@ class SortSectionReader:
         self.last_signature = signature
 
         changed = changed_ratio >= self.bot.SORT_CHANGE_THRESHOLD
-        self.bot.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
+        if self.debug:
+            self.logger.debug(f"Sort visual delta={changed_ratio:.4f}, changed={changed}")
         return changed.item()
 
     def sort_colour_masks(self, rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
