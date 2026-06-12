@@ -288,60 +288,6 @@ def _completion_options(bot: BotCore, *, include_server: bool) -> list[str]:
     return sorted(dict.fromkeys(options))
 
 
-def _contains_check_wildcard(capability: str, wildcard: str) -> bool:
-    capability_base, _ = AccountPermissions._split_operation(capability)
-    return wildcard in AccountPermissions._capability_parts(capability_base)
-
-
-def _matching_registered_capabilities(bot: BotCore, capability: str) -> tuple[str, ...]:
-    stored_capability = _stored_capability(capability)
-    capability_base, operation = AccountPermissions._split_operation(stored_capability)
-    matches = tuple(
-        registered_capability
-        for registered_capability in bot.accounts.capabilities
-        if not AccountPermissions.is_reserved_capability(registered_capability)
-        if AccountPermissions._matches_base(capability_base, registered_capability)
-    )
-    if operation is None:
-        return matches
-    return tuple(f"{match}.{operation}" for match in matches)
-
-
-def _check_capability_groups(bot: BotCore, capability: str) -> tuple[tuple[str, ...], ...]:
-    stored_capability = _stored_capability(capability)
-    expanded_capabilities = AccountPermissions.expand_capability(stored_capability)
-    if not expanded_capabilities:
-        if AccountPermissions.has_preset_segment(stored_capability):
-            return ()
-        expanded_capabilities = (stored_capability,)
-
-    groups: list[tuple[str, ...]] = []
-    for expanded_capability in expanded_capabilities:
-        if _contains_check_wildcard(expanded_capability, "[all]"):
-            groups.extend((match,) for match in _matching_registered_capabilities(bot, expanded_capability))
-        elif _contains_check_wildcard(expanded_capability, "[any]"):
-            matches = _matching_registered_capabilities(bot, expanded_capability)
-            if matches:
-                groups.append(matches)
-        else:
-            groups.append((expanded_capability,))
-    return tuple(groups)
-
-
-def _expanded_check_capabilities(bot: BotCore, capability: str) -> tuple[str, ...]:
-    groups = _check_capability_groups(bot, capability)
-    if groups:
-        return tuple(dict.fromkeys(
-            check_capability
-            for group in groups
-            for check_capability in group
-        ))
-    stored_capability = _stored_capability(capability)
-    if AccountPermissions.has_preset_segment(stored_capability):
-        return ()
-    return (stored_capability,)
-
-
 def _is_registered_capability(bot: BotCore, capability: str) -> bool:
     stored_capability = _stored_capability(capability)
     if AccountPermissions.has_preset_segment(stored_capability):
@@ -694,7 +640,10 @@ async def setup(bot: BotCore) -> None:
                 if not _is_registered_capability(bot, capability):
                     resolved_lines.append(f"`{capability}` -> Unknown")
                     continue
-                expanded = _expanded_check_capabilities(bot, capability)
+                expanded = AccountPermissions.expanded_check_capabilities(
+                    _stored_capability(capability),
+                    registry=bot.accounts.capabilities,
+                )
                 if expanded:
                     resolved_lines.append(
                         f"`{capability}` -> " + ", ".join(f"`{item}`" for item in expanded)
@@ -846,7 +795,10 @@ async def setup(bot: BotCore) -> None:
                     if AccountPermissions.is_reserved_capability(capability):
                         continue
                     checked_capability = _management_capability_for_stored(capability, scope_id)
-                    for check_group in _check_capability_groups(bot, checked_capability):
+                    for check_group in AccountPermissions.check_capability_groups(
+                        _stored_capability(checked_capability),
+                        registry=bot.accounts.capabilities,
+                    ):
                         check_required_depth = max(
                             current_depth,
                             max(
@@ -878,7 +830,10 @@ async def setup(bot: BotCore) -> None:
                 stored_capability = _stored_capability(capability)
                 current_depth = target_permissions[scope_id].required_modification_depth(stored_capability)
                 required_depth = depth if action == "grant" else current_depth
-                for check_group in _check_capability_groups(bot, capability):
+                for check_group in AccountPermissions.check_capability_groups(
+                    _stored_capability(capability),
+                    registry=bot.accounts.capabilities,
+                ):
                     check_required_depth = required_depth
                     display_capability = (
                         " or ".join(f"server.{check_capability}" for check_capability in check_group)
@@ -1043,7 +998,10 @@ async def setup(bot: BotCore) -> None:
         missing = [
             f"`{capability}.grant`"
             for capability in requested_capabilities
-            for check_capability in _expanded_check_capabilities(bot, capability)
+            for check_capability in AccountPermissions.expanded_check_capabilities(
+                _stored_capability(capability),
+                registry=bot.accounts.capabilities,
+            )
             if not global_actor_perms.can_grant(check_capability)
         ]
         if missing:
@@ -1160,7 +1118,10 @@ async def setup(bot: BotCore) -> None:
                 for account_item in filtered_accounts
                 if bot.accounts[account_item[0]].local(
                     _scope_id(interaction, capability)
-                ).permissions.can_use(_stored_capability(capability))
+                ).permissions.can_use(
+                    _stored_capability(capability),
+                    registry=bot.accounts.capabilities,
+                )
             ]
         view = AccountListView(
             title=f"Accounts with `{capability}`" if is_filtered else "All accounts",

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, ClassVar, Literal, Sequence
 
 from pydantic import Field
@@ -109,17 +109,32 @@ class AccountPermissions(Schema):
         ]
         return max(depths, default=-1)
 
-    def can_use(self, capability: str) -> bool:
+    def can_use(self, capability: str, *, registry: Iterable[str] | None = None) -> bool:
+        if registry is not None:
+            return self._can_check_capability_groups(
+                capability,
+                registry=registry,
+                operation="use",
+                required_depth=0,
+                strict_depth=False,
+            )
         capability_base, _ = self._split_operation(capability)
         return self.effective_depth(capability_base, operation="use") >= 0
 
-    def can_grant(self, capability: str, *, depth: int = 0) -> bool:
+    def can_grant(self, capability: str, *, depth: int = 0, registry: Iterable[str] | None = None) -> bool:
+        if registry is not None:
+            return self._can_check_capability_groups(
+                capability,
+                registry=registry,
+                operation="grant",
+                required_depth=depth,
+                strict_depth=True,
+            )
         capability_base, _ = self._split_operation(capability)
         return self.effective_depth(capability_base, operation="grant") > depth
 
-    def can_revoke(self, capability: str, *, depth: int = 0) -> bool:
-        capability_base, _ = self._split_operation(capability)
-        return self.effective_depth(capability_base, operation="grant") > depth
+    def can_revoke(self, capability: str, *, depth: int = 0, registry: Iterable[str] | None = None) -> bool:
+        return self.can_grant(capability, depth=depth, registry=registry)
 
     def grant(self, capability: str, *, depth: int = 0) -> None:
         if self.is_reserved_capability(capability):
@@ -245,6 +260,95 @@ class AccountPermissions(Schema):
     @classmethod
     def has_preset_segment(cls, capability: str) -> bool:
         return any(cls._preset_name(part) is not None for part in cls._capability_parts(capability))
+
+    def _can_check_capability_groups(
+        self,
+        capability: str,
+        *,
+        registry: Iterable[str],
+        operation: CapabilityOperation,
+        required_depth: int,
+        strict_depth: bool,
+    ) -> bool:
+        groups = self.check_capability_groups(capability, registry=registry)
+        if not groups:
+            return False
+
+        def allowed(check_capability: str) -> bool:
+            check_base, _ = self._split_operation(check_capability)
+            depth = self.effective_depth(check_base, operation=operation)
+            if strict_depth:
+                return depth > required_depth
+            return depth >= required_depth
+
+        return all(any(allowed(check_capability) for check_capability in group) for group in groups)
+
+    @classmethod
+    def check_capability_groups(
+        cls,
+        capability: str,
+        *,
+        registry: Iterable[str],
+    ) -> tuple[tuple[str, ...], ...]:
+        expanded_capabilities = cls.expand_capability(capability)
+        if not expanded_capabilities:
+            if cls.has_preset_segment(capability):
+                return ()
+            expanded_capabilities = (capability,)
+
+        groups: list[tuple[str, ...]] = []
+        for expanded_capability in expanded_capabilities:
+            if cls._contains_wildcard(expanded_capability, "[all]"):
+                matches = cls._matching_registered_capabilities(expanded_capability, registry)
+                if not matches:
+                    groups.append(())
+                    continue
+                groups.extend((match,) for match in matches)
+            elif cls._contains_wildcard(expanded_capability, "[any]"):
+                groups.append(cls._matching_registered_capabilities(expanded_capability, registry))
+            else:
+                groups.append((expanded_capability,))
+        return tuple(groups)
+
+    @classmethod
+    def expanded_check_capabilities(
+        cls,
+        capability: str,
+        *,
+        registry: Iterable[str],
+    ) -> tuple[str, ...]:
+        groups = cls.check_capability_groups(capability, registry=registry)
+        if groups:
+            return tuple(dict.fromkeys(
+                check_capability
+                for group in groups
+                for check_capability in group
+            ))
+        if cls.has_preset_segment(capability):
+            return ()
+        return (capability,)
+
+    @classmethod
+    def _matching_registered_capabilities(
+        cls,
+        capability: str,
+        registry: Iterable[str],
+    ) -> tuple[str, ...]:
+        capability_base, operation = cls._split_operation(capability)
+        matches = tuple(
+            registered_capability
+            for registered_capability in registry
+            if not cls.is_reserved_capability(registered_capability)
+            if cls._matches_base(capability_base, registered_capability)
+        )
+        if operation is None:
+            return matches
+        return tuple(f"{match}.{operation}" for match in matches)
+
+    @classmethod
+    def _contains_wildcard(cls, capability: str, wildcard: str) -> bool:
+        capability_base, _ = cls._split_operation(capability)
+        return wildcard in cls._capability_parts(capability_base)
 
     @classmethod
     def _matches_expanded_base(cls, scope: str, capability: str) -> bool:

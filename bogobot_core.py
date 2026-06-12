@@ -845,7 +845,7 @@ class BotCore(discord.Client):
             missing_capabilities = [
                 capability
                 for capability in capabilities
-                if not user_perms.can_use(capability)
+                if not user_perms.can_use(capability, registry=self.outer.accounts.capabilities)
             ]
 
             started_at = time.monotonic()
