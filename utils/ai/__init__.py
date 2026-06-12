@@ -1,6 +1,5 @@
 import asyncio
 from dataclasses import dataclass
-import hashlib
 import json
 from logging import Logger, WARNING, getLogger
 import os
@@ -49,13 +48,6 @@ AI_ALLOWED_PARAM_TYPES: tuple[object, ...] = (str, int, float, bool, object, Non
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
-
-
-def _history_tag_name(item: HistoryMessage) -> str:
-    if item.id is None:
-        return "message_history"
-    digest = hashlib.blake2s(str(item.id).encode("ascii"), digest_size=5).hexdigest()
-    return f"message_history_{digest}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,30 +387,15 @@ class AICore(Generic[ContextT, ActionT]):
                     )
                     if request is not None:
                         self._queue_context_requests([request])
-                        self.context.record_message(
-                            "assistant",
-                            self.context.format_command_call(call.name, call.arguments),
-                            None,
-                            channel_id=channel_id,
-                        )
+                        self.context.record_tool_use(call.name, call.arguments, channel_id=channel_id)
                     continue
                 if call.name == _PERSISTENT_MEMORY_TOOL_NAME:
                     memory_history = self._apply_persistent_memory_tool_call(call)
                     if memory_history is not None:
-                        self.context.record_message(
-                            "assistant",
-                            self.context.format_command_call(call.name, memory_history),
-                            None,
-                            channel_id=channel_id,
-                        )
+                        self.context.record_tool_use(call.name, memory_history, channel_id=channel_id)
                     continue
                 if call.name == _DONT_RESPOND_TOOL_NAME:
-                    self.context.record_message(
-                        "assistant",
-                        self.context.format_command_call(call.name, call.arguments),
-                        None,
-                        channel_id=channel_id,
-                    )
+                    self.context.record_tool_use(call.name, call.arguments, channel_id=channel_id)
                     continue
 
                 action = action_by_tool.get(call.name)
@@ -440,16 +417,9 @@ class AICore(Generic[ContextT, ActionT]):
                     continue
 
                 self.logger.debug(f"match succeeded for {text} with action {action.name}.")
-                command_history = self.context.format_command_call(action.command_name, kwargs)
-
-                def record_command(source: discord.Message | None, command_history: str = command_history) -> None:
+                def record_command(source: discord.Message | None, command_name: str = action.command_name, kwargs: dict[str, Any] = kwargs) -> None:
                     try:
-                        self.context.record_message(
-                            "assistant",
-                            command_history,
-                            source,
-                            channel_id=channel_id,
-                        )
+                        self.context.record_tool_use(command_name, kwargs, channel_id=channel_id)
                     finally:
                         release_token.release()
 
@@ -562,14 +532,21 @@ class AICore(Generic[ContextT, ActionT]):
         for memory_context in self._format_persistent_memory_contexts(memories):
             messages.append({"role": "assistant", "content": memory_context})
         for item in history:
-            tag_name = _history_tag_name(item)
+            if item.history_type == "event":
+                messages.append(
+                    {
+                        "role": item.role,
+                        "content": item.content.strip(),
+                    }
+                )
+                continue
             messages.append(
                 {
                     "role": item.role,
                     "content": (
-                        f"{open_system_tag(tag_name)}\n"
+                        f"{open_system_tag('message_history')}\n"
                         f"{item.content.strip()}\n"
-                        f"{close_system_tag(tag_name)}"
+                        f"{close_system_tag('message_history')}"
                     ),
                 }
             )

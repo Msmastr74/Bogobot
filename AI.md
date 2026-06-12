@@ -203,10 +203,12 @@ previous bot message
 </{SYSTEM_TAG}:replied_to>
 ```
 
-Tool and command calls are recorded in history like this:
+Tool and command calls are recorded in history as event history:
 
 ```xml
-<{SYSTEM_TAG}:recorded_tool_use name="ping">{}</{SYSTEM_TAG}:recorded_tool_use>
+<{SYSTEM_TAG}:event_history type="tool_use">
+{"name":"ping","arguments":{}}
+</{SYSTEM_TAG}:event_history>
 ```
 
 Requested context is recorded and injected as an assistant-role history/context message:

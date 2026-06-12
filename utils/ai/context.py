@@ -312,6 +312,8 @@ class HistoryMessage:
     id: int | None = None
     channel_id: int | None = None
     created_at: datetime | None = None
+    history_type: Literal["message", "event"] = "message"
+    event_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -479,13 +481,37 @@ class AIContext:
     ) -> str:
         return content.strip()
 
-    def format_command_call(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
-        attrs = f'name={json.dumps(command_name, ensure_ascii=False)}'
-        open_tag = open_system_tag("recorded_tool_use").replace(">", f" {attrs}>")
+    def format_tool_use_event(self, command_name: str, arguments: dict[str, Any] | None = None) -> str:
+        open_tag = open_system_tag("event_history").replace(">", ' type="tool_use">')
+        payload = {
+            "name": command_name,
+            "arguments": self._json_safe(arguments or {}),
+        }
         return (
-            f"{open_tag}"
-            f"{json.dumps(self._json_safe(arguments or {}), ensure_ascii=False, separators=(',', ':'))}"
-            f"{close_system_tag('recorded_tool_use')}"
+            f"{open_tag}\n"
+            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
+            f"{close_system_tag('event_history')}"
+        )
+
+    def record_tool_use(
+        self,
+        command_name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        channel_id: int | None = None,
+    ) -> None:
+        content = self.format_tool_use_event(command_name, arguments)
+        self.logger.debug(f"\n[role=assistant channel_id={channel_id} history_type=event event_type=tool_use]\n{content}")
+        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
+            return
+        self.record_history_message(
+            channel_id,
+            HistoryMessage(
+                "assistant",
+                content,
+                history_type="event",
+                event_type="tool_use",
+            ),
         )
 
     def format_reply(self, content: str, source: discord.Message | discord.Interaction | None = None) -> str:
@@ -540,7 +566,7 @@ class AIContext:
             self._ensure_history_schema(connection)
             rows = connection.execute(
                 """
-                SELECT id, role, content
+                SELECT id, role, content, history_type, event_type
                 FROM ai_history_messages
                 WHERE channel_id = ?
                 ORDER BY id
@@ -548,8 +574,14 @@ class AIContext:
                 (channel_id,),
             ).fetchall()
         return [
-            HistoryMessage(role, content, int(row_id))
-            for row_id, role, content in rows
+            HistoryMessage(
+                role,
+                content,
+                int(row_id),
+                history_type=self._history_type(history_type),
+                event_type=str(event_type) if event_type is not None else None,
+            )
+            for row_id, role, content, history_type, event_type in rows
         ]
 
     def channel_history_messages(self, channel_id: int) -> list[HistoryMessage]:
@@ -557,7 +589,7 @@ class AIContext:
             self._ensure_history_schema(connection)
             rows = connection.execute(
                 """
-                SELECT id, channel_id, created_at, role, content
+                SELECT id, channel_id, created_at, role, content, history_type, event_type
                 FROM ai_history_messages
                 WHERE channel_id = ?
                 ORDER BY id
@@ -571,8 +603,10 @@ class AIContext:
                 created_at=datetime.fromisoformat(created_at),
                 role=role,
                 content=str(content),
+                history_type=self._history_type(history_type),
+                event_type=str(event_type) if event_type is not None else None,
             )
-            for row_id, row_channel_id, created_at, role, content in rows
+            for row_id, row_channel_id, created_at, role, content, history_type, event_type in rows
         ]
 
     def edit_history_message(self, message_id: int, content: str) -> HistoryMessage | None:
@@ -594,7 +628,7 @@ class AIContext:
                     return None
                 row = connection.execute(
                     """
-                    SELECT id, channel_id, created_at, role, content
+                    SELECT id, channel_id, created_at, role, content, history_type, event_type
                     FROM ai_history_messages
                     WHERE id = ?
                     """,
@@ -602,13 +636,15 @@ class AIContext:
                 ).fetchone()
         if row is None:
             return None
-        row_id, channel_id, created_at, role, row_content = row
+        row_id, channel_id, created_at, role, row_content, history_type, event_type = row
         return HistoryMessage(
             id=int(row_id),
             channel_id=int(channel_id),
             created_at=datetime.fromisoformat(created_at),
             role=role,
             content=str(row_content),
+            history_type=self._history_type(history_type),
+            event_type=str(event_type) if event_type is not None else None,
         )
 
     def remove_history_message(self, message_id: int) -> bool:
@@ -629,7 +665,13 @@ class AIContext:
         if not message.content:
             return
 
-        self.create_history_message(channel_id, message.role, message.content)
+        self.create_history_message(
+            channel_id,
+            message.role,
+            message.content,
+            history_type=message.history_type,
+            event_type=message.event_type,
+        )
         with closing(self._history_connection()) as connection:
             with connection:
                 self._ensure_history_schema(connection)
@@ -640,20 +682,25 @@ class AIContext:
         channel_id: int,
         role: Literal["user", "assistant"],
         content: str,
+        *,
+        history_type: Literal["message", "event"] = "message",
+        event_type: str | None = None,
     ) -> HistoryMessage | None:
         content = content.strip()
         if not content:
             return None
+        if history_type == "message":
+            event_type = None
         created_at = datetime.now(timezone.utc)
         with closing(self._history_connection()) as connection:
             with connection:
                 self._ensure_history_schema(connection)
                 cursor = connection.execute(
                     """
-                    INSERT INTO ai_history_messages(channel_id, created_at, role, content)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO ai_history_messages(channel_id, created_at, role, content, history_type, event_type)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (channel_id, created_at.isoformat(), role, content),
+                    (channel_id, created_at.isoformat(), role, content, history_type, event_type),
                 )
                 if cursor.lastrowid is None:
                     raise RuntimeError("SQLite did not return an id for the AI history message.")
@@ -664,6 +711,8 @@ class AIContext:
             created_at=created_at,
             role=role,
             content=content,
+            history_type=history_type,
+            event_type=event_type,
         )
 
     def queue_context_request(self, request: ContextRequest) -> ContextRequest:
@@ -931,10 +980,25 @@ class AIContext:
                 content TEXT NOT NULL
             )
         """)
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(ai_history_messages)").fetchall()
+        }
+        if "history_type" not in columns:
+            connection.execute(
+                "ALTER TABLE ai_history_messages ADD COLUMN history_type TEXT NOT NULL DEFAULT 'message'"
+            )
+        if "event_type" not in columns:
+            connection.execute(
+                "ALTER TABLE ai_history_messages ADD COLUMN event_type TEXT"
+            )
         connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_ai_history_messages_channel_id_id
             ON ai_history_messages(channel_id, id)
         """)
+
+    def _history_type(self, value: object) -> Literal["message", "event"]:
+        return "event" if value == "event" else "message"
 
     def _ensure_context_request_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute("""
