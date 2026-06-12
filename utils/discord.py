@@ -1,3 +1,56 @@
+import functools
+
+import discord
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from bogobot_core import BotCore
+
+class InteractionModal(discord.ui.Modal):
+    def __init_subclass__(
+        cls,
+        *,
+        title: str = discord.utils.MISSING,
+        command: str | None = None,
+    ):
+        super().__init_subclass__(title=title)
+        if command is None:
+            return
+
+        on_submit = cls.__dict__.get("on_submit")
+        if on_submit is None:
+            return
+
+        @functools.wraps(on_submit)
+        async def wrapped_on_submit(self: "InteractionModal", interaction: discord.Interaction) -> None:
+            setup: 'BotCore._Setup | None' = getattr(interaction.client, "setup", None)
+            if setup is None:
+                await on_submit(self, interaction)
+                return
+
+            await setup.run_command(
+                interaction,
+                functools.partial(on_submit, self),
+                (),
+                {},
+                capabilities=(),
+                eph=True,
+                defer=False,
+                command=command,
+            )
+
+        cls.on_submit = wrapped_on_submit
+
+    def __init__(
+        self,
+        interaction: discord.Interaction,
+        *,
+        title: str = discord.utils.MISSING,
+        timeout: float | None = 300.0,
+        custom_id: str = discord.utils.MISSING,
+    ) -> None:
+        super().__init__(title=title, timeout=timeout, custom_id=custom_id)
+        self.original_interaction = interaction
+
 def count_characters(text: str) -> int:
     return len(text.encode('utf-16-le')) // 2
 

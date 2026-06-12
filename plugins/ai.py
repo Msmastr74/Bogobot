@@ -17,7 +17,7 @@ from pydantic import AliasPath, Field, field_validator
 from typing import TYPE_CHECKING, Any, Awaitable, Literal, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from utils.ai.context import ContextRequest, HistoryMessage, PersistentMemory, close_system_tag, open_system_tag
-from utils.discord import chunk_text, count_characters, split_text_to_character_limit
+from utils.discord import InteractionModal, chunk_text, count_characters, split_text_to_character_limit
 from utils import groups
 from utils.schemas import Schema
 from utils.type import Coro
@@ -1057,13 +1057,8 @@ async def setup(bot: 'BotCore'):
             await self.set_enabled(interaction, False)
 
         async def edit_custom_prompt(self, interaction: discord.Interaction) -> None:
-            modal = AICustomInstructionModal()
+            modal = AICustomInstructionModal(interaction)
             await interaction.response.send_modal(modal)
-            await modal.wait()
-            if modal.submitted:
-                await interaction.edit_original_response(
-                    view=AIManagementView(),
-                )
 
         async def set_breaks_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
             ai_config.breaks.enabled = enabled
@@ -1078,17 +1073,16 @@ async def setup(bot: 'BotCore'):
             await self.set_breaks_enabled(interaction, False)
 
         async def edit_breaks(self, interaction: discord.Interaction) -> None:
-            modal = AIBreaksModal()
+            modal = AIBreaksModal(interaction)
             await interaction.response.send_modal(modal)
-            await modal.wait()
-            if modal.submitted:
-                await interaction.edit_original_response(
-                    view=AIManagementView(),
-                )
 
-    class AICustomInstructionModal(discord.ui.Modal, title="AI Custom Instructions"):
-        def __init__(self) -> None:
-            super().__init__()
+    class AICustomInstructionModal(
+        InteractionModal,
+        title="AI Custom Instructions",
+        command="manage ai custom instructions",
+    ):
+        def __init__(self, interaction: discord.Interaction) -> None:
+            super().__init__(interaction)
             self.custom_instruction_text = discord.ui.TextInput(
                 label="Custom prompt portion",
                 style=discord.TextStyle.paragraph,
@@ -1100,18 +1094,21 @@ async def setup(bot: 'BotCore'):
                 max_length=4000,
             )
             self.add_item(self.custom_instruction_text)
-            self.submitted = False
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
-            await interaction.response.defer(ephemeral=True)
-            self.submitted = True
+            await bot.discord.defer(ephemeral=True)
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
-            await interaction.followup.send("Updated custom instructions.", ephemeral=True)
+            await self.original_interaction.edit_original_response(view=AIManagementView())
+            await bot.discord.send("Updated custom instructions.", response=True, ephemeral=True)
 
-    class AIBreaksModal(discord.ui.Modal, title="AI Breaks"):
-        def __init__(self) -> None:
-            super().__init__()
+    class AIBreaksModal(
+        InteractionModal,
+        title="AI Breaks",
+        command="manage ai breaks",
+    ):
+        def __init__(self, interaction: discord.Interaction) -> None:
+            super().__init__(interaction)
             self.active_minutes = discord.ui.TextInput(
                 label="Active minutes",
                 required=True,
@@ -1132,19 +1129,16 @@ async def setup(bot: 'BotCore'):
                 active_minutes = max(0.0, float(self.active_minutes.value.strip()))
                 break_minutes = max(0.0, float(self.break_minutes.value.strip()))
             except ValueError:
-                await interaction.response.send_message(
-                    "Break values must be numbers.",
-                    ephemeral=True,
-                )
+                await bot.discord.send("Break values must be numbers.", response=True, ephemeral=True)
                 return
-            await interaction.response.defer(ephemeral=True)
-            self.submitted = True
+            await bot.discord.defer(ephemeral=True)
 
             ai_config.breaks.active_minutes = active_minutes
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
-            await interaction.followup.send("Updated AI break settings.", ephemeral=True)
+            await self.original_interaction.edit_original_response(view=AIManagementView())
+            await bot.discord.send("Updated AI break settings.", response=True, ephemeral=True)
 
     MEMORY_PAGE_MAX_ITEMS = 4
     MEMORY_PAGE_TEXT_LIMIT = 3800
@@ -1213,12 +1207,8 @@ async def setup(bot: 'BotCore'):
                 return
 
             if self.action == "edit" and self.item is not None:
-                modal = AIMemoryEditModal(view, self.item)
+                modal = AIMemoryEditModal(interaction, view, self.item)
                 await interaction.response.send_modal(modal)
-                await modal.wait()
-                if modal.submitted:
-                    view.render()
-                    await interaction.edit_original_response(view=view)
                 return
 
             if self.action == "delete" and self.item is not None:
@@ -1231,12 +1221,8 @@ async def setup(bot: 'BotCore'):
                 return
 
             if self.action == "add":
-                modal = AIMemoryCreateModal(view)
+                modal = AIMemoryCreateModal(interaction, view)
                 await interaction.response.send_modal(modal)
-                await modal.wait()
-                if modal.submitted:
-                    view.render()
-                    await interaction.edit_original_response(view=view)
 
     class AIMemoryView(discord.ui.LayoutView):
         def __init__(
@@ -1463,12 +1449,20 @@ async def setup(bot: 'BotCore'):
             self.render()
             await interaction.response.edit_message(view=self)
 
-    class AIMemoryEditModal(discord.ui.Modal, title="Edit AI Memory"):
-        def __init__(self, view: AIMemoryView, item: HistoryMessage | PersistentMemory) -> None:
-            super().__init__()
+    class AIMemoryEditModal(
+        InteractionModal,
+        title="Edit AI Memory",
+        command="manage ai memory edit",
+    ):
+        def __init__(
+            self,
+            interaction: discord.Interaction,
+            view: AIMemoryView,
+            item: HistoryMessage | PersistentMemory,
+        ) -> None:
+            super().__init__(interaction)
             self.view_ref = view
             self.item = item
-            self.submitted = False
             self.content = discord.ui.TextInput(
                 label="Content",
                 style=discord.TextStyle.paragraph,
@@ -1481,20 +1475,25 @@ async def setup(bot: 'BotCore'):
         async def on_submit(self, interaction: discord.Interaction) -> None:
             value = self.content.value.strip()
             if not value:
-                await interaction.response.send_message("Memory content cannot be empty.", ephemeral=True)
+                await bot.discord.send("Memory content cannot be empty.", response=True, ephemeral=True)
                 return
             if isinstance(self.item, HistoryMessage):
                 ai_core.context.edit_history_message(int(self.item.id or 0), value)
             else:
                 ai_core.context.edit_persistent_memory(int(self.item.id or 0), value)
-            self.submitted = True
-            await interaction.response.defer(ephemeral=True)
+            await bot.discord.defer(ephemeral=True)
+            self.view_ref.render()
+            await self.original_interaction.edit_original_response(view=self.view_ref)
+            await bot.discord.send(f"Updated memory `{self.item.id}`.", response=True, ephemeral=True)
 
-    class AIMemoryCreateModal(discord.ui.Modal, title="Create AI Memory"):
-        def __init__(self, view: AIMemoryView) -> None:
-            super().__init__()
+    class AIMemoryCreateModal(
+        InteractionModal,
+        title="Create AI Memory",
+        command="manage ai memory create",
+    ):
+        def __init__(self, interaction: discord.Interaction, view: AIMemoryView) -> None:
+            super().__init__(interaction)
             self.view_ref = view
-            self.submitted = False
             self.role = discord.ui.TextInput(
                 label="Role",
                 required=view.tab == "channel",
@@ -1514,22 +1513,24 @@ async def setup(bot: 'BotCore'):
         async def on_submit(self, interaction: discord.Interaction) -> None:
             value = self.content.value.strip()
             if not value:
-                await interaction.response.send_message("Memory content cannot be empty.", ephemeral=True)
+                await bot.discord.send("Memory content cannot be empty.", response=True, ephemeral=True)
                 return
             if self.view_ref.tab == "channel":
                 raw_role = self.role.value.strip().casefold()
                 if raw_role not in ("user", "assistant"):
-                    await interaction.response.send_message("Role must be `user` or `assistant`.", ephemeral=True)
+                    await bot.discord.send("Role must be `user` or `assistant`.", response=True, ephemeral=True)
                     return
                 channel_id = self.view_ref.source_interaction.channel_id
                 if channel_id is None:
-                    await interaction.response.send_message("Channel history is unavailable here.", ephemeral=True)
+                    await bot.discord.send("Channel history is unavailable here.", response=True, ephemeral=True)
                     return
-                ai_core.context.create_history_message(channel_id, cast(Literal["user", "assistant"], raw_role), value)
+                memory = ai_core.context.create_history_message(channel_id, cast(Literal["user", "assistant"], raw_role), value)
             else:
-                ai_core.context.create_persistent_memory(value)
-            self.submitted = True
-            await interaction.response.defer(ephemeral=True)
+                memory = ai_core.context.create_persistent_memory(value)
+            await bot.discord.defer(ephemeral=True)
+            self.view_ref.render()
+            await self.original_interaction.edit_original_response(view=self.view_ref)
+            await bot.discord.send(f"Created memory `{memory.id if memory else 'unknown'}`.", response=True, ephemeral=True)
 
     @manage.command(
         name="ai",

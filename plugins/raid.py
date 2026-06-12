@@ -8,6 +8,7 @@ import discord
 from bogobot_core import BotCore
 from utils import groups
 from utils import security_roles
+from utils.discord import InteractionModal
 
 
 RaidAction = Literal["config", "status", "on", "off", "activate", "deactivate"]
@@ -320,27 +321,25 @@ class RaidConfigView(discord.ui.LayoutView):
 
     async def edit_numbers(self, interaction: discord.Interaction) -> None:
         modal = RaidNumbersModal(
+            interaction,
             protector=self.protector,
             guild=self.guild,
         )
         await interaction.response.send_modal(modal)
-        await modal.wait()
-        if modal.submitted:
-            await interaction.edit_original_response(
-                view=RaidConfigView(
-                    protector=self.protector,
-                    guild=self.guild,
-                ),
-            )
 
-class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
+class RaidNumbersModal(
+    InteractionModal,
+    title="Raid Protection Numbers",
+    command="manage raid numbers",
+):
     def __init__(
         self,
+        interaction: discord.Interaction,
         *,
         protector: "RaidProtector",
         guild: discord.Guild,
     ) -> None:
-        super().__init__()
+        super().__init__(interaction)
         self.protector = protector
         self.guild = guild
         config = protector.config_for(guild.id)
@@ -381,7 +380,6 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
             self.triggers,
         ):
             self.add_item(item)
-        self.submitted = False
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -423,14 +421,17 @@ class RaidNumbersModal(discord.ui.Modal, title="Raid Protection Numbers"):
                 "trigger_join_count",
             )
         except ValueError as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
+            await self.protector.bot.discord.send(str(error), response=True, ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
-        self.submitted = True
+        await self.protector.bot.discord.defer(ephemeral=True)
 
         await self.protector.save_config(self.guild.id)
+        await self.original_interaction.edit_original_response(view=RaidConfigView(
+            protector=self.protector,
+            guild=self.guild,
+        ))
         
-        await interaction.followup.send("Updated raid settings.", ephemeral=True)
+        await self.protector.bot.discord.send("Updated raid settings.", response=True, ephemeral=True)
 
     def _parse_assignments(
         self,
