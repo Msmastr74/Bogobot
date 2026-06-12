@@ -568,6 +568,20 @@ class AIContext:
             f"{close_system_tag('replied_to')}"
         )
 
+    def format_message_with_reply(
+        self,
+        content: str,
+        source: discord.Message | discord.Interaction | None = None,
+        *,
+        reply_content: str | None = None,
+        reply_source: discord.Message | discord.Interaction | None = None,
+    ) -> str:
+        message = self.format_message(content, source)
+        if reply_content is None:
+            return message
+        reply = self.format_reply(reply_content, reply_source)
+        return f"{reply}\n{message}"
+
     def record_message(
         self,
         role: Literal["user", "assistant"],
@@ -575,35 +589,27 @@ class AIContext:
         source: discord.Message | discord.Interaction | None = None,
         *,
         channel_id: int | None = None,
+        reply_content: str | None = None,
+        reply_source: discord.Message | discord.Interaction | None = None,
     ) -> None:
         channel_id = channel_id if channel_id is not None else self.source_channel_id(source)
         if not content.strip():
             return
 
-        message = self.format_block(role, self.format_message(content, source))
+        message = self.format_block(
+            role,
+            self.format_message_with_reply(
+                content,
+                source,
+                reply_content=reply_content,
+                reply_source=reply_source,
+            ),
+        )
         self.logger.debug(f"\n[role={role} channel_id={channel_id}]\n{message}")
         if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
             return
 
         self.record_history_message(channel_id, HistoryMessage(role, message))
-
-    def record_reply(
-        self,
-        content: str,
-        source: discord.Message | discord.Interaction | None = None,
-        *,
-        channel_id: int | None = None,
-    ) -> None:
-        channel_id = channel_id if channel_id is not None else self.source_channel_id(source)
-        if not content.strip():
-            return
-
-        message = self.format_reply(content, source)
-        self.logger.debug(f"\n[role=assistant channel_id={channel_id}]\n{message}")
-        if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:
-            return
-
-        self.record_history_message(channel_id, HistoryMessage("assistant", message))
 
     def history_messages(self, channel_id: int | None) -> list[HistoryMessage]:
         if not self.history_enabled or self.history_char_budget <= 0 or channel_id is None:

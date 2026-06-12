@@ -277,21 +277,22 @@ class AICore(Generic[ContextT, ActionT]):
         try:
             history = self.context.history_messages(channel_id)
             memories = self.context.persistent_memories()
-            if assistant_context is not None:
-                self.context.record_reply(
-                    assistant_context,
-                    assistant_context_source,
-                    channel_id=channel_id,
-                )
-            self.context.record_message("user", text, source, channel_id=channel_id)
+            self.context.record_message(
+                "user",
+                text,
+                source,
+                channel_id=channel_id,
+                reply_content=assistant_context,
+                reply_source=assistant_context_source,
+            )
             formatted_text = self.context.format_block(
                 "user",
-                self.context.format_message(text, source),
-            )
-            formatted_assistant_context = (
-                self.context.format_reply(assistant_context, assistant_context_source)
-                if assistant_context is not None else
-                None
+                self.context.format_message_with_reply(
+                    text,
+                    source,
+                    reply_content=assistant_context,
+                    reply_source=assistant_context_source,
+                ),
             )
             formatted_requested_context = requested_context.strip() if requested_context is not None else None
             if formatted_requested_context:
@@ -309,7 +310,6 @@ class AICore(Generic[ContextT, ActionT]):
                     client,
                     formatted_text,
                     self._actions,
-                    formatted_assistant_context,
                     history,
                     memories,
                     formatted_requested_context,
@@ -513,13 +513,10 @@ class AICore(Generic[ContextT, ActionT]):
         client: 'AsyncOpenAI',
         text: str,
         actions: list[_AIAction[ContextT, ActionT]],
-        reply_message: str | None,
         history: list[HistoryMessage],
         memories: list[PersistentMemory],
         requested_context: str | None,
     ) -> tuple[str, list[_ToolCall]]:
-        reply_message_text = reply_message.strip() if reply_message is not None else ""
-        has_reply_message = bool(reply_message_text)
         system_prompt = self.system_prompt()
         tools = [self._tool_schema(action) for action in actions]
         tools.append(self._context_request_tool_schema())
@@ -559,8 +556,6 @@ class AICore(Generic[ContextT, ActionT]):
                     ),
                 }
             )
-        if has_reply_message:
-            messages.append({"role": "assistant", "content": reply_message_text})
         if requested_context:
             messages.append({"role": "assistant", "content": requested_context})
         messages.append({"role": "user", "content": text})

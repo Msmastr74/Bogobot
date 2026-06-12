@@ -1679,17 +1679,23 @@ async def setup(bot: 'BotCore'):
         finally:
             lock_token.release()
 
-    @bot.setup.command(
-        name="ai",
-        description="Ask Bogobot",
-        capabilities=[USER_AI_CAPABILITY],
-        defer=False,
-        eph=False,
-    )
-    async def ai(interaction: discord.Interaction, prompt: str):
+    async def run_ai_interaction(
+        interaction: discord.Interaction,
+        prompt: str,
+        *,
+        assistant_context: str | None = None,
+        assistant_context_source: discord.Message | None = None,
+    ) -> None:
         if not ai_enabled(bot):
             await bot.discord.send(
                 contents="AI is disabled.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if not can_use_ai(bot, interaction.user, interaction.guild_id):
+            await bot.discord.send(
+                contents=f"Missing `{USER_AI_CAPABILITY}`.",
                 response=True,
                 ephemeral=True,
             )
@@ -1704,6 +1710,8 @@ async def setup(bot: 'BotCore'):
             matches = await ai_core.ai_turn(
                 prompt,
                 source=interaction,
+                assistant_context=assistant_context,
+                assistant_context_source=assistant_context_source,
                 requested_context=requested_context,
                 lock_token=lock_token,
             )
@@ -1765,6 +1773,64 @@ async def setup(bot: 'BotCore'):
                 )
         finally:
             lock_token.release()
+
+    class AIMessageModal(discord.ui.Modal, title="AI"):
+        def __init__(self, target_message: discord.Message) -> None:
+            super().__init__()
+            self.target_message = target_message
+            self.target_text = read_text_from_message(
+                self.target_message
+            ) or ""
+            self.target_text = truncate_text_to_character_limit(
+                self.target_text,
+                MAX_ASSISTANT_CONTEXT_CHARS,
+            )
+            self.prompt = discord.ui.TextInput(
+                style=discord.TextStyle.paragraph,
+                required=True,
+                max_length=4000,
+            )
+            self.add_item(discord.ui.Label(
+                text="Message",
+                description=truncate_text_to_character_limit(
+                    f"Replying to: {self.target_text.strip()}",
+                    100
+                ),
+                component=self.prompt
+            ))
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            from bogobot_core import current_interaction
+
+            token = current_interaction.set(interaction)
+            try:
+                await run_ai_interaction(
+                    interaction,
+                    str(self.prompt.value),
+                    assistant_context=self.target_text,
+                    assistant_context_source=self.target_message,
+                )
+            finally:
+                current_interaction.reset(token)
+
+    @bot.setup.context_menu(
+        name="AI",
+        capabilities=[USER_AI_CAPABILITY],
+        defer=False,
+        eph=False,
+    )
+    async def AI(interaction: discord.Interaction, message: discord.Message) -> None:
+        await interaction.response.send_modal(AIMessageModal(message))
+
+    @bot.setup.command(
+        name="ai",
+        description="Ask Bogobot",
+        capabilities=[USER_AI_CAPABILITY],
+        defer=False,
+        eph=False,
+    )
+    async def ai(interaction: discord.Interaction, prompt: str):
+        await run_ai_interaction(interaction, prompt)
 
     @bot.init_callback
     async def init():

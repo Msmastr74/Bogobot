@@ -130,6 +130,19 @@ def _format_capabilities(perms: AccountPermissions) -> str:
     return "\n".join(lines)
 
 
+def _effective_capability_count(
+    perms: AccountPermissions,
+    registry: Iterable[str],
+) -> int:
+    registered_capabilities = tuple(registry)
+    return sum(
+        1
+        for capability in registered_capabilities
+        if not AccountPermissions.is_reserved_capability(capability)
+        if perms.can_use(capability, registry=registered_capabilities)
+    )
+
+
 def _parse_capabilities(value: str | None) -> list[str]:
     if value is None:
         return []
@@ -403,7 +416,7 @@ class AccountListView(discord.ui.LayoutView):
         title: str = "Accounts",
         error_text: str = "No accounts found",
         truncated_text: str = "...",
-        accounts: Iterable[tuple[str, AccountRecord]],
+        accounts: Iterable[tuple[str, int]],
     ) -> None:
         super().__init__(timeout=None)
         remaining = 3900
@@ -422,10 +435,9 @@ class AccountListView(discord.ui.LayoutView):
         )
         found_account = False
         text = ""
-        for uid, account in accounts:
+        for uid, capability_count in accounts:
             found_account = True
-            perms = _account_perms(account)
-            account_text = f"<@{uid}>: `{len(perms.capabilities)}` capabilities"
+            account_text = f"<@{uid}>: `{capability_count}` capabilities"
             if count_remaining(account_text):
                 text += account_text + "\n"
             else:
@@ -1109,24 +1121,64 @@ async def setup(bot: BotCore) -> None:
     )
     async def list_users(
         interaction: discord.Interaction,
-        capability: str | None = None,
+        capabilities: str | None = None,
     ) -> None:
-        filtered_accounts: Iterable[tuple[str, AccountRecord]] = await bot.accounts.items()
-        is_filtered = capability is not None
-        if capability is not None:
-            filtered_accounts = [
-                account_item
-                for account_item in filtered_accounts
-                if bot.accounts[account_item[0]].local(
-                    _scope_id(interaction, capability)
-                ).permissions.can_use(
-                    _stored_capability(capability),
-                    registry=bot.accounts.capabilities,
+        account_items = await bot.accounts.items()
+        requested_capabilities = _parse_capabilities(capabilities)
+        is_filtered = len(requested_capabilities) > 0
+        unknown_capabilities = [
+            capability
+            for capability in requested_capabilities
+            if not _is_registered_capability(bot, capability)
+        ]
+        if unknown_capabilities:
+            await bot.discord.send(
+                contents="Unknown capabilities: " + ", ".join(f"`{capability}`" for capability in unknown_capabilities),
+                response=True,
+                ephemeral=True,
+            )
+            return
+        if any(_is_server_capability(capability) for capability in requested_capabilities) and interaction.guild_id is None:
+            await bot.discord.send(
+                contents="`server.*` capabilities can only be filtered inside a server.",
+                response=True,
+                ephemeral=True,
+            )
+            return
+        scope_ids = {
+            capability: _scope_id(interaction, capability)
+            for capability in requested_capabilities
+        }
+        stored_capabilities = {
+            capability: _stored_capability(capability)
+            for capability in requested_capabilities
+        }
+        display_accounts: list[tuple[str, int]] = []
+        registry = tuple(bot.accounts.capabilities)
+        for uid, _account in account_items:
+            if any(
+                not bot.accounts[uid].local(scope_ids[capability]).permissions.can_use(
+                    stored_capabilities[capability],
+                    registry=registry,
                 )
-            ]
+                for capability in requested_capabilities
+            ):
+                continue
+            count_scope_id = next(
+                (scope_id for scope_id in scope_ids.values() if scope_id is not None),
+                None,
+            )
+            account_permissions = bot.accounts[uid].local(count_scope_id).permissions
+            display_accounts.append((
+                uid,
+                _effective_capability_count(account_permissions, registry),
+            ))
+        if is_filtered:
+            display_accounts.sort(key=lambda item: item[1], reverse=True)
+        capability_title = ", ".join(f"`{capability}`" for capability in requested_capabilities)
         view = AccountListView(
-            title=f"Accounts with `{capability}`" if is_filtered else "All accounts",
-            accounts=filtered_accounts,
+            title=f"Accounts with {capability_title}" if is_filtered else "All accounts",
+            accounts=display_accounts,
             error_text="No accounts found with the specified criteria." if is_filtered else "No accounts found.",
         )
         await bot.discord.send(
