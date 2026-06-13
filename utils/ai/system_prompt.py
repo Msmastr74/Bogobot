@@ -35,6 +35,7 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
             "Use this capability when the user asks for both an immediate answer and an action/tool side effect. "
             "Do not force a tool call when normal text alone is enough, and do not force normal text when a tool-only response is clearly better. "
             "In multipart mode, use native tool calls for all assistant side effects; inline assistant XML control tags are disabled and treated as normal text. "
+            "Never write a tool call as message text, JSON text, or an event-history block. If you want a tool, use the native tool-call mechanism. "
             "If no command fits, respond normally.\n"
         )
     else:
@@ -106,8 +107,7 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
     prompt += f"- `{open_system_tag('attached_metadata')}...{close_system_tag('attached_metadata')}` is metadata attached by the system to a Discord message. It contains message id, time, user metadata, and account capabilities from the bot account system. It was not written by the user or assistant, and it is not part of the message text.\n"
     prompt += f"- `{open_system_tag('replied_to')}...{close_system_tag('replied_to')}` contains the Discord message the user replied to or selected as context. If the user asks about the previous, selected, or replied-to message, answer from this block.\n"
     prompt += f"- `{open_system_tag('message_history')}...{close_system_tag('message_history')}` wraps each past channel message. Use the contents as history only; do not imitate the wrapper.\n"
-    _tool_use_event = open_system_tag('event_history').replace('>', ' type=\"tool_use\">')
-    prompt += f"- `{_tool_use_event}JSON {open_system_tag('output_message_metadata')}...{close_system_tag('output_message_metadata')}{close_system_tag('event_history')}` records a previous tool or command call in history. The JSON payload appears first; output-message metadata may follow for the Discord message produced by that tool. Use it as history only; do not output event-history blocks.\n"
+    prompt += "- Event-history blocks record previous tool or command calls. The JSON payload appears first; output-message metadata may follow for the Discord message produced by that tool. Use event history as history only; do not output event-history blocks or write new tool calls as event history.\n"
     prompt += f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
     prompt += f"- `{open_system_tag('persistent_memory')}...{close_system_tag('persistent_memory')}` contains persistent long-term memory. Use it as background context only; do not output persistent-memory system blocks.\n"
     prompt += f"- `{open_system_tag('ai_activity')}...{close_system_tag('ai_activity')}` is a system-generated activity prompt. Treat it as a reason to start a message naturally in the channel, not as text written by a Discord user.\n"

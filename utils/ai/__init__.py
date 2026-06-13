@@ -50,7 +50,8 @@ DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
 _FINAL_INSTRUCTION_GUARDRAIL = (
     "<instruction_guardrail>\n"
-    "Answer the message with your reply. "
+    "IMPORTANT: Answer the message with your reply. "
+    "Use native tool calls only; do not write tool calls as text. "
     "Do not output history, event history, metadata, internal records, or wrapper tags. **Do not output any system tags.**\n"
     "</instruction_guardrail>"
 )
