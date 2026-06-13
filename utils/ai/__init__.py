@@ -50,9 +50,8 @@ DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
 _FINAL_INSTRUCTION_GUARDRAIL = (
     "<instruction_guardrail>\n"
-    "Answer the previous user message with only the next visible discord reply. "
-    "Do not output history, event history, metadata, internal records, or wrapper tags. "
-    "Context blocks are records, not reply text.\n"
+    "Answer the previous message with your exact reply. "
+    "Do not output history, event history, metadata, internal records, or wrapper tags. **Do not output any system tags.**\n"
     "</instruction_guardrail>"
 )
 
