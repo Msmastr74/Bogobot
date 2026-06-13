@@ -1254,8 +1254,8 @@ class _Missing:
 _MISSING = _Missing()
 
 ai = AICore[
-    ai_plugin.BotActionParameters,
-    ai_plugin.BotAction
+    'ai_plugin.BotActionParameters',
+    'ai_plugin.BotAction'
 ]()
 
 
@@ -1264,6 +1264,6 @@ def action(
     description: str,
     command_name: str | None = None,
     params: AIParamsTable | None = None,
-    **kwargs: Unpack[ai_plugin.BotActionParameters],
-) -> Callable[[ai_plugin.BotAction], ai_plugin.BotAction]:
+    **kwargs: 'Unpack[ai_plugin.BotActionParameters]',
+) -> 'Callable[[ai_plugin.BotAction], ai_plugin.BotAction]':
     return ai.action(name, description, command_name=command_name, params=params, **kwargs)
