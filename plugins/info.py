@@ -7,14 +7,14 @@ from typing import Any, Union, get_args, get_origin
 import discord
 from discord import app_commands
 
-from bogobot_core import BotCore
+from bogobot_core import BotCore, TARGET_VIDEO_ID
 from utils.ai import AIParam, action
 from utils.discord import count_characters
 
 
 BOGOBOT_DESCRIPTION = (
     "Bogobot is a specialized Discord bot designed for monitoring the "
-    "[24/7 Bogosort Livestream](https://www.youtube.com/live/DwbZpZxGEA0). "
+    f"[24/7 Bogosort Livestream](https://www.youtube.com/live/{TARGET_VIDEO_ID}). "
     "The bot now uses the Bogostream stats API by default, with OCR still "
     "available as a fallback pipeline for stream-derived statistics and "
     "sort-state tracking."
