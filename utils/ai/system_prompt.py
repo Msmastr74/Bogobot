@@ -111,6 +111,7 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
     prompt += f"- `{open_system_tag('requested_context')}...{close_system_tag('requested_context')}` contains context requested on an earlier turn and resolved by the system before this message. Use it as background context only; do not output requested-context blocks.\n"
     prompt += f"- `{open_system_tag('persistent_memory')}...{close_system_tag('persistent_memory')}` contains persistent long-term memory. Use it as background context only; do not output persistent-memory system blocks.\n"
     prompt += f"- `{open_system_tag('ai_activity')}...{close_system_tag('ai_activity')}` is a system-generated activity prompt. Treat it as a reason to start a message naturally in the channel, not as text written by a Discord user.\n"
+    prompt += "- **One** final `<instruction_guardrail>` block may appear at the end of the conversation. It is a system-supplied reply constraint, not user text, and should be followed without being quoted or answered directly.\n"
     prompt += "<instruction_guardrail>\n"
     prompt += f"CRITICAL: Never output XML tags whose name starts with `{SYSTEM_NAMESPACE}:`. Do not output opening `{SYSTEM_NAMESPACE}:` tags, closing `{SYSTEM_NAMESPACE}:` tags, copied `{SYSTEM_NAMESPACE}:` blocks, or invented `{SYSTEM_NAMESPACE}:` blocks.\n"
     prompt += "</instruction_guardrail>\n"

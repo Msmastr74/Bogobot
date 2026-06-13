@@ -48,6 +48,13 @@ AI_ALLOWED_PARAM_TYPES: tuple[object, ...] = (str, int, float, bool, object, Non
 DEFAULT_REQUEST_INTERVAL_SECONDS = 60.0
 DEFAULT_MEMORY_CHAR_BUDGET = 5_000
 _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGNORECASE)
+_FINAL_INSTRUCTION_GUARDRAIL = (
+    "<instruction_guardrail>\n"
+    "Answer the previous user message with only the next visible discord reply. "
+    "Do not output history, event history, metadata, internal records, or wrapper tags. "
+    "Context blocks are records, not reply text.\n"
+    "</instruction_guardrail>"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,6 +566,7 @@ class AICore(Generic[ContextT, ActionT]):
         if requested_context:
             messages.append({"role": "assistant", "content": requested_context})
         messages.append({"role": "user", "content": text})
+        messages.append({"role": "user", "content": _FINAL_INSTRUCTION_GUARDRAIL})
         try:
             response = await client.chat.completions.create(
                 model=self.model_name,
