@@ -1,12 +1,19 @@
 import asyncio
 import inspect
+from logging import Logger
 from typing import Any, Awaitable, Callable, TypeAlias, TypeVar
 
 from utils.type import P
 
 class CallbackRegistry:
-    def __init__(self):
+    def __init__(self, logger: Logger | None = None):
         self._callbacks: dict[str, list[Callable]] = {}
+        def _log_exc(text: str, exc: Exception):
+            if logger:
+                logger.warning(text, exc_info=True)
+            else:
+                print(f"{text}: {exc}")
+        self._log_exc = _log_exc
     
     def register(self, event: str, callback: Callable):
         if event not in self._callbacks:
@@ -20,7 +27,7 @@ class CallbackRegistry:
             try:
                 callback(*args, **kwargs)
             except Exception as e:
-                print(f"Error in {event} callback {callback}: {e}")
+                self._log_exc(f"Error in {event} callback {callback}", e)
     
     async def execute_async(self, event: str, *args, **kwargs):
         if event not in self._callbacks:
@@ -36,11 +43,11 @@ class CallbackRegistry:
                     coros.append(coro_exec(result))
                     coro_info.append(callback)
             except Exception as e:
-                print(f"Error in {event} callback {callback}: {e}")
+                self._log_exc(f"Error in {event} callback {callback}", e)
         results = await asyncio.gather(*coros, return_exceptions=True)
         for result, callback in zip(results, coro_info):
             if isinstance(result, Exception):
-                print(f"Error in {event} callback {callback}: {result}")
+                self._log_exc(f"Error in {event} callback {callback}", result)
 
 MaybeAwaitableT = TypeVar("MaybeAwaitableT", Awaitable[None], None)
 AsyncCallback: TypeAlias = Callable[P, MaybeAwaitableT]

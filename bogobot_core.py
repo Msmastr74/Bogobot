@@ -164,7 +164,7 @@ class BotCore(discord.Client):
         self.event(self.on_message)
         self.event(self.on_member_join)
         self.event(self.on_guild_join)
-        self.callbacks = CallbackRegistry()
+        self.callbacks = CallbackRegistry(logger=self.logger.getChild("Callbacks"))
         self.milestones: 'MilestoneTracker | None' = None
 
     def _account_role_ids(self, guild_id: int, user_id: str) -> Sequence[int]:
