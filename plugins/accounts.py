@@ -1188,6 +1188,20 @@ async def setup(bot: BotCore) -> None:
             safety_filter=True,
         )
 
+    async def send_user_account_info(
+        interaction: discord.Interaction,
+        user: discord.Member | discord.User,
+        *,
+        eph: bool = True,
+    ) -> None:
+        account = bot.accounts[user.id].local(interaction.guild_id)
+        await bot.discord.send(
+            view=AccountView(user=user, account=account),
+            ephemeral=eph,
+            response=True,
+            safety_filter=True,
+        )
+
     @accounts.command(
         name="info",
         description="Gets information about a user",
@@ -1211,5 +1225,16 @@ async def setup(bot: BotCore) -> None:
             view = RoleAccountView(role=target, account=account_target.account)
         else:
             user = target if isinstance(target, discord.Member | discord.User) else interaction.user
-            view = AccountView(user=user, account=account_target.account.local(interaction.guild_id))
+            await send_user_account_info(interaction, user, eph=eph)
+            return
         await bot.discord.send(view=view, ephemeral=eph, response=True, safety_filter=True)
+
+    @bot.setup.context_menu(
+        name="Account Info",
+        defer=False,
+    )
+    async def AccountInfo(
+        interaction: discord.Interaction,
+        target: discord.Member | discord.User,
+    ) -> None:
+        await send_user_account_info(interaction, target)
