@@ -429,7 +429,7 @@ class BotCore(discord.Client):
                     if isinstance(kwargs.get("embed"), discord.Embed):
                         self.embed = kwargs["embed"]
                     await self.message.edit(**kwargs)
-                except discord.NotFound:
+                except (discord.NotFound, discord.Forbidden):
                     self.message = None
 
             async def delete(self):

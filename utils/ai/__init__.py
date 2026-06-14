@@ -729,6 +729,11 @@ class AICore(Generic[ContextT, ActionT]):
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "reason": {
+                            "type": ["string", "null"],
+                            "description": "Optional reason.",
+                            "default": None,
+                        },
                     },
                     "required": [],
                     "additionalProperties": False,

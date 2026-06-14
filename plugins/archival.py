@@ -936,6 +936,7 @@ async def setup(bot: BotCore):
             super().__init__(initial_state=initial_state, timeout=300)
             self.value_filter = value_filter
             self.cached_events: list[ArchiveEvent] = []
+            self.message: BotCore._Discord.MessageHandle | None = None
             self.newer = discord.ui.Button(
                 label="Newer",
                 style=discord.ButtonStyle.secondary,
@@ -948,10 +949,6 @@ async def setup(bot: BotCore):
                 label="Older",
                 style=discord.ButtonStyle.secondary,
             )
-            self.freeze = discord.ui.Button(
-                label="Freeze",
-                style=discord.ButtonStyle.secondary,
-            )
             self.close = discord.ui.Button(
                 label="Close",
                 style=discord.ButtonStyle.danger,
@@ -960,13 +957,11 @@ async def setup(bot: BotCore):
             self.newer.callback = self.newer_action
             self.refresh.callback = self.refresh_action
             self.older.callback = self.older_action
-            self.freeze.callback = self.freeze_action
             self.close.callback = self.close_action
             self.controls = discord.ui.ActionRow(
                 self.newer,
                 self.refresh,
                 self.older,
-                self.freeze,
                 self.close,
             )
 
@@ -1130,19 +1125,13 @@ async def setup(bot: BotCore):
         ) -> None:
             await self.show_next_page(interaction)
 
-        async def freeze_action(
-            self,
-            interaction: discord.Interaction,
-        ) -> None:
-            if self.current_page is None:
+        async def on_timeout(self) -> None:
+            if self.current_page is None or self.message is None:
                 return
 
             frozen_view = discord.ui.LayoutView(timeout=None)
             frozen_view.add_item(self.generate_container(self.current_page))
-            await interaction.response.edit_message(
-                view=frozen_view,
-                **self.current_page.as_edit_kwargs(),
-            )
+            await self.message.edit(view=frozen_view, **self.current_page.as_edit_kwargs())
 
         async def close_action(
             self,
@@ -1183,7 +1172,7 @@ async def setup(bot: BotCore):
             value_filter=value,
         )
         page = await view.load()
-        await bot.discord.send(
+        view.message = await bot.discord.send(
             **page.as_send_kwargs(),
             view=view,
             response=True,
