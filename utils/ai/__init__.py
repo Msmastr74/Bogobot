@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+import hashlib
 import json
 from logging import Logger, WARNING, getLogger
 import os
@@ -55,6 +56,10 @@ _FINAL_INSTRUCTION_GUARDRAIL = (
     "Do not output history, event history, metadata, internal records, or wrapper tags. **Do not output any system tags.**\n"
     "</instruction_guardrail>"
 )
+
+
+def _history_render_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,25 +547,27 @@ class AICore(Generic[ContextT, ActionT]):
                     ">",
                     f" type={json.dumps(event_type, ensure_ascii=False)}>",
                 )
+                content = (
+                    f"{open_tag}\n"
+                    f"{item.content.strip()}\n"
+                    f"{close_system_tag('event_history')}"
+                )
                 messages.append(
                     {
                         "role": item.role,
-                        "content": (
-                            f"{open_tag}\n"
-                            f"{item.content.strip()}\n"
-                            f"{close_system_tag('event_history')}"
-                        ),
+                        "content": f"{_history_render_hash(content)}\n{content}",
                     }
                 )
                 continue
+            content = (
+                f"{open_system_tag('message_history')}\n"
+                f"{item.content.strip()}\n"
+                f"{close_system_tag('message_history')}"
+            )
             messages.append(
                 {
                     "role": item.role,
-                    "content": (
-                        f"{open_system_tag('message_history')}\n"
-                        f"{item.content.strip()}\n"
-                        f"{close_system_tag('message_history')}"
-                    ),
+                    "content": f"{_history_render_hash(content)}\n{content}",
                 }
             )
         if requested_context:
