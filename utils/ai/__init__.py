@@ -594,7 +594,7 @@ class AICore(Generic[ContextT, ActionT]):
                 model=self.model_name,
                 messages=messages,
                 tools=tools,
-                tool_choice="auto",
+                tool_choice="required" if self.response_as_tool else "auto",
                 parallel_tool_calls=True,
                 temperature=0.2,
                 max_tokens=MAX_NEW_TOKENS,
