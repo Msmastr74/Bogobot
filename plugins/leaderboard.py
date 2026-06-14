@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups, tasks
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.schemas import SortoffsLeaderboard, SortoffsPlayer
 
 from bogobot_core import BotCore

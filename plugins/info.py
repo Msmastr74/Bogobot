@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from bogobot_core import BotCore, TARGET_VIDEO_ID
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.discord import count_characters
 
 

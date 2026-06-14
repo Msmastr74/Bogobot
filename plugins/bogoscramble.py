@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image, ImageSequence
 
 from typing import Optional, overload
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.logger_pipe import log_subprocess_pipe
 from utils.type import Coro
 from bogobot_core import BotCore

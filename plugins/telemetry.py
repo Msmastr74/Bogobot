@@ -12,7 +12,7 @@ from pydantic import TypeAdapter, ValidationError, field_validator
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
 from utils import groups
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.schemas import Schema
 from discord import app_commands
 

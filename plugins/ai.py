@@ -16,7 +16,7 @@ from pydantic import AliasPath, Field, field_validator
 
 from typing import TYPE_CHECKING, Any, Awaitable, Literal, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
-from utils.ai.context import ContextRequest, HistoryMessage, PersistentMemory, close_system_tag, open_system_tag
+from ai.context import ContextRequest, HistoryMessage, PersistentMemory, close_system_tag, open_system_tag
 from utils.discord import InteractionModal, chunk_text, count_characters, split_text_to_character_limit
 from utils import groups
 from utils.schemas import Schema
@@ -138,7 +138,7 @@ ai_config = AIConfig()
 
 def setup_ai(bot: "BotCore"):
     import os
-    from utils.ai import ai as ai_core
+    from ai import ai as ai_core
 
     global ai_config
 
@@ -585,7 +585,7 @@ def can_use_ai(bot: 'BotCore', user: discord.User | discord.Member, guild_id: in
 
 class ContextRequestExecutor:
     def __init__(self, bot: "BotCore"):
-        from utils.ai import ai as ai_core
+        from ai import ai as ai_core
 
         self.bot = bot
         self.ai_core = ai_core

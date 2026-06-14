@@ -19,7 +19,7 @@ from plugins.ai import (
     capture_interaction_output,
     chunk_text,
 )
-from utils.ai import action, ai as ai_core
+from ai import action, ai as ai_core
 from datetime import datetime, timedelta, timezone
 from utils import groups
 

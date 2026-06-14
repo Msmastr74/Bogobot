@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any
 
-from utils.ai.context import (
+from ai.context import (
     ASSISTANT_NAMESPACE,
     SYSTEM_NAMESPACE,
     close_system_tag,
@@ -9,7 +9,7 @@ from utils.ai.context import (
 )
 
 if TYPE_CHECKING:
-    from utils.ai import AICore
+    from ai import AICore
 
 MAX_NEW_TOKENS = 2048
 CONTEXT_REQUEST_TOOL_NAME = "request_context"

@@ -6,7 +6,7 @@ from discord import app_commands
 from utils.transformers import ColourTransformer, IntTransformer
 from bogobot_core import BotCore
 from utils import groups
-from utils.ai import AIParam, action
+from ai import AIParam, action
 
 class AvatarView(discord.ui.LayoutView):
     def __init__(

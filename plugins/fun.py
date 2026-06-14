@@ -6,7 +6,7 @@ import time
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.ai import action
+from ai import action
 from plugins import ai as ai_plugin
 
 class BogonameView(discord.ui.LayoutView):

@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from bogobot_core import BotCore
 from PIL import Image
-from utils.ai import AIParam, action
+from ai import AIParam, action
 
 from utils.monitoring import PersistentChannelMonitor
 from utils import groups

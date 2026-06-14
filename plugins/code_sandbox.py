@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 import discord
 
 from bogobot_core import BotCore
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.discord import chunk_text
 from utils.sandboxed_executor import Language, SandboxedExecutor, PythonLanguage, JavascriptLanguage
 

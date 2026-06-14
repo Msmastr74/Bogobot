@@ -17,7 +17,7 @@ from PIL import Image
 from bogobot_core import BotCore
 from utils import groups
 from utils.pagination import PageSection, PaginatedView, SectionRead
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.video_archival import ScanProgress, VideoArchiveFrame, VideoArchiver, VideoScanMatch, VideoScanResult
 
 

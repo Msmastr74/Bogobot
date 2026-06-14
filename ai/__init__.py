@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 import discord
 from pydantic import TypeAdapter, ValidationError
 import plugins.ai as ai_plugin
-from utils.ai.context import (
+from ai.context import (
     AIContext,
     ASSISTANT_NAMESPACE,
     ContextRequest,
@@ -29,7 +29,7 @@ from utils.ai.context import (
     XMLReader,
     MAX_COMMANDS
 )
-from utils.ai.system_prompt import (
+from ai.system_prompt import (
     CONTEXT_REQUEST_TOOL_NAME as _CONTEXT_REQUEST_TOOL_NAME,
     DONT_RESPOND_TOOL_NAME as _DONT_RESPOND_TOOL_NAME,
     MAX_NEW_TOKENS,

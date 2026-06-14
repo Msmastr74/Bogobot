@@ -9,7 +9,7 @@ from PIL import Image
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from discord import app_commands
 
 

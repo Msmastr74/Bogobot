@@ -10,7 +10,7 @@ from pyuca import Collator
 
 from bogobot_core import BotCore
 from utils import groups
-from utils.ai import AIParam, action
+from ai import AIParam, action
 
 FALSE_SPACE = '\u200d'
 async def setup(bot: BotCore):

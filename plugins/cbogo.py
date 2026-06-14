@@ -7,7 +7,7 @@ import discord
 from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
 
 from bogobot_core import BotCore
-from utils.ai import AIParam, action
+from ai import AIParam, action
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from utils.discord import count_characters
 from utils.schemas import Schema
