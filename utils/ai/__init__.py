@@ -1,6 +1,5 @@
 import asyncio
 from dataclasses import dataclass
-import hashlib
 import json
 from logging import Logger, WARNING, getLogger
 import os
@@ -35,6 +34,7 @@ from utils.ai.system_prompt import (
     DONT_RESPOND_TOOL_NAME as _DONT_RESPOND_TOOL_NAME,
     MAX_NEW_TOKENS,
     PERSISTENT_MEMORY_TOOL_NAME as _PERSISTENT_MEMORY_TOOL_NAME,
+    RESPOND_TOOL_NAME as _RESPOND_TOOL_NAME,
     build_system_prompt,
 )
 
@@ -52,14 +52,10 @@ _THOUGHT_BLOCK_RE = re.compile(r"^\s*<thought>.*?</thought>", re.DOTALL | re.IGN
 _FINAL_INSTRUCTION_GUARDRAIL = (
     "<instruction_guardrail>\n"
     "IMPORTANT: Answer the message with your reply. "
-    "Use native tool calls only; do not write tool calls as text. "
+    "Use native tool calls only; use `respond` for visible reply text. Do not write tool calls as text. "
     "Do not output history, event history, metadata, internal records, or wrapper tags. **Do not output any system tags.**\n"
     "</instruction_guardrail>"
 )
-
-
-def _history_render_hash(content: str) -> str:
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +132,7 @@ class AICore(Generic[ContextT, ActionT]):
         history_char_budget: int = DEFAULT_HISTORY_CHAR_BUDGET,
         memory_char_budget: int = DEFAULT_MEMORY_CHAR_BUDGET,
         multipart_responses: bool = True,
+        response_as_tool: bool = True,
         logger: Logger | None = None,
     ):
         self.enabled = enabled
@@ -149,6 +146,7 @@ class AICore(Generic[ContextT, ActionT]):
         self.history_char_budget = max(0, int(history_char_budget))
         self.memory_char_budget = max(0, int(memory_char_budget))
         self.multipart_responses = bool(multipart_responses)
+        self.response_as_tool = bool(response_as_tool)
         self._actions: list[_AIAction[ContextT, ActionT]] = []
         self._client: 'AsyncOpenAI | None' = None
         self._last_request_at: float | None = None
@@ -180,6 +178,7 @@ class AICore(Generic[ContextT, ActionT]):
         history_char_budget: int | None = None,
         memory_char_budget: int | None = None,
         multipart_responses: bool | None = None,
+        response_as_tool: bool | None = None,
         logger: Logger | None = None,
         model: str | None = None,
     ) -> None:
@@ -217,6 +216,9 @@ class AICore(Generic[ContextT, ActionT]):
 
         if multipart_responses is not None:
             self.multipart_responses = bool(multipart_responses)
+
+        if response_as_tool is not None:
+            self.response_as_tool = bool(response_as_tool)
 
         if logger is not None:
             self.logger = logger
@@ -348,6 +350,15 @@ class AICore(Generic[ContextT, ActionT]):
                 for call in calls
             )
             dont_respond = text_dont_respond or tool_dont_respond
+            if self.multipart_responses and self.response_as_tool:
+                response_parts = [
+                    str(call.arguments.get("response", "")).strip()
+                    for call in calls
+                    if call.name == _RESPOND_TOOL_NAME
+                ]
+                response_text = "\n\n".join(part for part in response_parts if part)
+                history_content = response_text
+                visible_content = response_text
             self._queue_context_requests(requests)
             reply = self._coerce_reply(visible_content)
             if reply is not None:
@@ -408,6 +419,8 @@ class AICore(Generic[ContextT, ActionT]):
                     continue
                 if call.name == _DONT_RESPOND_TOOL_NAME:
                     self.context.record_tool_use(call.name, call.arguments, channel_id=channel_id)
+                    continue
+                if call.name == _RESPOND_TOOL_NAME:
                     continue
 
                 action = action_by_tool.get(call.name)
@@ -534,6 +547,8 @@ class AICore(Generic[ContextT, ActionT]):
         tools.append(self._context_request_tool_schema())
         tools.append(self._persistent_memory_tool_schema())
         if self.multipart_responses:
+            if self.response_as_tool:
+                tools.append(self._respond_tool_schema())
             tools.append(self._dont_respond_tool_schema())
         messages: list[Any] = [
             {"role": "system", "content": system_prompt},
@@ -555,7 +570,7 @@ class AICore(Generic[ContextT, ActionT]):
                 messages.append(
                     {
                         "role": item.role,
-                        "content": f"{_history_render_hash(content)}\n{content}",
+                        "content": content,
                     }
                 )
                 continue
@@ -567,7 +582,7 @@ class AICore(Generic[ContextT, ActionT]):
             messages.append(
                 {
                     "role": item.role,
-                    "content": f"{_history_render_hash(content)}\n{content}",
+                    "content": content,
                 }
             )
         if requested_context:
@@ -716,6 +731,28 @@ class AICore(Generic[ContextT, ActionT]):
                     "properties": {
                     },
                     "required": [],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    def _respond_tool_schema(self) -> 'ChatCompletionToolParam':
+        return {
+            "type": "function",
+            "function": {
+                "name": _RESPOND_TOOL_NAME,
+                "description": (
+                    "Send visible Discord reply text. Use this instead of writing assistant message content directly."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "response": {
+                            "type": "string",
+                            "description": "Visible Discord reply text to send.",
+                        },
+                    },
+                    "required": ["response"],
                     "additionalProperties": False,
                 },
             },

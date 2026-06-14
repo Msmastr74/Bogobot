@@ -108,6 +108,7 @@ class AIConfig(Schema):
     request_interval_seconds: float = 60.0
     normalize_discord: bool = True
     multipart_responses: bool = True
+    response_as_tool: bool = True
     history: AIHistoryConfig = Field(default_factory=lambda: AIHistoryConfig.model_validate({}))
     breaks: AIBreakConfig = Field(default_factory=lambda: AIBreakConfig.model_validate({}))
 
@@ -154,6 +155,7 @@ def setup_ai(bot: "BotCore"):
         request_interval_seconds=ai_config.request_interval_seconds,
         normalize_discord=ai_config.normalize_discord,
         multipart_responses=ai_config.multipart_responses,
+        response_as_tool=ai_config.response_as_tool,
         history_enabled=ai_config.history.enabled,
         history_path=ai_config.history.path,
         history_char_budget=ai_config.history.char_budget,

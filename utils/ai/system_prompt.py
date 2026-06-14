@@ -15,6 +15,7 @@ MAX_NEW_TOKENS = 2048
 CONTEXT_REQUEST_TOOL_NAME = "request_context"
 PERSISTENT_MEMORY_TOOL_NAME = "persistent_memory"
 DONT_RESPOND_TOOL_NAME = "dont_respond"
+RESPOND_TOOL_NAME = "respond"
 
 
 def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
@@ -30,14 +31,39 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
         prompt += (
             "The available tools are Discord commands and assistant side-effect tools. Refer to command tools as commands. "
             "Only call tools from the available tools; never invent command names or command arguments. "
-            "You can produce a multi-part response: normal assistant text plus one or more tool calls in the same response. "
-            "When generating a multi-part response, write the normal assistant text first, then append tool calls at the very end. "
+        )
+        if ai.response_as_tool:
+            prompt += (
+                f"Use the `{RESPOND_TOOL_NAME}` tool for visible Discord reply text. "
+                "Do not write visible reply text directly in assistant message content. "
+                f"To send a visible reply and use tools, call `{RESPOND_TOOL_NAME}` plus the other tools. "
+                f"To stay silent, use `{DONT_RESPOND_TOOL_NAME}`. "
+            )
+        else:
+            prompt += (
+                "You can produce a multi-part response: normal assistant text plus one or more tool calls in the same response. "
+                "When generating a multi-part response, write the normal assistant text first, then append tool calls at the very end. "
+            )
+        prompt += (
             "Use this capability when the user asks for both an immediate answer and an action/tool side effect. "
-            "Do not force a tool call when normal text alone is enough, and do not force normal text when a tool-only response is clearly better. "
+        )
+        if ai.response_as_tool:
+            prompt += (
+                f"Do not force side-effect tools when `{RESPOND_TOOL_NAME}` alone is enough, "
+                f"and do not force `{RESPOND_TOOL_NAME}` when a tool-only response is clearly better. "
+            )
+        else:
+            prompt += (
+                "Do not force a tool call when normal text alone is enough, and do not force normal text when a tool-only response is clearly better. "
+            )
+        prompt += (
             "In multipart mode, use native tool calls for all assistant side effects; inline assistant XML control tags are disabled and treated as normal text. "
             "Never write a tool call as message text, JSON text, or an event-history block. If you want a tool, use the native tool-call mechanism. "
-            "If no command fits, respond normally.\n"
         )
+        if ai.response_as_tool:
+            prompt += f"If no command fits, call `{RESPOND_TOOL_NAME}` with the normal reply.\n"
+        else:
+            prompt += "If no command fits, respond normally.\n"
     else:
         prompt += (
             "The available tools are Discord commands. Refer to them as commands. Use a command when it fits the user's request. Commands only provide output to the user, and end the turn. "
@@ -88,7 +114,10 @@ def build_system_prompt(ai: "AICore[Any, Any]", instruction_text: str) -> str:
         prompt += f"- `{PERSISTENT_MEMORY_TOOL_NAME}` can be called alongside normal assistant text or other tool calls when a multi-part response is appropriate.\n"
         prompt += f"- Do not output `{ASSISTANT_NAMESPACE}:persistent_memory` XML tags in multipart mode.\n"
         prompt += f"- Use the `{DONT_RESPOND_TOOL_NAME}` tool when you want to record the turn without displaying a visible Discord reply.\n"
-        prompt += f"- `{DONT_RESPOND_TOOL_NAME}` can be called with normal assistant text and other tool calls; any normal assistant text in that response is recorded in history but not displayed.\n"
+        if ai.response_as_tool:
+            prompt += f"- If `{DONT_RESPOND_TOOL_NAME}` is called with `{RESPOND_TOOL_NAME}`, the response text is recorded in history but not displayed.\n"
+        else:
+            prompt += f"- `{DONT_RESPOND_TOOL_NAME}` can be called with normal assistant text and other tool calls; any normal assistant text in that response is recorded in history but not displayed.\n"
         prompt += f"- Do not output `{ASSISTANT_NAMESPACE}:dont_respond` XML tags in multipart mode.\n"
     else:
         prompt += "- If a create or edit would exceed the persistent memory budget, the system records it with `failed=\"true\"` and does not create or edit the stored memory. If you later see a failed memory attempt, retry with shorter content or free budget first.\n"
