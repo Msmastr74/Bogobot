@@ -138,55 +138,6 @@ class ModlogDatabase:
         )
         return list(self.iter_events(query))
 
-    def related_events(
-        self,
-        event: ModlogEvent,
-        *,
-        seconds: int,
-        actions: Iterable[str],
-    ) -> list[ModlogEvent]:
-        if event.target_id is None:
-            return []
-        after_id = discord_time_snowflake_offset(event.id, -seconds)
-        before_id = discord_time_snowflake_offset(event.id, seconds, high=True)
-        events: list[ModlogEvent] = []
-        for action in actions:
-            events.extend(self.query_events(
-                guild_id=event.guild_id,
-                action=action,
-                target_id=event.target_id,
-                after_id=after_id,
-                before_id=before_id,
-                limit=None,
-            ))
-        return [
-            related
-            for related in {related.id: related for related in events}.values()
-            if related.id != event.id
-        ]
-
-    def write_event_with_links(
-        self,
-        event: ModlogEvent,
-        *,
-        related: Iterable[ModlogEvent],
-        replace: bool = True,
-    ) -> bool:
-        related_events = list(related)
-        event.related_event_ids = sorted({
-            *event.related_event_ids,
-            *(related_event.id for related_event in related_events),
-        })
-        with self.connection() as connection:
-            written = self._write_event(connection, event, replace=replace)
-            for related_event in related_events:
-                related_event.related_event_ids = sorted({
-                    *related_event.related_event_ids,
-                    event.id,
-                })
-                self._write_event(connection, related_event, replace=True)
-        return written
-
     def query_event_ids(
         self,
         *,
@@ -272,13 +223,6 @@ class ModlogDatabase:
         *,
         replace: bool,
     ) -> bool:
-        if replace:
-            existing = self._read_event(connection, event.id)
-            if existing is not None:
-                event.related_event_ids = sorted({
-                    *existing.related_event_ids,
-                    *event.related_event_ids,
-                })
         values = (
             event.id,
             event.guild_id,

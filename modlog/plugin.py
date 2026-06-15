@@ -1,7 +1,7 @@
 from datetime import timedelta
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import discord
 from discord import app_commands
@@ -17,6 +17,7 @@ from modlog.lifecycle import (
     member_update_events,
     message_event,
 )
+from modlog.related import RelatedGroup, RelatedResolver
 from modlog.undo import ModlogUndoResult, undo_event
 from utils.discord import chunk_text, count_characters
 
@@ -28,33 +29,27 @@ MAX_ACTION_CHOICES = 25
 MAX_EVENTS_PER_PAGE = 10
 MODLOG_UNDO_CAPABILITY = "modlog.undo"
 AUDIT_LOG_RESCAN_OVERLAP = timedelta(minutes=10)
-EVENT_LINK_WINDOW_SECONDS = 600
 DETAIL_VALUE_LIMIT = 1000
 MESSAGE_CONTENT_PREVIEW_LIMIT = 2800
 MESSAGE_CONTENT_INLINE_LIMIT = 2000
 MESSAGE_RECREATE_CONTENT_LIMIT = 2000
 RAW_CONTENT_CHUNK_LIMIT = 1900
 RELATED_EVENT_DETAIL_LIMIT = 1800
+MODLOG_PAGE_FETCH_LIMIT = 100
+MODLOG_PAGE_CHAR_LIMIT = 3600
+MODLOG_PAGE_ELEMENT_LIMIT = 32
+MODLOG_GROUP_CHAR_LIMIT = 1800
 GATEWAY_ACTIONS = (
     "on_message_delete",
     "on_bulk_message_delete",
     "on_message_edit",
+    "on_member_join",
+    "on_member_remove",
+    "on_member_update",
+    "on_member_role_update",
+    "on_member_ban",
+    "on_member_unban",
 )
-EVENT_MATCH_ACTIONS: dict[str, tuple[str, ...]] = {
-    "ban": ("ban", "member_remove"),
-    "unban": ("unban",),
-    "kick": ("kick", "member_remove"),
-    "member_join": ("member_join",),
-    "member_remove": ("member_remove", "kick", "ban"),
-    "member_update": ("member_update",),
-    "member_role_update": ("member_role_update",),
-    "message_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
-    "message_bulk_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
-    "message_update": ("message_update", "on_message_edit"),
-    "on_message_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
-    "on_bulk_message_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
-    "on_message_edit": ("message_update", "on_message_edit"),
-}
 
 
 def database_path(bot: BotCore) -> Path:
@@ -579,17 +574,32 @@ class ModlogMessageContentView(discord.ui.LayoutView):
         self.add_item(container)
 
 
-class ModlogMessageContentButton(discord.ui.Button["ModlogEventView"]):
-    def __init__(self, message_key: str = "message") -> None:
+def _view_event(view: discord.ui.View | discord.ui.LayoutView, event_id: int | None) -> ModlogEvent | None:
+    if event_id is None:
+        event = getattr(view, "event", None)
+        return event if isinstance(event, ModlogEvent) else None
+    database = getattr(view, "database", None)
+    if isinstance(database, ModlogDatabase):
+        return database.read_event(event_id)
+    return None
+
+
+class ModlogMessageContentButton(discord.ui.Button):
+    def __init__(self, message_key: str = "message", *, event_id: int | None = None) -> None:
         super().__init__(label="View Content", style=discord.ButtonStyle.secondary)
         self.message_key = message_key
+        self.event_id = event_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
             return
-        message = _message_payload(view.event, self.message_key)
+        event = _view_event(view, self.event_id)
+        if event is None:
+            await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
+            return
+        message = _message_payload(event, self.message_key)
         if message is None:
             await interaction.response.send_message("No captured message payload.", ephemeral=True)
             return
@@ -638,17 +648,22 @@ class ModlogMessageContentButton(discord.ui.Button["ModlogEventView"]):
         )
 
 
-class ModlogRawContentButton(discord.ui.Button["ModlogEventView"]):
-    def __init__(self, message_key: str = "message") -> None:
+class ModlogRawContentButton(discord.ui.Button):
+    def __init__(self, message_key: str = "message", *, event_id: int | None = None) -> None:
         super().__init__(label="View Raw Content", style=discord.ButtonStyle.secondary)
         self.message_key = message_key
+        self.event_id = event_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
             return
-        message = _message_payload(view.event, self.message_key)
+        event = _view_event(view, self.event_id)
+        if event is None:
+            await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
+            return
+        message = _message_payload(event, self.message_key)
         if message is None:
             await interaction.response.send_message("No captured message payload.", ephemeral=True)
             return
@@ -700,17 +715,9 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
     return lines
 
 
-def _format_related_ids(event: ModlogEvent) -> str:
-    related = ", ".join(f"`{event_id}`" for event_id in event.related_event_ids[:MAX_EVENT_LINES])
-    if len(event.related_event_ids) > MAX_EVENT_LINES:
-        related += f"\n-# {len(event.related_event_ids) - MAX_EVENT_LINES} more related events"
-    return related
-
-
 def format_event_details(
     event: ModlogEvent,
     *,
-    include_related: bool = True,
     include_gateway_capture: bool = True,
 ) -> str:
     lines = [
@@ -722,8 +729,6 @@ def format_event_details(
         f"Actor: {entity_text(event.actor)}",
         f"Target: {entity_text(event.target)}",
     ]
-    if include_related and event.related_event_ids:
-        lines.append("Related: " + _format_related_ids(event))
     if event.reason:
         lines.append(f"Reason: {discord.utils.escape_markdown(event.reason)}")
 
@@ -798,56 +803,37 @@ class ModlogUndoButton(discord.ui.Button["ModlogEventView"]):
         )
 
 
-class ModlogRelatedEventsView(discord.ui.LayoutView):
-    def __init__(self, events: list[ModlogEvent]) -> None:
-        super().__init__(timeout=None)
-        container = discord.ui.Container(
-            discord.ui.TextDisplay("## Related Events"),
-            discord.ui.Separator(),
-        )
-        if not events:
-            container.add_item(discord.ui.TextDisplay("No related events found."))
-            self.add_item(container)
-            return
-
-        for index, event in enumerate(events[:MAX_EVENT_LINES]):
-            if index:
-                container.add_item(discord.ui.Separator())
-            container.add_item(discord.ui.TextDisplay(_truncate_display_text(
-                format_event_details(event, include_related=False),
-                limit=RELATED_EVENT_DETAIL_LIMIT,
-            )))
-
-        if len(events) > MAX_EVENT_LINES:
-            container.add_item(discord.ui.Separator())
-            container.add_item(discord.ui.TextDisplay(f"-# {len(events) - MAX_EVENT_LINES} more related events"))
-        self.add_item(container)
-
-
-class ModlogRelatedButton(discord.ui.Button["ModlogEventView"]):
-    def __init__(self) -> None:
-        super().__init__(label="View Related", style=discord.ButtonStyle.secondary)
+class ModlogGroupDetailsButton(discord.ui.Button["ModlogView"]):
+    def __init__(self, event_ids: Iterable[int]) -> None:
+        super().__init__(label="Details", style=discord.ButtonStyle.secondary)
+        self.event_ids = tuple(event_ids)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if view is None:
             await interaction.response.send_message(
-                "Related events are not available right now.",
+                "This modlog group is not available right now.",
                 ephemeral=True,
             )
             return
 
         events = [
             event
-            for event_id in view.event.related_event_ids
+            for event_id in self.event_ids
             if (event := view.database.read_event(event_id)) is not None
         ]
         events.sort(key=lambda event: event.id, reverse=True)
-        await interaction.response.send_message(
-            view=ModlogRelatedEventsView(events),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        if not events:
+            await interaction.response.send_message("No events found for this group.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        for event in events:
+            await interaction.followup.send(
+                view=ModlogEventView(event, database=view.database),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
 
 def _add_message_snapshot_section(
@@ -876,18 +862,11 @@ class ModlogEventView(discord.ui.LayoutView):
             discord.ui.TextDisplay("## Modlog Event"),
             discord.ui.Separator(),
         )
-        if event.related_event_ids:
-            container.add_item(discord.ui.Section(
-                discord.ui.TextDisplay("Related: " + _format_related_ids(event)),
-                accessory=ModlogRelatedButton(),
-            ))
-            container.add_item(discord.ui.Separator())
         before_message = _message_payload(event, "before_message")
         message = _message_payload(event)
         container.add_item(discord.ui.TextDisplay(
             format_event_details(
                 event,
-                include_related=False,
                 include_gateway_capture=before_message is None or message is None,
             )
         ))
@@ -950,6 +929,44 @@ class ModlogEventButton(discord.ui.Button["ModlogView"]):
         )
 
 
+def format_group_text(group: RelatedGroup, *, limit: int = MODLOG_GROUP_CHAR_LIMIT) -> str:
+    lines: list[str] = []
+    remaining = 0
+    for index, event in enumerate(group.events):
+        line = format_event_line(event)
+        candidate = "\n".join([*lines, line])
+        if lines and count_characters(candidate) > limit:
+            remaining = len(group.events) - index
+            break
+        if not lines and count_characters(candidate) > limit:
+            lines.append(_truncate_display_text(line, limit=limit))
+            remaining = len(group.events) - index - 1
+            break
+        lines.append(line)
+
+    if remaining:
+        more_line = f"`{remaining}` more"
+        candidate = "\n".join([*lines, more_line])
+        if count_characters(candidate) <= limit:
+            lines.append(more_line)
+    return "\n".join(lines)
+
+
+class RenderBudget:
+    def __init__(self, *, chars: int, elems: int) -> None:
+        self.chars = chars
+        self.elems = elems
+        self.used_chars = 0
+        self.used_elems = 0
+
+    def count(self, *, chars: int = 0, elems: int = 0) -> bool:
+        if self.used_chars + chars > self.chars or self.used_elems + elems > self.elems:
+            return False
+        self.used_chars += chars
+        self.used_elems += elems
+        return True
+
+
 class ModlogView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -960,52 +977,97 @@ class ModlogView(discord.ui.LayoutView):
         actor_id: int | None,
         target_id: int | None,
         page_size: int,
-        page: int = 0,
+        page_first_id: int | None = None,
+        previous_first_ids: Iterable[int] = (),
     ) -> None:
         super().__init__(timeout=900)
         self.database = database
+        self.resolver = RelatedResolver()
         self.guild_id = guild_id
         self.action = action
         self.actor_id = actor_id
         self.target_id = target_id
         self.page_size = min(MAX_EVENTS_PER_PAGE, page_size)
-        self.page = max(0, page)
+        self.page_first_id = page_first_id
+        self.previous_first_ids = list(previous_first_ids)
+        self.current_first_id: int | None = None
+        self.next_first_id: int | None = None
         self.has_next = False
         self.render()
 
-    def page_events(self) -> list[ModlogEvent]:
-        events = self.database.query_events(
+    @property
+    def page_number(self) -> int:
+        return len(self.previous_first_ids) + 1
+
+    def anchor_events(self) -> list[ModlogEvent]:
+        before_id = self.page_first_id + 1 if self.page_first_id is not None else None
+        return self.database.query_events(
             guild_id=self.guild_id,
             action=self.action,
             actor_id=self.actor_id,
             target_id=self.target_id,
-            limit=self.page_size + 1,
-            offset=self.page * self.page_size,
+            before_id=before_id,
+            limit=MODLOG_PAGE_FETCH_LIMIT + 1,
         )
-        self.has_next = len(events) > self.page_size
-        return events[:self.page_size]
+
+    def candidate_events(self, events: list[ModlogEvent]) -> list[ModlogEvent]:
+        after_id, before_id = self.resolver.widened_bounds(events)
+        if after_id is None and before_id is None:
+            return []
+        return self.database.query_events(
+            guild_id=self.guild_id,
+            after_id=after_id,
+            before_id=before_id,
+            limit=None,
+        )
 
     def render(self) -> None:
         self.clear_items()
-        events = self.page_events()
+        events = self.anchor_events()
+        if events:
+            self.current_first_id = events[0].id
+        visible_events = events[:MODLOG_PAGE_FETCH_LIMIT]
+        groups = self.resolver.group(visible_events, self.candidate_events(visible_events))
+        rendered_groups: list[RelatedGroup] = []
+        rendered_base_ids: set[int] = set()
+        base_ids = {event.id for event in events}
+        budget = RenderBudget(chars=MODLOG_PAGE_CHAR_LIMIT, elems=MODLOG_PAGE_ELEMENT_LIMIT)
         container = discord.ui.Container(
-            discord.ui.TextDisplay(f"## Modlog · Page {self.page + 1}"),
+            discord.ui.TextDisplay(f"## Modlog · Page {self.page_number}"),
             discord.ui.Separator(),
         )
+        budget.count(chars=count_characters(f"## Modlog · Page {self.page_number}"), elems=2)
 
-        if events:
-            for event in events:
+        if groups:
+            for group in groups:
+                text = format_group_text(group)
+                chars = count_characters(text)
+                if rendered_groups and not budget.count(chars=chars, elems=3):
+                    break
+                if not rendered_groups and not budget.count(chars=chars, elems=3):
+                    text = _truncate_display_text(text, limit=MODLOG_GROUP_CHAR_LIMIT)
+                    budget.count(chars=count_characters(text), elems=3)
                 container.add_item(discord.ui.Section(
-                    discord.ui.TextDisplay(format_event_line(event)),
-                    accessory=ModlogEventButton(event.id),
+                    discord.ui.TextDisplay(text),
+                    accessory=ModlogGroupDetailsButton(event.id for event in group.events),
                 ))
+                rendered_groups.append(group)
+                rendered_base_ids.update(event.id for event in group.events if event.id in base_ids)
         else:
             container.add_item(discord.ui.TextDisplay("No matching events."))
+
+        if rendered_base_ids:
+            last_rendered_base_id = min(rendered_base_ids)
+            next_event = next((event for event in events if event.id < last_rendered_base_id), None)
+            self.next_first_id = next_event.id if next_event is not None else None
+        else:
+            self.next_first_id = None
+        self.has_next = self.next_first_id is not None
 
         previous_button = discord.ui.Button(
             label="Previous",
             style=discord.ButtonStyle.secondary,
-            disabled=self.page <= 0,
+            disabled=not self.previous_first_ids,
         )
         next_button = discord.ui.Button(
             label="Next",
@@ -1025,14 +1087,16 @@ class ModlogView(discord.ui.LayoutView):
         self.add_item(container)
 
     async def previous_page(self, interaction: discord.Interaction) -> None:
-        if self.page > 0:
-            self.page -= 1
+        if self.previous_first_ids:
+            self.page_first_id = self.previous_first_ids.pop()
         self.render()
         await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
 
     async def next_page(self, interaction: discord.Interaction) -> None:
-        if self.has_next:
-            self.page += 1
+        if self.next_first_id is not None:
+            if self.current_first_id is not None:
+                self.previous_first_ids.append(self.current_first_id)
+            self.page_first_id = self.next_first_id
         self.render()
         await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
 
@@ -1062,16 +1126,8 @@ async def setup(bot: BotCore) -> None:
     logger = bot.logger.getChild("Modlog")
     bot.accounts.capabilities.register(MODLOG_UNDO_CAPABILITY)
 
-    def related_actions(event: ModlogEvent) -> tuple[str, ...]:
-        return EVENT_MATCH_ACTIONS.get(event.action, (event.action,))
-
     def record_event(event: ModlogEvent, *, replace: bool = True) -> bool:
-        related = database.related_events(
-            event,
-            seconds=EVENT_LINK_WINDOW_SECONDS,
-            actions=related_actions(event),
-        )
-        return database.write_event_with_links(event, related=related, replace=replace)
+        return database.write_event(event, replace=replace)
 
     @bot.connect_callback
     async def scan_since_last_connect() -> None:

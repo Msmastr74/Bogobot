@@ -56,7 +56,6 @@ class ModlogEvent(BaseModel):
     extra: Any = None
     changes: list[ModlogChange] = Field(default_factory=list)
     reverse_actions: list[ModlogReverseAction] = Field(default_factory=list)
-    related_event_ids: list[int] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
