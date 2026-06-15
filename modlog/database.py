@@ -176,6 +176,11 @@ class ModlogDatabase:
         if query.limit is not None:
             sql += " LIMIT ?"
             params.append(query.limit)
+        if query.offset:
+            if query.limit is None:
+                sql += " LIMIT -1"
+            sql += " OFFSET ?"
+            params.append(query.offset)
 
         with self.connection() as connection:
             rows = connection.execute(sql, params).fetchall()

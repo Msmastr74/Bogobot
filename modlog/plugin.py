@@ -57,6 +57,19 @@ def entity_text(entity) -> str:
         return "Unknown"
     if entity.id is None:
         return entity.type
+    if entity.type in {"Member", "User", "ClientUser"}:
+        return f"<@{entity.id}> (`{entity.id}`)"
+    if entity.type == "Role":
+        return f"<@&{entity.id}> (`{entity.id}`)"
+    if entity.type in {
+        "CategoryChannel",
+        "ForumChannel",
+        "StageChannel",
+        "TextChannel",
+        "Thread",
+        "VoiceChannel",
+    }:
+        return f"<#{entity.id}> (`{entity.id}`)"
     return f"{entity.type} `{entity.id}`"
 
 
