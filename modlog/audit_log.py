@@ -115,7 +115,8 @@ def _entity(value: Any, *, id: int | None) -> AuditEntity | None:
     if value is None and id is None:
         return None
 
-    external_id = str(value.id) if value is not None and id is None else None
+    raw_id = getattr(value, "id", None)
+    external_id = str(raw_id) if raw_id is not None and id is None else None
     data: dict[str, Any] = {}
     if value is not None:
         for attr in (
