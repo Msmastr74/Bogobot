@@ -13,6 +13,7 @@ class AuditEntity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: int | None = None
+    external_id: str | None = None
     type: str
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -106,25 +107,15 @@ def _audit_log_before_id(value: discord.abc.Snowflake | datetime | None) -> int 
         return discord.utils.time_snowflake(value, high=True)
     return int(value.id)
 
-
-def _target_id(entry: discord.AuditLogEntry, target: Any) -> int | None:
-    if target is not None and hasattr(target, "id"):
-        return int(target.id)
-    raw_target_id = getattr(entry, "_target_id", None)
-    if raw_target_id is None:
-        return None
-    return int(raw_target_id)
-
-
 def _type_name(value: Any) -> str:
     return type(value).__name__
 
 
-def _entity(value: Any, *, fallback_id: int | None = None) -> AuditEntity | None:
-    if value is None and fallback_id is None:
+def _entity(value: Any, *, id: int | None) -> AuditEntity | None:
+    if value is None and id is None:
         return None
 
-    value_id = int(value.id) if value is not None and hasattr(value, "id") else fallback_id
+    external_id = str(value.id) if value is not None and id is None else None
     data: dict[str, Any] = {}
     if value is not None:
         for attr in (
@@ -146,7 +137,8 @@ def _entity(value: Any, *, fallback_id: int | None = None) -> AuditEntity | None
                 data[attr] = attr_value
 
     return AuditEntity(
-        id=value_id,
+        id=id,
+        external_id=external_id,
         type=_type_name(value) if value is not None else "Object",
         data=data,
     )
@@ -176,7 +168,8 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _serialize(item) for key, item in value.items()}
 
-    entity = _entity(value)
+    value_id = getattr(value, "id", None)
+    entity = _entity(value, id=value_id if isinstance(value_id, int) else None)
     if entity is not None and (entity.id is not None or entity.data):
         return entity.model_dump(exclude_none=True)
 
@@ -292,7 +285,8 @@ def normalize_entry(entry: discord.AuditLogEntry) -> AuditEvent:
     action_value = entry.action.value
     category = entry.category.name if entry.category is not None else None
     changes = _changes(entry)
-    target_entity = _entity(target, fallback_id=_target_id(entry, target))
+    target_id = target.id if target is not None and isinstance(target.id, int) else None
+    target_entity = _entity(target, id=target_id)
 
     return AuditEvent(
         id=int(entry.id),
@@ -302,7 +296,7 @@ def normalize_entry(entry: discord.AuditLogEntry) -> AuditEvent:
         category=category,
         created_at=entry.created_at,
         imported_at=datetime.now(timezone.utc),
-        actor=_entity(entry.user, fallback_id=entry.user_id),
+        actor=_entity(entry.user, id=entry.user_id),
         target=target_entity,
         reason=entry.reason,
         extra=_serialize(entry.extra),
