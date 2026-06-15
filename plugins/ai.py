@@ -551,8 +551,6 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
     resolved = message.reference.resolved
     if not isinstance(resolved, discord.Message):
         return None
-    if resolved.author.id != bot.user.id:
-        return None
 
     text = read_text_from_message(resolved)
     if not text:

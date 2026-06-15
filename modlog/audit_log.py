@@ -1,13 +1,9 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterable, Sequence
+from typing import Any, AsyncIterator, Iterable, Sequence
 
 import discord
 from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from modlog.database import ModlogDatabase
-
 
 class ModlogEntity(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -60,6 +56,7 @@ class ModlogEvent(BaseModel):
     extra: Any = None
     changes: list[ModlogChange] = Field(default_factory=list)
     reverse_actions: list[ModlogReverseAction] = Field(default_factory=list)
+    related_event_ids: list[int] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -95,21 +92,6 @@ class AuditScan(BaseModel):
     events: list[ModlogEvent]
     stats: AuditScanStats
 
-
-def _audit_log_after_id(value: discord.abc.Snowflake | datetime | None) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return discord.utils.time_snowflake(value, high=False)
-    return int(value.id)
-
-
-def _audit_log_before_id(value: discord.abc.Snowflake | datetime | None) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return discord.utils.time_snowflake(value, high=True)
-    return int(value.id)
 
 def _type_name(value: Any) -> str:
     return type(value).__name__
@@ -427,7 +409,6 @@ async def retrieve_and_scan(
     oldest_first: bool | None = None,
     user: discord.abc.Snowflake | None = None,
     action: discord.AuditLogAction | None = None,
-    database: "ModlogDatabase | None" = None,
 ) -> AuditScan:
     entries = await retrieve_entries(
         guild,
@@ -438,20 +419,6 @@ async def retrieve_and_scan(
         user=user,
         action=action,
     )
-    if database is not None and entries:
-        existing_ids = database.query_event_ids(
-            guild_id=guild.id,
-            action=action.name if action is not None else None,
-            actor_id=int(user.id) if user is not None else None,
-            after_id=_audit_log_after_id(after),
-            before_id=_audit_log_before_id(before),
-            limit=None,
-        )
-        entries = [
-            entry
-            for entry in entries
-            if int(entry.id) not in existing_ids
-        ]
     return build_scan(guild.id, entries)
 
 

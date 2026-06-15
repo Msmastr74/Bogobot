@@ -79,6 +79,7 @@ class BotCore(discord.Client):
         self._config_lock = asyncio.Lock()
         intents = discord.Intents.default()
         intents.members = True
+        intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.tree.on_error = self.on_tree_error
@@ -162,7 +163,14 @@ class BotCore(discord.Client):
         
         self.event(self.on_ready)
         self.event(self.on_message)
+        self.event(self.on_message_delete)
+        self.event(self.on_bulk_message_delete)
+        self.event(self.on_message_edit)
         self.event(self.on_member_join)
+        self.event(self.on_member_remove)
+        self.event(self.on_member_update)
+        self.event(self.on_member_ban)
+        self.event(self.on_member_unban)
         self.event(self.on_guild_join)
         self.event(self.on_audit_log_entry_create)
         self.callbacks = CallbackRegistry(logger=self.logger.getChild("Callbacks"))
@@ -311,6 +319,46 @@ class BotCore(discord.Client):
     async def on_member_join(self, member: discord.Member | discord.User):
         await self.callbacks.execute_async('member_join', member)
 
+    def member_remove_callback(
+        self,
+        callback: AsyncCallback[[discord.Member | discord.User], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_remove', callback)
+        return callback
+
+    async def on_member_remove(self, member: discord.Member | discord.User):
+        await self.callbacks.execute_async('member_remove', member)
+
+    def member_update_callback(
+        self,
+        callback: AsyncCallback[[discord.Member, discord.Member], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_update', callback)
+        return callback
+
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
+        await self.callbacks.execute_async('member_update', before, after)
+
+    def member_ban_callback(
+        self,
+        callback: AsyncCallback[[discord.Guild, discord.User | discord.Member], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_ban', callback)
+        return callback
+
+    async def on_member_ban(self, guild: discord.Guild, user: discord.User | discord.Member):
+        await self.callbacks.execute_async('member_ban', guild, user)
+
+    def member_unban_callback(
+        self,
+        callback: AsyncCallback[[discord.Guild, discord.User], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_unban', callback)
+        return callback
+
+    async def on_member_unban(self, guild: discord.Guild, user: discord.User):
+        await self.callbacks.execute_async('member_unban', guild, user)
+
     def guild_join_callback(
         self,
         callback: AsyncCallback[[discord.Guild], MaybeAwaitableT]
@@ -340,6 +388,36 @@ class BotCore(discord.Client):
 
     async def on_message(self, message: discord.Message):
         await self.callbacks.execute_async('message', message)
+
+    def message_delete_callback(
+        self,
+        callback: AsyncCallback[[discord.Message], MaybeAwaitableT],
+    ):
+        self.callbacks.register('message_delete', callback)
+        return callback
+
+    async def on_message_delete(self, message: discord.Message):
+        await self.callbacks.execute_async('message_delete', message)
+
+    def bulk_message_delete_callback(
+        self,
+        callback: AsyncCallback[[list[discord.Message]], MaybeAwaitableT],
+    ):
+        self.callbacks.register('bulk_message_delete', callback)
+        return callback
+
+    async def on_bulk_message_delete(self, messages: list[discord.Message]):
+        await self.callbacks.execute_async('bulk_message_delete', messages)
+
+    def message_edit_callback(
+        self,
+        callback: AsyncCallback[[discord.Message, discord.Message], MaybeAwaitableT],
+    ):
+        self.callbacks.register('message_edit', callback)
+        return callback
+
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        await self.callbacks.execute_async('message_edit', before, after)
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
