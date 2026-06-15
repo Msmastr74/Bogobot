@@ -212,6 +212,16 @@ async def _delete_created_target(
         await sound.delete(reason=reason)
         return ModlogUndoResult(True, "Undo Complete", f"Deleted soundboard sound `{target_id}`.")
 
+    if kind == "integration":
+        integration = next(
+            (integration for integration in await guild.integrations() if integration.id == target_id),
+            None,
+        )
+        if integration is None:
+            raise ModlogUndoError("The created integration no longer exists.")
+        await integration.delete(reason=reason)
+        return ModlogUndoResult(True, "Undo Complete", f"Deleted integration `{target_id}`.")
+
     raise ModlogUndoError(f"`{action.kind}` is not implemented yet.")
 
 

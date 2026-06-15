@@ -51,6 +51,8 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
         "raid.use",
         "telemetry.use",
         "verification.use",
+        "modlog.view",
+        "modlog.view_sensitive"
     ),
     "admin": (
         "accounts.ban",
@@ -66,6 +68,7 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
         "system.loglevel",
         "telemetry",
         "verification",
+        "modlog"
     ),
 }
 

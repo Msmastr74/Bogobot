@@ -208,6 +208,7 @@ def _reverse_actions(action: str, target: ModlogEntity | None, changes: list[Mod
         "automod_rule",
         "channel",
         "emoji",
+        "integration",
         "role",
         "scheduled_event",
         "soundboard_sound",

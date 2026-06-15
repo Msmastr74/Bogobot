@@ -84,6 +84,14 @@ def different_sources(anchor: ModlogEvent, candidate: ModlogEvent) -> bool:
     return anchor.source != candidate.source
 
 
+def different_actions(anchor: ModlogEvent, candidate: ModlogEvent) -> bool:
+    return anchor.action != candidate.action
+
+
+def same_actor(anchor: ModlogEvent, candidate: ModlogEvent) -> bool:
+    return anchor.actor_id is not None and anchor.actor_id == candidate.actor_id
+
+
 def cross_source_target_and_channel(anchor: ModlogEvent, candidate: ModlogEvent) -> bool:
     return different_sources(anchor, candidate) and target_and_channel(anchor, candidate)
 
@@ -94,6 +102,10 @@ def cross_source_channel_only(anchor: ModlogEvent, candidate: ModlogEvent) -> bo
 
 def cross_source_same_target(anchor: ModlogEvent, candidate: ModlogEvent) -> bool:
     return different_sources(anchor, candidate) and same_target(anchor, candidate)
+
+
+def different_action_same_actor(anchor: ModlogEvent, candidate: ModlogEvent) -> bool:
+    return different_actions(anchor, candidate) and same_actor(anchor, candidate)
 
 
 def bulk_delete_limit(event: ModlogEvent) -> int | None:
@@ -164,6 +176,13 @@ RELATED_RULES = (
         candidate_actions=frozenset({"unban", "on_member_unban"}),
         window_seconds=DEFAULT_WINDOW_SECONDS,
         matches=cross_source_same_target,
+        max_related=one_related,
+    ),
+    RelatedRule(
+        actions=frozenset({"integration_create", "bot_add"}),
+        candidate_actions=frozenset({"integration_create", "bot_add"}),
+        window_seconds=DEFAULT_WINDOW_SECONDS,
+        matches=different_action_same_actor,
         max_related=one_related,
     ),
 )
