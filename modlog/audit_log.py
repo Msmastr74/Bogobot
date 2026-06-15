@@ -223,6 +223,16 @@ def _reverse_actions(action: str, target: ModlogEntity | None, changes: list[Mod
     target_id = target.id if target is not None else None
     by_key = _change_map(changes)
     reverse_actions: list[ModlogReverseAction] = []
+    supported_create_deletes = {
+        "automod_rule",
+        "channel",
+        "emoji",
+        "role",
+        "scheduled_event",
+        "soundboard_sound",
+        "sticker",
+        "thread",
+    }
 
     def add(kind: str, possible: bool, reason: str | None = None, **payload: Any) -> None:
         reverse_actions.append(ModlogReverseAction(
@@ -250,12 +260,20 @@ def _reverse_actions(action: str, target: ModlogEntity | None, changes: list[Mod
     elif action == "member_update":
         add("member.restore_fields", target_id is not None and bool(changes), target_id=target_id)
     elif action.endswith("_create"):
-        add(f"{action.removesuffix('_create')}.delete", target_id is not None, target_id=target_id)
+        kind = action.removesuffix("_create")
+        add(
+            f"{kind}.delete",
+            target_id is not None and kind in supported_create_deletes,
+            "created object undo is not implemented for this audit log action"
+            if kind not in supported_create_deletes else
+            None,
+            target_id=target_id,
+        )
     elif action.endswith("_delete"):
         add(
             f"{action.removesuffix('_delete')}.recreate",
-            target_id is not None and bool(changes),
-            "requires enough captured old fields to recreate",
+            False,
+            "recreating deleted objects requires richer snapshots",
             target_id=target_id,
         )
     elif action.endswith("_update"):
@@ -266,8 +284,8 @@ def _reverse_actions(action: str, target: ModlogEntity | None, changes: list[Mod
         }
         add(
             f"{action.removesuffix('_update')}.restore",
-            target_id is not None and bool(old_values),
-            "old values unavailable" if not old_values else None,
+            False,
+            "generic update restore is not implemented for this audit log action",
             target_id=target_id,
             old_values=old_values or None,
         )

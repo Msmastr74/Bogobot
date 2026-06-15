@@ -21,6 +21,7 @@ class ModlogEventQuery(BaseModel):
     after_id: int | None = None
     before_id: int | None = None
     limit: int | None = Field(default=100, ge=1)
+    offset: int = Field(default=0, ge=0)
     order: Order = "desc"
 
 
@@ -113,6 +114,7 @@ class ModlogDatabase:
         after_id: int | None = None,
         before_id: int | None = None,
         limit: int | None = 100,
+        offset: int = 0,
         order: Order = "desc",
     ) -> list[ModlogEvent]:
         query = ModlogEventQuery(
@@ -123,6 +125,7 @@ class ModlogDatabase:
             after_id=after_id,
             before_id=before_id,
             limit=limit,
+            offset=offset,
             order=order,
         )
         return list(self.iter_events(query))
@@ -154,6 +157,11 @@ class ModlogDatabase:
         if query.limit is not None:
             sql += " LIMIT ?"
             params.append(query.limit)
+        if query.offset:
+            if query.limit is None:
+                sql += " LIMIT -1"
+            sql += " OFFSET ?"
+            params.append(query.offset)
 
         with self.connection() as connection:
             rows = connection.execute(sql, params).fetchall()
