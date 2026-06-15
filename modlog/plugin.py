@@ -282,13 +282,13 @@ class ModlogView(discord.ui.LayoutView):
         if self.page > 0:
             self.page -= 1
         self.render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
 
     async def next_page(self, interaction: discord.Interaction) -> None:
         if self.has_next:
             self.page += 1
         self.render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
 
 
 async def action_autocomplete(
