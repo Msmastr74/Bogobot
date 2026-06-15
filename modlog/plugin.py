@@ -740,8 +740,8 @@ def format_event_details(
         lines.append("")
         lines.append("### Changes")
         for change in event.changes[:MAX_EVENT_LINES]:
-            old = discord.utils.escape_markdown(repr(change.old))
-            new = discord.utils.escape_markdown(repr(change.new))
+            old = repr(change.old)
+            new = repr(change.new)
             lines.append(f"`{change.key}`: `{old}` -> `{new}`")
         if len(event.changes) > MAX_EVENT_LINES:
             lines.append(f"-# {len(event.changes) - MAX_EVENT_LINES} more changes")
