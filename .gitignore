@@ -24,3 +24,4 @@ python-wasi-runtime/
 javascript-wasi/
 client_secrets.json
 token.json
+modlog.sqlite3

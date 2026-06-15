@@ -164,6 +164,7 @@ class BotCore(discord.Client):
         self.event(self.on_message)
         self.event(self.on_member_join)
         self.event(self.on_guild_join)
+        self.event(self.on_audit_log_entry_create)
         self.callbacks = CallbackRegistry(logger=self.logger.getChild("Callbacks"))
         self.milestones: 'MilestoneTracker | None' = None
 
@@ -319,6 +320,16 @@ class BotCore(discord.Client):
 
     async def on_guild_join(self, guild: discord.Guild):
         await self.callbacks.execute_async('guild_join', guild)
+
+    def audit_log_entry_callback(
+        self,
+        callback: AsyncCallback[[discord.AuditLogEntry], MaybeAwaitableT],
+    ):
+        self.callbacks.register('audit_log_entry', callback)
+        return callback
+
+    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry):
+        await self.callbacks.execute_async('audit_log_entry', entry)
 
     def message_callback(
         self,

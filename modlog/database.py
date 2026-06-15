@@ -1,0 +1,304 @@
+from contextlib import contextmanager
+from pathlib import Path
+import sqlite3
+from typing import Iterable, Iterator, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from modlog.audit_log import AuditEvent
+
+
+Order = Literal["asc", "desc"]
+
+
+class AuditEventQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    guild_id: int | None = None
+    action: str | None = None
+    actor_id: int | None = None
+    target_id: int | None = None
+    after_id: int | None = None
+    before_id: int | None = None
+    limit: int | None = Field(default=100, ge=1)
+    order: Order = "desc"
+
+
+class AuditLogDatabase:
+    """SQLite storage for self-contained modlog audit event documents."""
+
+    def __init__(self, path: str | Path = "modlog.sqlite3", *, initialize: bool = True) -> None:
+        self.path = Path(path)
+        if initialize:
+            self.initialize()
+
+    def connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    @contextmanager
+    def connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self.connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    def initialize(self) -> None:
+        if self.path.parent != Path("."):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self.connection() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    actor_id INTEGER,
+                    target_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    imported_at TEXT NOT NULL,
+                    event_json TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_id_id
+                ON audit_events(guild_id, id)
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_action_id
+                ON audit_events(guild_id, action, id)
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_actor_id
+                ON audit_events(guild_id, actor_id, id)
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_target_id
+                ON audit_events(guild_id, target_id, id)
+            """)
+
+    def write_event(self, event: AuditEvent, *, replace: bool = False) -> bool:
+        with self.connection() as connection:
+            return self._write_event(connection, event, replace=replace)
+
+    def write_events(self, events: Iterable[AuditEvent], *, replace: bool = False) -> int:
+        written = 0
+        with self.connection() as connection:
+            for event in events:
+                if self._write_event(connection, event, replace=replace):
+                    written += 1
+        return written
+
+    def read_event(self, event_id: int) -> AuditEvent | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT event_json FROM audit_events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+        return self._event_from_row(row)
+
+    def query_events(
+        self,
+        *,
+        guild_id: int | None = None,
+        action: str | None = None,
+        actor_id: int | None = None,
+        target_id: int | None = None,
+        after_id: int | None = None,
+        before_id: int | None = None,
+        limit: int | None = 100,
+        order: Order = "desc",
+    ) -> list[AuditEvent]:
+        query = AuditEventQuery(
+            guild_id=guild_id,
+            action=action,
+            actor_id=actor_id,
+            target_id=target_id,
+            after_id=after_id,
+            before_id=before_id,
+            limit=limit,
+            order=order,
+        )
+        return list(self.iter_events(query))
+
+    def query_event_ids(
+        self,
+        *,
+        guild_id: int | None = None,
+        action: str | None = None,
+        actor_id: int | None = None,
+        target_id: int | None = None,
+        after_id: int | None = None,
+        before_id: int | None = None,
+        limit: int | None = None,
+        order: Order = "desc",
+    ) -> set[int]:
+        query = AuditEventQuery(
+            guild_id=guild_id,
+            action=action,
+            actor_id=actor_id,
+            target_id=target_id,
+            after_id=after_id,
+            before_id=before_id,
+            limit=limit,
+            order=order,
+        )
+        where, params = self._where_clause(query)
+        sql = f"SELECT id FROM audit_events{where} ORDER BY id {'ASC' if order == 'asc' else 'DESC'}"
+        if query.limit is not None:
+            sql += " LIMIT ?"
+            params.append(query.limit)
+
+        with self.connection() as connection:
+            rows = connection.execute(sql, params).fetchall()
+
+        return {int(row["id"]) for row in rows}
+
+    def iter_events(self, query: AuditEventQuery | None = None) -> Iterator[AuditEvent]:
+        query = query or AuditEventQuery()
+        where, params = self._where_clause(query)
+        order = "ASC" if query.order == "asc" else "DESC"
+        sql = f"SELECT event_json FROM audit_events{where} ORDER BY id {order}"
+        if query.limit is not None:
+            sql += " LIMIT ?"
+            params.append(query.limit)
+
+        with self.connection() as connection:
+            rows = connection.execute(sql, params).fetchall()
+
+        for row in rows:
+            yield self._event_from_row(row)
+
+    def count_events(self, *, guild_id: int | None = None) -> int:
+        where = ""
+        params: list[int] = []
+        if guild_id is not None:
+            where = " WHERE guild_id = ?"
+            params.append(guild_id)
+
+        with self.connection() as connection:
+            value = connection.execute(
+                f"SELECT COUNT(*) FROM audit_events{where}",
+                params,
+            ).fetchone()[0]
+        return int(value)
+
+    def min_event_id(self, *, guild_id: int | None = None) -> int | None:
+        return self._event_id_bound("MIN", guild_id=guild_id)
+
+    def max_event_id(self, *, guild_id: int | None = None) -> int | None:
+        return self._event_id_bound("MAX", guild_id=guild_id)
+
+    def _write_event(
+        self,
+        connection: sqlite3.Connection,
+        event: AuditEvent,
+        *,
+        replace: bool,
+    ) -> bool:
+        values = (
+            event.id,
+            event.guild_id,
+            event.action,
+            event.actor_id,
+            event.target_id,
+            event.created_at.isoformat(),
+            event.imported_at.isoformat(),
+            event.to_json(),
+        )
+        if replace:
+            cursor = connection.execute("""
+                INSERT INTO audit_events (
+                    id,
+                    guild_id,
+                    action,
+                    actor_id,
+                    target_id,
+                    created_at,
+                    imported_at,
+                    event_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    guild_id = excluded.guild_id,
+                    action = excluded.action,
+                    actor_id = excluded.actor_id,
+                    target_id = excluded.target_id,
+                    created_at = excluded.created_at,
+                    imported_at = excluded.imported_at,
+                    event_json = excluded.event_json
+            """, values)
+        else:
+            cursor = connection.execute("""
+                INSERT OR IGNORE INTO audit_events (
+                    id,
+                    guild_id,
+                    action,
+                    actor_id,
+                    target_id,
+                    created_at,
+                    imported_at,
+                    event_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, values)
+        return cursor.rowcount > 0
+
+    def _where_clause(self, query: AuditEventQuery) -> tuple[str, list[int | str]]:
+        clauses: list[str] = []
+        params: list[int | str] = []
+
+        if query.guild_id is not None:
+            clauses.append("guild_id = ?")
+            params.append(query.guild_id)
+        if query.action is not None:
+            clauses.append("action = ?")
+            params.append(query.action)
+        if query.actor_id is not None:
+            clauses.append("actor_id = ?")
+            params.append(query.actor_id)
+        if query.target_id is not None:
+            clauses.append("target_id = ?")
+            params.append(query.target_id)
+        if query.after_id is not None:
+            clauses.append("id > ?")
+            params.append(query.after_id)
+        if query.before_id is not None:
+            clauses.append("id < ?")
+            params.append(query.before_id)
+
+        if not clauses:
+            return "", params
+        return " WHERE " + " AND ".join(clauses), params
+
+    def _event_id_bound(self, aggregate: Literal["MIN", "MAX"], *, guild_id: int | None) -> int | None:
+        where = ""
+        params: list[int] = []
+        if guild_id is not None:
+            where = " WHERE guild_id = ?"
+            params.append(guild_id)
+
+        with self.connection() as connection:
+            value = connection.execute(
+                f"SELECT {aggregate}(id) FROM audit_events{where}",
+                params,
+            ).fetchone()[0]
+
+        if value is None:
+            return None
+        return int(value)
+
+    def _event_from_row(self, row: sqlite3.Row) -> AuditEvent:
+        raw_json = row["event_json"]
+        if isinstance(raw_json, bytes):
+            raw_json = raw_json.decode()
+        if not isinstance(raw_json, str):
+            raw_json = str(raw_json)
+        return AuditEvent.model_validate_json(raw_json)
