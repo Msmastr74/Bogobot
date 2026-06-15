@@ -5,8 +5,8 @@ import discord
 from discord import app_commands
 
 from bogobot_core import BotCore
-from modlog.audit_log import AuditEvent, known_actions, normalize_entry, retrieve_and_scan
-from modlog.database import AuditLogDatabase
+from modlog.audit_log import ModlogEvent, known_actions, normalize_entry, retrieve_and_scan
+from modlog.database import ModlogDatabase
 
 
 MODLOG_CONFIG_KEY = "modlog"
@@ -58,14 +58,14 @@ def entity_text(entity) -> str:
     return f"{entity.type} `{entity.id}`"
 
 
-def format_event_line(event: AuditEvent) -> str:
+def format_event_line(event: ModlogEvent) -> str:
     return (
         f"`{event.id}` <t:{int(event.created_at.timestamp())}:R> "
         f"`{event.action}` {entity_text(event.actor)} -> {entity_text(event.target)}"
     )
 
 
-def format_event_details(event: AuditEvent) -> str:
+def format_event_details(event: ModlogEvent) -> str:
     lines = [
         f"ID: `{event.id}`",
         f"Action: `{event.action}`",
@@ -100,7 +100,7 @@ def format_event_details(event: AuditEvent) -> str:
 
 
 class ModlogEventsView(discord.ui.LayoutView):
-    def __init__(self, *, title: str, events: list[AuditEvent], footer: str | None = None) -> None:
+    def __init__(self, *, title: str, events: list[ModlogEvent], footer: str | None = None) -> None:
         super().__init__(timeout=None)
         container = discord.ui.Container(
             discord.ui.TextDisplay(f"## {title}"),
@@ -117,7 +117,7 @@ class ModlogEventsView(discord.ui.LayoutView):
 
 
 class ModlogEventView(discord.ui.LayoutView):
-    def __init__(self, event: AuditEvent) -> None:
+    def __init__(self, event: ModlogEvent) -> None:
         super().__init__(timeout=None)
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay("## Modlog Event"),
@@ -143,7 +143,7 @@ async def action_autocomplete(
 
 
 async def setup(bot: BotCore) -> None:
-    database = AuditLogDatabase(database_path(bot))
+    database = ModlogDatabase(database_path(bot))
     logger = bot.logger.getChild("Modlog")
     modlog = bot.setup.group("modlog", "Moderation log commands")
 

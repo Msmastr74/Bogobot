@@ -26,3 +26,4 @@ javascript-wasi/
 client_secrets.json
 token.json
 modlog.sqlite3
+modlog.sqlite3-*

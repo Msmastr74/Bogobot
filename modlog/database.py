@@ -5,13 +5,13 @@ from typing import Iterable, Iterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from modlog.audit_log import AuditEvent
+from modlog.audit_log import ModlogEvent
 
 
 Order = Literal["asc", "desc"]
 
 
-class AuditEventQuery(BaseModel):
+class ModlogEventQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     guild_id: int | None = None
@@ -24,8 +24,8 @@ class AuditEventQuery(BaseModel):
     order: Order = "desc"
 
 
-class AuditLogDatabase:
-    """SQLite storage for self-contained modlog audit event documents."""
+class ModlogDatabase:
+    """SQLite storage for self-contained modlog event documents."""
 
     def __init__(self, path: str | Path = "modlog.sqlite3", *, initialize: bool = True) -> None:
         self.path = Path(path)
@@ -53,39 +53,38 @@ class AuditLogDatabase:
         with self.connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("""
-                CREATE TABLE IF NOT EXISTS audit_events (
+                CREATE TABLE IF NOT EXISTS modlog_events (
                     id INTEGER PRIMARY KEY,
                     guild_id INTEGER NOT NULL,
                     action TEXT NOT NULL,
                     actor_id INTEGER,
                     target_id INTEGER,
-                    created_at TEXT NOT NULL,
                     imported_at TEXT NOT NULL,
                     event_json TEXT NOT NULL
                 )
             """)
             connection.execute("""
-                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_id_id
-                ON audit_events(guild_id, id)
+                CREATE INDEX IF NOT EXISTS idx_modlog_events_guild_id_id
+                ON modlog_events(guild_id, id)
             """)
             connection.execute("""
-                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_action_id
-                ON audit_events(guild_id, action, id)
+                CREATE INDEX IF NOT EXISTS idx_modlog_events_guild_action_id
+                ON modlog_events(guild_id, action, id)
             """)
             connection.execute("""
-                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_actor_id
-                ON audit_events(guild_id, actor_id, id)
+                CREATE INDEX IF NOT EXISTS idx_modlog_events_guild_actor_id
+                ON modlog_events(guild_id, actor_id, id)
             """)
             connection.execute("""
-                CREATE INDEX IF NOT EXISTS idx_audit_events_guild_target_id
-                ON audit_events(guild_id, target_id, id)
+                CREATE INDEX IF NOT EXISTS idx_modlog_events_guild_target_id
+                ON modlog_events(guild_id, target_id, id)
             """)
 
-    def write_event(self, event: AuditEvent, *, replace: bool = False) -> bool:
+    def write_event(self, event: ModlogEvent, *, replace: bool = False) -> bool:
         with self.connection() as connection:
             return self._write_event(connection, event, replace=replace)
 
-    def write_events(self, events: Iterable[AuditEvent], *, replace: bool = False) -> int:
+    def write_events(self, events: Iterable[ModlogEvent], *, replace: bool = False) -> int:
         written = 0
         with self.connection() as connection:
             for event in events:
@@ -93,10 +92,10 @@ class AuditLogDatabase:
                     written += 1
         return written
 
-    def read_event(self, event_id: int) -> AuditEvent | None:
+    def read_event(self, event_id: int) -> ModlogEvent | None:
         with self.connection() as connection:
             row = connection.execute(
-                "SELECT event_json FROM audit_events WHERE id = ?",
+                "SELECT event_json FROM modlog_events WHERE id = ?",
                 (event_id,),
             ).fetchone()
 
@@ -115,8 +114,8 @@ class AuditLogDatabase:
         before_id: int | None = None,
         limit: int | None = 100,
         order: Order = "desc",
-    ) -> list[AuditEvent]:
-        query = AuditEventQuery(
+    ) -> list[ModlogEvent]:
+        query = ModlogEventQuery(
             guild_id=guild_id,
             action=action,
             actor_id=actor_id,
@@ -140,7 +139,7 @@ class AuditLogDatabase:
         limit: int | None = None,
         order: Order = "desc",
     ) -> set[int]:
-        query = AuditEventQuery(
+        query = ModlogEventQuery(
             guild_id=guild_id,
             action=action,
             actor_id=actor_id,
@@ -151,7 +150,7 @@ class AuditLogDatabase:
             order=order,
         )
         where, params = self._where_clause(query)
-        sql = f"SELECT id FROM audit_events{where} ORDER BY id {'ASC' if order == 'asc' else 'DESC'}"
+        sql = f"SELECT id FROM modlog_events{where} ORDER BY id {'ASC' if order == 'asc' else 'DESC'}"
         if query.limit is not None:
             sql += " LIMIT ?"
             params.append(query.limit)
@@ -161,11 +160,11 @@ class AuditLogDatabase:
 
         return {int(row["id"]) for row in rows}
 
-    def iter_events(self, query: AuditEventQuery | None = None) -> Iterator[AuditEvent]:
-        query = query or AuditEventQuery()
+    def iter_events(self, query: ModlogEventQuery | None = None) -> Iterator[ModlogEvent]:
+        query = query or ModlogEventQuery()
         where, params = self._where_clause(query)
         order = "ASC" if query.order == "asc" else "DESC"
-        sql = f"SELECT event_json FROM audit_events{where} ORDER BY id {order}"
+        sql = f"SELECT event_json FROM modlog_events{where} ORDER BY id {order}"
         if query.limit is not None:
             sql += " LIMIT ?"
             params.append(query.limit)
@@ -185,7 +184,7 @@ class AuditLogDatabase:
 
         with self.connection() as connection:
             value = connection.execute(
-                f"SELECT COUNT(*) FROM audit_events{where}",
+                f"SELECT COUNT(*) FROM modlog_events{where}",
                 params,
             ).fetchone()[0]
         return int(value)
@@ -199,7 +198,7 @@ class AuditLogDatabase:
     def _write_event(
         self,
         connection: sqlite3.Connection,
-        event: AuditEvent,
+        event: ModlogEvent,
         *,
         replace: bool,
     ) -> bool:
@@ -209,49 +208,45 @@ class AuditLogDatabase:
             event.action,
             event.actor_id,
             event.target_id,
-            event.created_at.isoformat(),
             event.imported_at.isoformat(),
             event.to_json(),
         )
         if replace:
             cursor = connection.execute("""
-                INSERT INTO audit_events (
+                INSERT INTO modlog_events (
                     id,
                     guild_id,
                     action,
                     actor_id,
                     target_id,
-                    created_at,
                     imported_at,
                     event_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     guild_id = excluded.guild_id,
                     action = excluded.action,
                     actor_id = excluded.actor_id,
                     target_id = excluded.target_id,
-                    created_at = excluded.created_at,
                     imported_at = excluded.imported_at,
                     event_json = excluded.event_json
             """, values)
         else:
             cursor = connection.execute("""
-                INSERT OR IGNORE INTO audit_events (
+                INSERT OR IGNORE INTO modlog_events (
                     id,
                     guild_id,
                     action,
                     actor_id,
                     target_id,
-                    created_at,
                     imported_at,
                     event_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, values)
         return cursor.rowcount > 0
 
-    def _where_clause(self, query: AuditEventQuery) -> tuple[str, list[int | str]]:
+    def _where_clause(self, query: ModlogEventQuery) -> tuple[str, list[int | str]]:
         clauses: list[str] = []
         params: list[int | str] = []
 
@@ -287,7 +282,7 @@ class AuditLogDatabase:
 
         with self.connection() as connection:
             value = connection.execute(
-                f"SELECT {aggregate}(id) FROM audit_events{where}",
+                f"SELECT {aggregate}(id) FROM modlog_events{where}",
                 params,
             ).fetchone()[0]
 
@@ -295,10 +290,10 @@ class AuditLogDatabase:
             return None
         return int(value)
 
-    def _event_from_row(self, row: sqlite3.Row) -> AuditEvent:
+    def _event_from_row(self, row: sqlite3.Row) -> ModlogEvent:
         raw_json = row["event_json"]
         if isinstance(raw_json, bytes):
             raw_json = raw_json.decode()
         if not isinstance(raw_json, str):
             raw_json = str(raw_json)
-        return AuditEvent.model_validate_json(raw_json)
+        return ModlogEvent.model_validate_json(raw_json)
