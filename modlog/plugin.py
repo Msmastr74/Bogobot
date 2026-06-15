@@ -1,4 +1,5 @@
 from datetime import timedelta
+import json
 from pathlib import Path
 
 import discord
@@ -16,6 +17,7 @@ from modlog.lifecycle import (
     message_event,
 )
 from modlog.undo import ModlogUndoResult, undo_event
+from utils.discord import chunk_text, count_characters
 
 
 MODLOG_CONFIG_KEY = "modlog"
@@ -27,6 +29,14 @@ MODLOG_UNDO_CAPABILITY = "modlog.undo"
 AUDIT_LOG_RESCAN_OVERLAP = timedelta(minutes=10)
 EVENT_LINK_WINDOW_SECONDS = 600
 DETAIL_VALUE_LIMIT = 1000
+MESSAGE_CONTENT_PREVIEW_LIMIT = 2800
+RAW_CONTENT_CHUNK_LIMIT = 1900
+RELATED_EVENT_DETAIL_LIMIT = 1800
+GATEWAY_ACTIONS = (
+    "on_message_delete",
+    "on_bulk_message_delete",
+    "on_message_edit",
+)
 EVENT_MATCH_ACTIONS: dict[str, tuple[str, ...]] = {
     "ban": ("ban", "member_remove"),
     "unban": ("unban",),
@@ -35,9 +45,12 @@ EVENT_MATCH_ACTIONS: dict[str, tuple[str, ...]] = {
     "member_remove": ("member_remove", "kick", "ban"),
     "member_update": ("member_update",),
     "member_role_update": ("member_role_update",),
-    "message_delete": ("message_delete", "message_bulk_delete"),
-    "message_bulk_delete": ("message_delete", "message_bulk_delete"),
-    "message_update": ("message_update",),
+    "message_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
+    "message_bulk_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
+    "message_update": ("message_update", "on_message_edit"),
+    "on_message_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
+    "on_bulk_message_delete": ("message_delete", "message_bulk_delete", "on_message_delete", "on_bulk_message_delete"),
+    "on_message_edit": ("message_update", "on_message_edit"),
 }
 
 
@@ -60,8 +73,12 @@ def audit_action_from_name(name: str | None) -> discord.AuditLogAction | None:
     return None
 
 
+def is_known_action_name(name: str) -> bool:
+    return name in GATEWAY_ACTIONS or audit_action_from_name(name) is not None
+
+
 def action_names() -> tuple[str, ...]:
-    return tuple(action.name for action in known_actions())
+    return (*GATEWAY_ACTIONS, *(action.name for action in known_actions()))
 
 
 async def can_scan_audit_logs(bot: BotCore, guild: discord.Guild) -> bool:
@@ -111,6 +128,193 @@ def _short_value(value: object, *, limit: int = DETAIL_VALUE_LIMIT) -> str:
     return discord.utils.escape_markdown(text[:limit]) + "... truncated"
 
 
+def _truncate_display_text(value: str, *, limit: int) -> str:
+    if count_characters(value) <= limit:
+        return value
+    suffix = "\n... truncated"
+    budget = max(0, limit - count_characters(suffix))
+    current: list[str] = []
+    current_length = 0
+    for character in value:
+        character_length = count_characters(character)
+        if current_length + character_length > budget:
+            break
+        current.append(character)
+        current_length += character_length
+    return "".join(current) + suffix
+
+
+def _component_text(component: object) -> list[str]:
+    if not isinstance(component, dict):
+        return []
+    text: list[str] = []
+    content = component.get("content")
+    if isinstance(content, str) and content:
+        text.append(content)
+    label = component.get("label")
+    if isinstance(label, str) and label:
+        text.append(label)
+    placeholder = component.get("placeholder")
+    if isinstance(placeholder, str) and placeholder:
+        text.append(placeholder)
+    for child in component.get("components", []):
+        text.extend(_component_text(child))
+    for item in component.get("items", []):
+        text.extend(_component_text(item))
+    return text
+
+
+def _message_payload(event: ModlogEvent) -> dict[str, object] | None:
+    message = event.raw.get("message")
+    return message if isinstance(message, dict) else None
+
+
+def _message_text_parts(message: dict[str, object]) -> list[str]:
+    parts: list[str] = []
+    for key, title in (("content", "Content"), ("clean_content", "Clean Content")):
+        value = message.get(key)
+        if isinstance(value, str) and value:
+            parts.append(f"### {title}\n{value}")
+
+    embeds = message.get("embeds")
+    if isinstance(embeds, list):
+        for index, embed in enumerate(embeds, start=1):
+            if not isinstance(embed, dict):
+                continue
+            embed_parts: list[str] = []
+            for key in ("title", "description", "url"):
+                value = embed.get(key)
+                if isinstance(value, str) and value:
+                    embed_parts.append(f"{key}: {value}")
+            fields = embed.get("fields")
+            if isinstance(fields, list):
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    name = field.get("name")
+                    value = field.get("value")
+                    if isinstance(name, str) and isinstance(value, str):
+                        embed_parts.append(f"{name}: {value}")
+            if embed_parts:
+                parts.append(f"### Embed {index}\n" + "\n".join(embed_parts))
+
+    components = message.get("components")
+    if isinstance(components, list):
+        component_text = [
+            text
+            for component in components
+            for text in _component_text(component)
+        ]
+        if component_text:
+            parts.append("### Components\n" + "\n".join(component_text))
+    return parts
+
+
+def _message_summary(message: dict[str, object]) -> str:
+    lines = [
+        f"Message ID: `{message.get('id')}`",
+        f"Channel: <#{message.get('channel_id')}> (`{message.get('channel_id')}`)",
+    ]
+    for key, label in (
+        ("attachments", "Attachments"),
+        ("embeds", "Embeds"),
+        ("components", "Components"),
+        ("stickers", "Stickers"),
+        ("reactions", "Reactions"),
+    ):
+        value = message.get(key)
+        if isinstance(value, list) and value:
+            lines.append(f"{label}: `{len(value)}`")
+    if message.get("reference"):
+        lines.append("Reference: captured")
+    if message.get("interaction_metadata"):
+        lines.append("Interaction metadata: captured")
+    return "\n".join(lines)
+
+
+class ModlogMessageContentView(discord.ui.LayoutView):
+    def __init__(self, event: ModlogEvent) -> None:
+        super().__init__(timeout=None)
+        message = _message_payload(event)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay("## Message Content"),
+            discord.ui.Separator(),
+        )
+        if message is None:
+            container.add_item(discord.ui.TextDisplay("No captured message payload."))
+            self.add_item(container)
+            return
+
+        container.add_item(discord.ui.TextDisplay(_message_summary(message)))
+        text = "\n\n".join(_message_text_parts(message))
+        if text:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(_truncate_display_text(text, limit=MESSAGE_CONTENT_PREVIEW_LIMIT)))
+
+        attachments = message.get("attachments")
+        if isinstance(attachments, list) and attachments:
+            attachment_lines = []
+            for attachment in attachments[:MAX_EVENT_LINES]:
+                if isinstance(attachment, dict):
+                    attachment_lines.append(
+                        f"`{attachment.get('filename')}` "
+                        f"({attachment.get('content_type') or 'unknown'}, {attachment.get('size')} bytes)"
+                    )
+            if attachment_lines:
+                container.add_item(discord.ui.Separator())
+                container.add_item(discord.ui.TextDisplay("### Attachments\n" + "\n".join(attachment_lines)))
+
+        self.add_item(container)
+
+
+class ModlogMessageContentButton(discord.ui.Button["ModlogEventView"]):
+    def __init__(self) -> None:
+        super().__init__(label="View Content", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if view is None:
+            await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            view=ModlogMessageContentView(view.event),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class ModlogRawContentButton(discord.ui.Button["ModlogEventView"]):
+    def __init__(self) -> None:
+        super().__init__(label="View Raw Content", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if view is None:
+            await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
+            return
+        message = _message_payload(view.event)
+        if message is None:
+            await interaction.response.send_message("No captured message payload.", ephemeral=True)
+            return
+
+        raw = json.dumps(message, indent=2, ensure_ascii=False, sort_keys=True)
+        chunks = chunk_text(raw, RAW_CONTENT_CHUNK_LIMIT)
+        if not chunks:
+            chunks = ["{}"]
+
+        await interaction.response.send_message(
+            f"```json\n{chunks[0]}\n```",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        for chunk in chunks[1:]:
+            await interaction.followup.send(
+                f"```json\n{chunk}\n```",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+
 def _format_gateway_capture(event: ModlogEvent) -> list[str]:
     lines: list[str] = []
     message = event.raw.get("message")
@@ -119,12 +323,10 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
         lines.append("### Captured Message")
         lines.append(f"Message ID: `{message.get('id')}`")
         lines.append(f"Channel: <#{message.get('channel_id')}> (`{message.get('channel_id')}`)")
-        content = message.get("content")
-        if content:
-            lines.append(f"Content: {_short_value(content)}")
-        attachments = message.get("attachments")
-        if isinstance(attachments, list) and attachments:
-            lines.append(f"Attachments: `{len(attachments)}`")
+        text = "\n\n".join(_message_text_parts(message))
+        if text:
+            lines.append(f"Text: {_short_value(_truncate_display_text(text, limit=DETAIL_VALUE_LIMIT))}")
+        lines.append(_message_summary(message))
 
     before_message = event.raw.get("before_message")
     if isinstance(before_message, dict) and before_message.get("content") != (message or {}).get("content"):
@@ -150,7 +352,14 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
     return lines
 
 
-def format_event_details(event: ModlogEvent) -> str:
+def _format_related_ids(event: ModlogEvent) -> str:
+    related = ", ".join(f"`{event_id}`" for event_id in event.related_event_ids[:MAX_EVENT_LINES])
+    if len(event.related_event_ids) > MAX_EVENT_LINES:
+        related += f"\n-# {len(event.related_event_ids) - MAX_EVENT_LINES} more related events"
+    return related
+
+
+def format_event_details(event: ModlogEvent, *, include_related: bool = True) -> str:
     lines = [
         f"ID: `{event.id}`",
         f"Action: `{event.action}`",
@@ -160,8 +369,8 @@ def format_event_details(event: ModlogEvent) -> str:
         f"Actor: {entity_text(event.actor)}",
         f"Target: {entity_text(event.target)}",
     ]
-    if event.related_event_ids:
-        lines.append("Related: " + ", ".join(f"`{event_id}`" for event_id in event.related_event_ids[:MAX_EVENT_LINES]))
+    if include_related and event.related_event_ids:
+        lines.append("Related: " + _format_related_ids(event))
     if event.reason:
         lines.append(f"Reason: {discord.utils.escape_markdown(event.reason)}")
 
@@ -235,15 +444,80 @@ class ModlogUndoButton(discord.ui.Button["ModlogEventView"]):
         )
 
 
+class ModlogRelatedEventsView(discord.ui.LayoutView):
+    def __init__(self, events: list[ModlogEvent]) -> None:
+        super().__init__(timeout=None)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay("## Related Events"),
+            discord.ui.Separator(),
+        )
+        if not events:
+            container.add_item(discord.ui.TextDisplay("No related events found."))
+            self.add_item(container)
+            return
+
+        for index, event in enumerate(events[:MAX_EVENT_LINES]):
+            if index:
+                container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(_truncate_display_text(
+                format_event_details(event, include_related=False),
+                limit=RELATED_EVENT_DETAIL_LIMIT,
+            )))
+
+        if len(events) > MAX_EVENT_LINES:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(f"-# {len(events) - MAX_EVENT_LINES} more related events"))
+        self.add_item(container)
+
+
+class ModlogRelatedButton(discord.ui.Button["ModlogEventView"]):
+    def __init__(self) -> None:
+        super().__init__(label="View Related", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if view is None:
+            await interaction.response.send_message(
+                "Related events are not available right now.",
+                ephemeral=True,
+            )
+            return
+
+        events = [
+            event
+            for event_id in view.event.related_event_ids
+            if (event := view.database.read_event(event_id)) is not None
+        ]
+        events.sort(key=lambda event: event.id, reverse=True)
+        await interaction.response.send_message(
+            view=ModlogRelatedEventsView(events),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class ModlogEventView(discord.ui.LayoutView):
-    def __init__(self, event: ModlogEvent) -> None:
+    def __init__(self, event: ModlogEvent, *, database: ModlogDatabase) -> None:
         super().__init__(timeout=None)
         self.event = event
+        self.database = database
         container = discord.ui.Container(
             discord.ui.TextDisplay("## Modlog Event"),
             discord.ui.Separator(),
-            discord.ui.TextDisplay(format_event_details(event)),
         )
+        if event.related_event_ids:
+            container.add_item(discord.ui.Section(
+                discord.ui.TextDisplay("Related: " + _format_related_ids(event)),
+                accessory=ModlogRelatedButton(),
+            ))
+            container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(format_event_details(event, include_related=False)))
+        if _message_payload(event) is not None:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.ActionRow(
+                ModlogMessageContentButton(),
+                ModlogRawContentButton(),
+            ))
         if any(reverse.possible for reverse in event.reverse_actions):
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.ActionRow(ModlogUndoButton()))
@@ -279,7 +553,7 @@ class ModlogEventButton(discord.ui.Button["ModlogView"]):
             return
 
         await interaction.response.send_message(
-            view=ModlogEventView(event),
+            view=ModlogEventView(event, database=view.database),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
         )
@@ -450,14 +724,14 @@ async def setup(bot: BotCore) -> None:
 
     @bot.message_delete_callback
     async def record_message_delete(message: discord.Message) -> None:
-        event = message_event(action="message_delete", message=message)
+        event = message_event(action="on_message_delete", message=message)
         if event is not None:
             record_event(event)
 
     @bot.bulk_message_delete_callback
     async def record_bulk_message_delete(messages: list[discord.Message]) -> None:
         for message in messages:
-            event = message_event(action="message_bulk_delete", message=message, bulk=True)
+            event = message_event(action="on_bulk_message_delete", message=message, bulk=True)
             if event is not None:
                 record_event(event)
 
@@ -465,7 +739,7 @@ async def setup(bot: BotCore) -> None:
     async def record_message_edit(before: discord.Message, after: discord.Message) -> None:
         if before.content == after.content and before.attachments == after.attachments and before.embeds == after.embeds:
             return
-        event = message_event(action="message_update", message=after, before=before)
+        event = message_event(action="on_message_edit", message=after, before=before)
         if event is not None:
             record_event(event)
 
@@ -512,7 +786,7 @@ async def setup(bot: BotCore) -> None:
             await bot.discord.send("Modlog can only run in a server.", response=True, ephemeral=True)
             return
 
-        if action is not None and audit_action_from_name(action) is None:
+        if action is not None and not is_known_action_name(action):
             await bot.discord.send(f"Unknown audit action `{discord.utils.escape_markdown(action)}`.", response=True, ephemeral=True)
             return
 

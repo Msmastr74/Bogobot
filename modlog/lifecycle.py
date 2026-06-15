@@ -80,6 +80,53 @@ def attachment_snapshot(attachment: discord.Attachment) -> dict[str, Any]:
     }
 
 
+def component_snapshot(component: discord.Component) -> dict[str, Any]:
+    try:
+        raw = component.to_dict()
+    except Exception:
+        return {"type": type(component).__name__, "repr": repr(component)}
+    if isinstance(raw, dict):
+        return {str(key): value for key, value in raw.items()}
+    return {"type": type(component).__name__, "repr": repr(component)}
+
+
+def sticker_snapshot(sticker: discord.StickerItem) -> dict[str, Any]:
+    return {
+        "id": sticker.id,
+        "name": sticker.name,
+        "format": str(sticker.format),
+        "url": sticker.url,
+    }
+
+
+def reaction_snapshot(reaction: discord.Reaction) -> dict[str, Any]:
+    return {
+        "emoji": str(reaction.emoji),
+        "count": reaction.count,
+        "me": reaction.me,
+    }
+
+
+def message_reference_snapshot(reference: discord.MessageReference | None) -> dict[str, Any] | None:
+    if reference is None:
+        return None
+    try:
+        raw = reference.to_dict()
+    except Exception:
+        return {
+            "message_id": reference.message_id,
+            "channel_id": reference.channel_id,
+            "guild_id": reference.guild_id,
+        }
+    if isinstance(raw, dict):
+        return {str(key): value for key, value in raw.items()}
+    return {
+        "message_id": reference.message_id,
+        "channel_id": reference.channel_id,
+        "guild_id": reference.guild_id,
+    }
+
+
 def message_snapshot(message: discord.Message) -> dict[str, Any]:
     return {
         "id": message.id,
@@ -96,6 +143,11 @@ def message_snapshot(message: discord.Message) -> dict[str, Any]:
         "jump_url": message.jump_url,
         "attachments": [attachment_snapshot(attachment) for attachment in message.attachments],
         "embeds": [embed.to_dict() for embed in message.embeds],
+        "components": [component_snapshot(component) for component in message.components],
+        "stickers": [sticker_snapshot(sticker) for sticker in message.stickers],
+        "reactions": [reaction_snapshot(reaction) for reaction in message.reactions],
+        "reference": message_reference_snapshot(message.reference),
+        "interaction_metadata": repr(message.interaction_metadata) if message.interaction_metadata is not None else None,
         "mentions": [user.id for user in message.mentions],
         "role_mentions": [role.id for role in message.role_mentions],
     }
@@ -132,8 +184,7 @@ def message_event(
         source="discord_gateway",
         action=action,
         imported_at=datetime.now(timezone.utc),
-        actor=user_entity(message.author),
-        target=user_entity(message.author),
+        target=None if bulk else user_entity(message.author),
         changes=changes,
         raw={
             "message": message_snapshot(message),
