@@ -38,8 +38,15 @@ def action_names() -> tuple[str, ...]:
     return tuple(action.name for action in known_actions())
 
 
-def can_scan_audit_logs(guild: discord.Guild) -> bool:
+async def can_scan_audit_logs(bot: BotCore, guild: discord.Guild) -> bool:
     bot_member = guild.me
+    if bot_member is None and bot.user is not None:
+        bot_member = guild.get_member(bot.user.id)
+    if bot_member is None and bot.user is not None:
+        try:
+            bot_member = await guild.fetch_member(bot.user.id)
+        except discord.HTTPException:
+            bot_member = None
     return bot_member is not None and bot_member.guild_permissions.view_audit_log
 
 
@@ -143,7 +150,7 @@ async def setup(bot: BotCore) -> None:
     @bot.connect_callback
     async def scan_since_last_connect() -> None:
         for guild in bot.guilds:
-            if not can_scan_audit_logs(guild):
+            if not await can_scan_audit_logs(bot, guild):
                 logger.debug("Skipping audit log scan for guild %s: missing View Audit Log", guild.id)
                 continue
 
@@ -158,6 +165,9 @@ async def setup(bot: BotCore) -> None:
                 )
             except discord.HTTPException:
                 logger.exception("Failed scanning audit logs for guild %s", guild.id)
+                continue
+            except Exception:
+                logger.exception("Unexpected error scanning audit logs for guild %s", guild.id)
                 continue
 
             written = database.write_events(scan.events)

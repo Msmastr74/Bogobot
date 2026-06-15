@@ -10,7 +10,7 @@ class CallbackRegistry:
         self._callbacks: dict[str, list[Callable]] = {}
         def _log_exc(text: str, exc: Exception):
             if logger:
-                logger.warning(text, exc_info=True)
+                logger.warning(text, exc_info=exc)
             else:
                 print(f"{text}: {exc}")
         self._log_exc = _log_exc
