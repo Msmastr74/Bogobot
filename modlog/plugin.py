@@ -167,8 +167,8 @@ def _component_text(component: object) -> list[str]:
     return text
 
 
-def _message_payload(event: ModlogEvent) -> dict[str, object] | None:
-    message = event.raw.get("message")
+def _message_payload(event: ModlogEvent, key: str = "message") -> dict[str, object] | None:
+    message = event.raw.get(key)
     return message if isinstance(message, dict) else None
 
 
@@ -249,6 +249,13 @@ def _message_plain_text_parts(message: dict[str, object]) -> list[str]:
 
 def _message_plain_text(message: dict[str, object]) -> str:
     return "\n".join(_message_plain_text_parts(message))
+
+
+def _format_message_content_preview(message: dict[str, object]) -> str:
+    text = _message_plain_text(message)
+    if not text:
+        return "Content: [none]"
+    return f"Content: {_short_value(_truncate_display_text(text, limit=MESSAGE_CONTENT_INLINE_LIMIT))}"
 
 
 def _recreate_message_embeds(message: dict[str, object]) -> list[discord.Embed]:
@@ -573,15 +580,16 @@ class ModlogMessageContentView(discord.ui.LayoutView):
 
 
 class ModlogMessageContentButton(discord.ui.Button["ModlogEventView"]):
-    def __init__(self) -> None:
+    def __init__(self, message_key: str = "message") -> None:
         super().__init__(label="View Content", style=discord.ButtonStyle.secondary)
+        self.message_key = message_key
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
             return
-        message = _message_payload(view.event)
+        message = _message_payload(view.event, self.message_key)
         if message is None:
             await interaction.response.send_message("No captured message payload.", ephemeral=True)
             return
@@ -631,15 +639,16 @@ class ModlogMessageContentButton(discord.ui.Button["ModlogEventView"]):
 
 
 class ModlogRawContentButton(discord.ui.Button["ModlogEventView"]):
-    def __init__(self) -> None:
+    def __init__(self, message_key: str = "message") -> None:
         super().__init__(label="View Raw Content", style=discord.ButtonStyle.secondary)
+        self.message_key = message_key
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
             return
-        message = _message_payload(view.event)
+        message = _message_payload(view.event, self.message_key)
         if message is None:
             await interaction.response.send_message("No captured message payload.", ephemeral=True)
             return
@@ -670,16 +679,8 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
         lines.append("### Captured Message")
         lines.append(f"Message ID: `{message.get('id')}`")
         lines.append(f"Channel: <#{message.get('channel_id')}> (`{message.get('channel_id')}`)")
-        text = _message_plain_text(message)
-        if text:
-            lines.append(f"Content: {_short_value(_truncate_display_text(text, limit=MESSAGE_CONTENT_INLINE_LIMIT))}")
+        lines.append(_format_message_content_preview(message))
         lines.append(_message_summary(message))
-
-    before_message = event.raw.get("before_message")
-    if isinstance(before_message, dict) and before_message.get("content") != (message or {}).get("content"):
-        lines.append("")
-        lines.append("### Previous Message")
-        lines.append(f"Content: {_short_value(before_message.get('content'))}")
 
     member = event.raw.get("member")
     if isinstance(member, dict):
@@ -706,7 +707,12 @@ def _format_related_ids(event: ModlogEvent) -> str:
     return related
 
 
-def format_event_details(event: ModlogEvent, *, include_related: bool = True) -> str:
+def format_event_details(
+    event: ModlogEvent,
+    *,
+    include_related: bool = True,
+    include_gateway_capture: bool = True,
+) -> str:
     lines = [
         f"ID: `{event.id}`",
         f"Action: `{event.action}`",
@@ -721,7 +727,8 @@ def format_event_details(event: ModlogEvent, *, include_related: bool = True) ->
     if event.reason:
         lines.append(f"Reason: {discord.utils.escape_markdown(event.reason)}")
 
-    lines.extend(_format_gateway_capture(event))
+    if include_gateway_capture:
+        lines.extend(_format_gateway_capture(event))
 
     if event.changes:
         lines.append("")
@@ -843,6 +850,23 @@ class ModlogRelatedButton(discord.ui.Button["ModlogEventView"]):
         )
 
 
+def _add_message_snapshot_section(
+    container: discord.ui.Container,
+    *,
+    title: str,
+    message: dict[str, object],
+    message_key: str,
+) -> None:
+    container.add_item(discord.ui.TextDisplay(f"### {title}"))
+    container.add_item(discord.ui.Separator())
+    container.add_item(discord.ui.TextDisplay(_format_message_content_preview(message)))
+    container.add_item(discord.ui.Separator())
+    container.add_item(discord.ui.ActionRow(
+        ModlogMessageContentButton(message_key),
+        ModlogRawContentButton(message_key),
+    ))
+
+
 class ModlogEventView(discord.ui.LayoutView):
     def __init__(self, event: ModlogEvent, *, database: ModlogDatabase) -> None:
         super().__init__(timeout=None)
@@ -858,13 +882,33 @@ class ModlogEventView(discord.ui.LayoutView):
                 accessory=ModlogRelatedButton(),
             ))
             container.add_item(discord.ui.Separator())
-        container.add_item(discord.ui.TextDisplay(format_event_details(event, include_related=False)))
-        if _message_payload(event) is not None:
+        before_message = _message_payload(event, "before_message")
+        message = _message_payload(event)
+        container.add_item(discord.ui.TextDisplay(
+            format_event_details(
+                event,
+                include_related=False,
+                include_gateway_capture=before_message is None or message is None,
+            )
+        ))
+        if before_message is not None and message is not None:
             container.add_item(discord.ui.Separator())
-            container.add_item(discord.ui.ActionRow(
-                ModlogMessageContentButton(),
-                ModlogRawContentButton(),
-            ))
+            _add_message_snapshot_section(
+                container,
+                title="From",
+                message=before_message,
+                message_key="before_message",
+            )
+            container.add_item(discord.ui.Separator())
+            _add_message_snapshot_section(
+                container,
+                title="To",
+                message=message,
+                message_key="message",
+            )
+        elif message is not None:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.ActionRow(ModlogMessageContentButton(), ModlogRawContentButton()))
         if any(reverse.possible for reverse in event.reverse_actions):
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.ActionRow(ModlogUndoButton()))
