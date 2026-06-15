@@ -18,7 +18,7 @@ from modlog.lifecycle import (
     message_event,
 )
 from modlog.related import RelatedGroup, RelatedResolver
-from modlog.undo import ModlogUndoResult, undo_event
+from modlog.undo import ModlogReverseAction, ModlogUndoResult, reverse_actions_for_event, undo_event
 from utils.discord import chunk_text, count_characters
 
 
@@ -718,6 +718,7 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
 def format_event_details(
     event: ModlogEvent,
     *,
+    reverse_actions: Iterable[ModlogReverseAction] = (),
     include_gateway_capture: bool = True,
 ) -> str:
     lines = [
@@ -745,10 +746,11 @@ def format_event_details(
         if len(event.changes) > MAX_EVENT_LINES:
             lines.append(f"-# {len(event.changes) - MAX_EVENT_LINES} more changes")
 
-    if event.reverse_actions:
+    reverse_action_list = list(reverse_actions)
+    if reverse_action_list:
         lines.append("")
         lines.append("### Reverse Actions")
-        for reverse in event.reverse_actions:
+        for reverse in reverse_action_list:
             state = "possible" if reverse.possible else "not possible"
             reason = f": {discord.utils.escape_markdown(reverse.reason)}" if reverse.reason else ""
             lines.append(f"`{reverse.kind}` - {state}{reason}")
@@ -826,11 +828,15 @@ class ModlogGroupDetailsButton(discord.ui.Button["ModlogView"]):
         if not events:
             await interaction.response.send_message("No events found for this group.", ephemeral=True)
             return
+        if interaction.guild is None:
+            await interaction.response.send_message("Modlog details can only be shown in a server.", ephemeral=True)
+            return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         for event in events:
+            reverse_actions = await reverse_actions_for_event(interaction.guild, event)
             await interaction.followup.send(
-                view=ModlogEventView(event, database=view.database),
+                view=ModlogEventView(event, database=view.database, reverse_actions=reverse_actions),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -854,10 +860,17 @@ def _add_message_snapshot_section(
 
 
 class ModlogEventView(discord.ui.LayoutView):
-    def __init__(self, event: ModlogEvent, *, database: ModlogDatabase) -> None:
+    def __init__(
+        self,
+        event: ModlogEvent,
+        *,
+        database: ModlogDatabase,
+        reverse_actions: Iterable[ModlogReverseAction] = (),
+    ) -> None:
         super().__init__(timeout=None)
         self.event = event
         self.database = database
+        self.reverse_actions = tuple(reverse_actions)
         container = discord.ui.Container(
             discord.ui.TextDisplay("## Modlog Event"),
             discord.ui.Separator(),
@@ -867,6 +880,7 @@ class ModlogEventView(discord.ui.LayoutView):
         container.add_item(discord.ui.TextDisplay(
             format_event_details(
                 event,
+                reverse_actions=self.reverse_actions,
                 include_gateway_capture=before_message is None or message is None,
             )
         ))
@@ -888,7 +902,7 @@ class ModlogEventView(discord.ui.LayoutView):
         elif message is not None:
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.ActionRow(ModlogMessageContentButton(), ModlogRawContentButton()))
-        if any(reverse.possible for reverse in event.reverse_actions):
+        if any(reverse.possible for reverse in self.reverse_actions):
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.ActionRow(ModlogUndoButton()))
         self.add_item(container)
@@ -921,9 +935,17 @@ class ModlogEventButton(discord.ui.Button["ModlogView"]):
                 ephemeral=True,
             )
             return
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Modlog details can only be shown in a server.",
+                ephemeral=True,
+            )
+            return
 
-        await interaction.response.send_message(
-            view=ModlogEventView(event, database=view.database),
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        reverse_actions = await reverse_actions_for_event(interaction.guild, event)
+        await interaction.followup.send(
+            view=ModlogEventView(event, database=view.database, reverse_actions=reverse_actions),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
         )

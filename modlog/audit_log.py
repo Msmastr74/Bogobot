@@ -24,15 +24,6 @@ class ModlogChange(BaseModel):
     has_new: bool = False
 
 
-class ModlogReverseAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: str
-    possible: bool
-    reason: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 class ModlogEvent(BaseModel):
     """Self-contained moderation log event document.
 
@@ -55,7 +46,6 @@ class ModlogEvent(BaseModel):
     reason: str | None = None
     extra: Any = None
     changes: list[ModlogChange] = Field(default_factory=list)
-    reverse_actions: list[ModlogReverseAction] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -196,97 +186,6 @@ def _changes(entry: discord.AuditLogEntry) -> list[ModlogChange]:
     ]
 
 
-def _change_map(changes: Iterable[ModlogChange]) -> dict[str, ModlogChange]:
-    return {change.key: change for change in changes}
-
-
-def _reverse_actions(action: str, target: ModlogEntity | None, changes: list[ModlogChange]) -> list[ModlogReverseAction]:
-    target_id = target.id if target is not None else None
-    by_key = _change_map(changes)
-    reverse_actions: list[ModlogReverseAction] = []
-    supported_create_deletes = {
-        "automod_rule",
-        "channel",
-        "emoji",
-        "integration",
-        "role",
-        "scheduled_event",
-        "soundboard_sound",
-        "sticker",
-        "thread",
-    }
-
-    def add(kind: str, possible: bool, reason: str | None = None, **payload: Any) -> None:
-        reverse_actions.append(ModlogReverseAction(
-            kind=kind,
-            possible=possible,
-            reason=reason,
-            payload={key: value for key, value in payload.items() if value is not None},
-        ))
-
-    if action == "ban":
-        add("member.unban", target_id is not None, target_id=target_id)
-    elif action == "unban":
-        add("member.ban", target_id is not None, target_id=target_id)
-    elif action == "kick":
-        add("member.invite_back", False, "kicks cannot be undone directly", target_id=target_id)
-    elif action == "member_role_update":
-        roles = by_key.get("roles")
-        added_roles = roles.new if roles is not None and roles.has_new else None
-        removed_roles = roles.old if roles is not None and roles.has_old else None
-        add(
-            "member.roles.revert",
-            target_id is not None and (added_roles is not None or removed_roles is not None),
-            "role changes unavailable" if added_roles is None and removed_roles is None else None,
-            target_id=target_id,
-            add_roles=removed_roles,
-            remove_roles=added_roles,
-        )
-    elif action == "member_update":
-        add("member.restore_fields", target_id is not None and bool(changes), target_id=target_id)
-    elif action.endswith("_create"):
-        kind = action.removesuffix("_create")
-        add(
-            f"{kind}.delete",
-            target_id is not None and kind in supported_create_deletes,
-            "created object undo is not implemented for this audit log action"
-            if kind not in supported_create_deletes else
-            None,
-            target_id=target_id,
-        )
-    elif action.endswith("_delete"):
-        add(
-            f"{action.removesuffix('_delete')}.recreate",
-            False,
-            "recreating deleted objects requires richer snapshots",
-            target_id=target_id,
-        )
-    elif action.endswith("_update"):
-        old_values = {
-            change.key: change.old
-            for change in changes
-            if change.has_old
-        }
-        add(
-            f"{action.removesuffix('_update')}.restore",
-            False,
-            "generic update restore is not implemented for this audit log action",
-            target_id=target_id,
-            old_values=old_values or None,
-        )
-    elif action in {"message_delete", "message_bulk_delete"}:
-        add(
-            "message.restore_copy",
-            False,
-            "audit logs do not include deleted message content",
-            target_id=target_id,
-        )
-    else:
-        add("none", False, "no reverse action is defined for this audit log action")
-
-    return reverse_actions
-
-
 def normalize_entry(entry: discord.AuditLogEntry) -> ModlogEvent:
     target = entry.target
     action = entry.action.name
@@ -308,7 +207,6 @@ def normalize_entry(entry: discord.AuditLogEntry) -> ModlogEvent:
         reason=entry.reason,
         extra=_serialize(entry.extra),
         changes=changes,
-        reverse_actions=_reverse_actions(action, target_entity, changes),
         raw={
             "entry": repr(entry),
             "action": repr(entry.action),
