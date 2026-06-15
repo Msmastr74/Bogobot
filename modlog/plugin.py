@@ -962,7 +962,7 @@ class ModlogView(discord.ui.LayoutView):
         page_size: int,
         page: int = 0,
     ) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=900)
         self.database = database
         self.guild_id = guild_id
         self.action = action
