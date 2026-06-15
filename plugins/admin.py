@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "FATAL"]
+CENSOR_PATH = "log_censor.txt"
 log_level_mapping: dict[LogLevel, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -68,6 +69,7 @@ class MemoryLogHandler(logging.Handler):
         super().__init__()
         self.records: deque[LogEntry] = deque(maxlen=capacity)
         self.next_counter = 1
+        self.censored_values = self._load_censored_values()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -77,6 +79,7 @@ class MemoryLogHandler(logging.Handler):
                 message = f"{message}\n{formatter.formatException(record.exc_info)}"
             if record.stack_info:
                 message = f"{message}\n{record.stack_info}"
+            message = self._censor(message)
             self.records.append(LogEntry(
                 counter=self.next_counter,
                 created_at=int(record.created),
@@ -88,6 +91,24 @@ class MemoryLogHandler(logging.Handler):
             self.next_counter += 1
         except Exception:
             self.handleError(record)
+
+    def _load_censored_values(self) -> tuple[str, ...]:
+        if not os.path.exists(CENSOR_PATH):
+            return ()
+        try:
+            with open(CENSOR_PATH, "r", encoding="utf-8") as file:
+                return tuple(
+                    line
+                    for raw_line in file
+                    if (line := raw_line.rstrip("\n"))
+                )
+        except OSError:
+            return ()
+
+    def _censor(self, message: str) -> str:
+        for value in self.censored_values:
+            message = message.replace(value, "[censored]")
+        return message
 
     def configure_capacity(self, capacity: int) -> None:
         capacity = max(100, capacity)
