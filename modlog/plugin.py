@@ -157,6 +157,7 @@ class ModlogUndoButton(discord.ui.Button["ModlogEventView"]):
         await interaction.followup.send(
             view=ModlogUndoResultView(result),
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none()
         )
 
 
@@ -206,6 +207,7 @@ class ModlogEventButton(discord.ui.Button["ModlogView"]):
         await interaction.response.send_message(
             view=ModlogEventView(event),
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none()
         )
 
 

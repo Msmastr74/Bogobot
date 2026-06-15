@@ -82,34 +82,42 @@ async def _undo_member_ban(
     return ModlogUndoResult(True, "Undo Complete", f"Banned `{target_id}`.")
 
 
-async def _undo_member_roles_restore(
+async def _undo_member_roles_revert(
     guild: discord.Guild,
     event: ModlogEvent,
     action: ModlogReverseAction,
 ) -> ModlogUndoResult:
     target_id = _target_id(event, action)
-    role_ids = _role_ids(action.payload.get("roles"))
-    if not role_ids:
-        raise ModlogUndoError("The old role set was not captured.")
+    add_role_ids = _role_ids(action.payload.get("add_roles"))
+    remove_role_ids = _role_ids(action.payload.get("remove_roles"))
+    if not add_role_ids and not remove_role_ids:
+        raise ModlogUndoError("The role changes were not captured.")
 
     member = await _fetch_member(guild, target_id)
-    roles = [
+    add_roles = [
         role
-        for role_id in role_ids
+        for role_id in add_role_ids
         if (role := guild.get_role(role_id)) is not None
     ]
-    if len(roles) != len(role_ids):
-        missing = len(role_ids) - len(roles)
-        raise ModlogUndoError(f"{missing} previous role(s) no longer exist.")
+    remove_roles = [
+        role
+        for role_id in remove_role_ids
+        if (role := guild.get_role(role_id)) is not None
+    ]
+    missing = len(add_role_ids) + len(remove_role_ids) - len(add_roles) - len(remove_roles)
+    if missing:
+        raise ModlogUndoError(f"{missing} changed role(s) no longer exist.")
 
-    await member.edit(
-        roles=roles,
-        reason=f"Undo modlog event {event.id}",
-    )
+    reason = f"Undo modlog event {event.id}"
+    if remove_roles:
+        await member.remove_roles(*remove_roles, reason=reason)
+    if add_roles:
+        await member.add_roles(*add_roles, reason=reason)
     return ModlogUndoResult(
         True,
         "Undo Complete",
-        f"Restored `{len(roles)}` role(s) for {member.mention}.",
+        f"Reverted role delta for {member.mention}: "
+        f"added `{len(add_roles)}`, removed `{len(remove_roles)}`.",
     )
 
 
@@ -228,8 +236,8 @@ async def undo_event(
             return await _undo_member_unban(guild, event, action)
         if action.kind == "member.ban":
             return await _undo_member_ban(guild, event, action)
-        if action.kind == "member.roles.restore":
-            return await _undo_member_roles_restore(guild, event, action)
+        if action.kind == "member.roles.revert":
+            return await _undo_member_roles_revert(guild, event, action)
         if action.kind == "member.restore_fields":
             return await _undo_member_restore_fields(guild, event, action)
         if action.kind.endswith(".delete"):

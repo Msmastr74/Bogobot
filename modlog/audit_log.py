@@ -250,12 +250,15 @@ def _reverse_actions(action: str, target: ModlogEntity | None, changes: list[Mod
         add("member.invite_back", False, "kicks cannot be undone directly", target_id=target_id)
     elif action == "member_role_update":
         roles = by_key.get("roles")
+        added_roles = roles.new if roles is not None and roles.has_new else None
+        removed_roles = roles.old if roles is not None and roles.has_old else None
         add(
-            "member.roles.restore",
-            target_id is not None and roles is not None and roles.has_old,
-            "old role set unavailable" if roles is None or not roles.has_old else None,
+            "member.roles.revert",
+            target_id is not None and (added_roles is not None or removed_roles is not None),
+            "role changes unavailable" if added_roles is None and removed_roles is None else None,
             target_id=target_id,
-            roles=roles.old if roles is not None else None,
+            add_roles=removed_roles,
+            remove_roles=added_roles,
         )
     elif action == "member_update":
         add("member.restore_fields", target_id is not None and bool(changes), target_id=target_id)
