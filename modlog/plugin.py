@@ -1,6 +1,7 @@
 from datetime import timedelta
 import json
 from pathlib import Path
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -30,6 +31,8 @@ AUDIT_LOG_RESCAN_OVERLAP = timedelta(minutes=10)
 EVENT_LINK_WINDOW_SECONDS = 600
 DETAIL_VALUE_LIMIT = 1000
 MESSAGE_CONTENT_PREVIEW_LIMIT = 2800
+MESSAGE_CONTENT_INLINE_LIMIT = 2000
+MESSAGE_RECREATE_CONTENT_LIMIT = 2000
 RAW_CONTENT_CHUNK_LIMIT = 1900
 RELATED_EVENT_DETAIL_LIMIT = 1800
 GATEWAY_ACTIONS = (
@@ -210,6 +213,308 @@ def _message_text_parts(message: dict[str, object]) -> list[str]:
     return parts
 
 
+def _message_plain_text_parts(message: dict[str, object]) -> list[str]:
+    parts: list[str] = []
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        parts.append(content)
+
+    embeds = message.get("embeds")
+    if isinstance(embeds, list):
+        for embed in embeds:
+            if not isinstance(embed, dict):
+                continue
+            for key in ("title", "description", "url"):
+                value = embed.get(key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+            fields = embed.get("fields")
+            if isinstance(fields, list):
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    name = field.get("name")
+                    value = field.get("value")
+                    if isinstance(name, str) and name:
+                        parts.append(name)
+                    if isinstance(value, str) and value:
+                        parts.append(value)
+
+    components = message.get("components")
+    if isinstance(components, list):
+        for component in components:
+            parts.extend(_component_text(component))
+    return parts
+
+
+def _message_plain_text(message: dict[str, object]) -> str:
+    return "\n".join(_message_plain_text_parts(message))
+
+
+def _recreate_message_embeds(message: dict[str, object]) -> list[discord.Embed]:
+    embeds = message.get("embeds")
+    if not isinstance(embeds, list):
+        return []
+
+    rebuilt: list[discord.Embed] = []
+    for embed in embeds[:10]:
+        if not isinstance(embed, dict):
+            continue
+        embed_type = embed.get("type")
+        if embed_type not in (None, "rich"):
+            continue
+        try:
+            rebuilt.append(discord.Embed.from_dict(embed))
+        except Exception:
+            continue
+    return rebuilt
+
+
+def _component_type(component: dict[str, Any]) -> int | None:
+    raw_type = component.get("type")
+    if isinstance(raw_type, int):
+        return raw_type
+    return getattr(raw_type, "value", None)
+
+
+def _component_media_url(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    media = value.get("media")
+    if isinstance(media, dict):
+        url = media.get("url")
+        return url if isinstance(url, str) else None
+    url = value.get("url")
+    return url if isinstance(url, str) else None
+
+
+def _recreate_button(component: dict[str, Any]) -> discord.ui.Button:
+    style = discord.ButtonStyle(component.get("style", discord.ButtonStyle.secondary.value))
+    return discord.ui.Button(
+        style=style,
+        label=component.get("label") if isinstance(component.get("label"), str) else None,
+        emoji=component.get("emoji") if isinstance(component.get("emoji"), str) else None,
+        url=component.get("url") if style is discord.ButtonStyle.link and isinstance(component.get("url"), str) else None,
+        custom_id=(
+            component.get("custom_id")
+            if style is not discord.ButtonStyle.link and isinstance(component.get("custom_id"), str) else
+            None
+        ),
+        disabled=True,
+    )
+
+
+def _select_bounds(component: dict[str, Any]) -> tuple[str, str | None, int, int]:
+    custom_id = component.get("custom_id")
+    placeholder = component.get("placeholder")
+    min_values = component.get("min_values")
+    max_values = component.get("max_values")
+    return (
+        custom_id if isinstance(custom_id, str) else "modlog_disabled_select",
+        placeholder if isinstance(placeholder, str) else None,
+        min_values if isinstance(min_values, int) else 1,
+        max_values if isinstance(max_values, int) else 1,
+    )
+
+
+def _recreate_select_option(option: dict[str, Any]) -> discord.SelectOption | None:
+    label = option.get("label")
+    if not isinstance(label, str) or not label:
+        return None
+    value = option.get("value")
+    description = option.get("description")
+    emoji = option.get("emoji")
+    try:
+        return discord.SelectOption(
+            label=label,
+            value=value if isinstance(value, str) else label,
+            description=description if isinstance(description, str) else None,
+            emoji=emoji if isinstance(emoji, str) else None,
+            default=option.get("default", False) is True,
+        )
+    except Exception:
+        return None
+
+
+def _recreate_select(component: dict[str, Any]) -> discord.ui.Select:
+    custom_id, placeholder, min_values, max_values = _select_bounds(component)
+    options = component.get("options")
+    select_options: list[discord.SelectOption] = []
+    if isinstance(options, list):
+        for option in options[:25]:
+            if isinstance(option, dict) and (select_option := _recreate_select_option(option)) is not None:
+                select_options.append(select_option)
+    return discord.ui.Select(
+        custom_id=custom_id,
+        placeholder=placeholder,
+        min_values=min_values,
+        max_values=max_values,
+        options=select_options,
+        disabled=True,
+    )
+
+
+def _recreate_entity_select(component: dict[str, Any]) -> discord.ui.Item:
+    component_type = _component_type(component)
+    custom_id, placeholder, min_values, max_values = _select_bounds(component)
+    kwargs = {
+        "custom_id": custom_id,
+        "placeholder": placeholder,
+        "min_values": min_values,
+        "max_values": max_values,
+        "disabled": True,
+    }
+    if component_type == discord.ComponentType.user_select.value:
+        return discord.ui.UserSelect(**kwargs)
+    if component_type == discord.ComponentType.role_select.value:
+        return discord.ui.RoleSelect(**kwargs)
+    if component_type == discord.ComponentType.mentionable_select.value:
+        return discord.ui.MentionableSelect(**kwargs)
+    if component_type == discord.ComponentType.channel_select.value:
+        return discord.ui.ChannelSelect(**kwargs)
+    return _recreate_select(component)
+
+
+def _recreate_component(component: dict[str, Any]) -> discord.ui.Item | None:
+    component_type = _component_type(component)
+    if component_type == discord.ComponentType.action_row.value:
+        children = [
+            item
+            for child in component.get("components", [])
+            if isinstance(child, dict)
+            if (item := _recreate_component(child)) is not None
+        ]
+        return discord.ui.ActionRow(*children) if children else None
+    if component_type == discord.ComponentType.button.value:
+        return _recreate_button(component)
+    if component_type == discord.ComponentType.select.value:
+        return _recreate_select(component)
+    if component_type in {
+        discord.ComponentType.user_select.value,
+        discord.ComponentType.role_select.value,
+        discord.ComponentType.mentionable_select.value,
+        discord.ComponentType.channel_select.value,
+    }:
+        return _recreate_entity_select(component)
+    if component_type == discord.ComponentType.text_display.value:
+        content = component.get("content")
+        return discord.ui.TextDisplay(content if isinstance(content, str) else "")
+    if component_type == discord.ComponentType.separator.value:
+        spacing = component.get("spacing")
+        return discord.ui.Separator(
+            visible=component.get("visible", True) is not False,
+            spacing=discord.SeparatorSpacing.large if spacing == discord.SeparatorSpacing.large.value else discord.SeparatorSpacing.small,
+        )
+    if component_type == discord.ComponentType.container.value:
+        children = [
+            item
+            for child in component.get("components", [])
+            if isinstance(child, dict)
+            if (item := _recreate_component(child)) is not None
+        ]
+        accent_colour = component.get("accent_color", component.get("accent_colour"))
+        return discord.ui.Container(
+            *children,
+            accent_colour=accent_colour if isinstance(accent_colour, int) else None,
+            spoiler=component.get("spoiler", False) is True,
+        )
+    if component_type == discord.ComponentType.section.value:
+        children = [
+            item
+            for child in component.get("components", [])
+            if isinstance(child, dict)
+            if (item := _recreate_component(child)) is not None
+        ]
+        accessory_payload = component.get("accessory")
+        accessory = _recreate_component(accessory_payload) if isinstance(accessory_payload, dict) else None
+        if children and accessory is not None:
+            return discord.ui.Section(*children, accessory=accessory)
+        return discord.ui.Container(*children) if children else None
+    if component_type == discord.ComponentType.thumbnail.value:
+        media = _component_media_url(component)
+        if media is None:
+            return None
+        description = component.get("description")
+        return discord.ui.Thumbnail(
+            media,
+            description=description if isinstance(description, str) else None,
+            spoiler=component.get("spoiler", False) is True,
+        )
+    if component_type == discord.ComponentType.media_gallery.value:
+        raw_items = component.get("items")
+        if not isinstance(raw_items, list):
+            return None
+        items = []
+        for raw_item in raw_items:
+            media = _component_media_url(raw_item)
+            if media is None:
+                continue
+            description = raw_item.get("description") if isinstance(raw_item, dict) else None
+            items.append(discord.MediaGalleryItem(
+                media,
+                description=description if isinstance(description, str) else None,
+                spoiler=isinstance(raw_item, dict) and raw_item.get("spoiler", False) is True,
+            ))
+        return discord.ui.MediaGallery(*items) if items else None
+    if component_type == discord.ComponentType.file.value:
+        media = _component_media_url(component)
+        if media is None:
+            return None
+        return discord.ui.File(media, spoiler=component.get("spoiler", False) is True)
+    return None
+
+
+def _recreate_message_components(message: dict[str, object]) -> list[discord.ui.Item]:
+    components = message.get("components")
+    if not isinstance(components, list):
+        return []
+    items: list[discord.ui.Item] = []
+    for component in components:
+        if isinstance(component, dict) and (item := _recreate_component(component)) is not None:
+            items.append(item)
+    return items
+
+
+def _uses_components_v2(components: list[discord.ui.Item]) -> bool:
+    return any(not isinstance(component, discord.ui.ActionRow) for component in components)
+
+
+class RecreatedMessageView(discord.ui.LayoutView):
+    def __init__(self, content: str, components: list[discord.ui.Item]) -> None:
+        super().__init__(timeout=None)
+        if content:
+            self.add_item(discord.ui.TextDisplay(content))
+        for component in components:
+            self.add_item(component)
+
+
+def _classic_component_view(components: list[discord.ui.Item]) -> discord.ui.View | None:
+    view = discord.ui.View(timeout=None)
+    for component in components:
+        if isinstance(component, discord.ui.ActionRow):
+            for child in component.children:
+                view.add_item(child)
+        else:
+            view.add_item(component)
+    return view if view.children else None
+
+
+def _attachment_urls(message: dict[str, object]) -> list[str]:
+    attachments = message.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+    urls: list[str] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        url = attachment.get("url")
+        if isinstance(url, str) and url:
+            urls.append(url)
+    return urls
+
+
 def _message_summary(message: dict[str, object]) -> str:
     lines = [
         f"Message ID: `{message.get('id')}`",
@@ -276,8 +581,50 @@ class ModlogMessageContentButton(discord.ui.Button["ModlogEventView"]):
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
             return
+        message = _message_payload(view.event)
+        if message is None:
+            await interaction.response.send_message("No captured message payload.", ephemeral=True)
+            return
+
+        content = message.get("content")
+        visible_content = content if isinstance(content, str) else ""
+        embeds = _recreate_message_embeds(message)
+        components = _recreate_message_components(message)
+        if not visible_content and not embeds and not components:
+            visible_content = "\n".join(_attachment_urls(message))
+        if not visible_content and not embeds and not components:
+            visible_content = "No visible message content captured."
+        visible_content = _truncate_display_text(visible_content, limit=MESSAGE_RECREATE_CONTENT_LIMIT)
+
+        if components:
+            if _uses_components_v2(components):
+                await interaction.response.send_message(
+                    view=RecreatedMessageView(visible_content, components),
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                classic_view = _classic_component_view(components)
+                if classic_view is not None:
+                    await interaction.response.send_message(
+                        content=visible_content if visible_content else None,
+                        embeds=embeds,
+                        view=classic_view,
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                    await interaction.response.send_message(
+                        content=visible_content if visible_content else None,
+                        embeds=embeds,
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            return
+
         await interaction.response.send_message(
-            view=ModlogMessageContentView(view.event),
+            content=visible_content,
+            embeds=embeds,
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -323,9 +670,9 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
         lines.append("### Captured Message")
         lines.append(f"Message ID: `{message.get('id')}`")
         lines.append(f"Channel: <#{message.get('channel_id')}> (`{message.get('channel_id')}`)")
-        text = "\n\n".join(_message_text_parts(message))
+        text = _message_plain_text(message)
         if text:
-            lines.append(f"Text: {_short_value(_truncate_display_text(text, limit=DETAIL_VALUE_LIMIT))}")
+            lines.append(f"Content: {_short_value(_truncate_display_text(text, limit=MESSAGE_CONTENT_INLINE_LIMIT))}")
         lines.append(_message_summary(message))
 
     before_message = event.raw.get("before_message")
