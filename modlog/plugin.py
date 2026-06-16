@@ -256,7 +256,9 @@ def _message_plain_text(message: dict[str, object]) -> str:
     return "\n".join(_message_plain_text_parts(message))
 
 
-def _format_message_content_preview(message: dict[str, object]) -> str:
+def _format_message_content_preview(message: dict[str, object], *, allow_sensitive: bool) -> str:
+    if not allow_sensitive:
+        return "Content: [hidden]"
     text = _message_plain_text(message)
     if not text:
         return "Content: [none]"
@@ -550,7 +552,7 @@ def _message_summary(message: dict[str, object]) -> str:
 
 
 class ModlogMessageContentView(discord.ui.LayoutView):
-    def __init__(self, event: ModlogEvent) -> None:
+    def __init__(self, event: ModlogEvent, *, allow_sensitive: bool) -> None:
         super().__init__(timeout=None)
         message = _message_payload(event)
         container = discord.ui.Container(
@@ -564,7 +566,10 @@ class ModlogMessageContentView(discord.ui.LayoutView):
 
         container.add_item(discord.ui.TextDisplay(_message_summary(message)))
         text = "\n\n".join(_message_text_parts(message))
-        if text:
+        if not allow_sensitive:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay("Content: [hidden]"))
+        elif text:
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.TextDisplay(_truncate_display_text(text, limit=MESSAGE_CONTENT_PREVIEW_LIMIT)))
 
@@ -718,7 +723,7 @@ class ModlogRawContentButton(discord.ui.Button):
             )
 
 
-def _format_gateway_capture(event: ModlogEvent) -> list[str]:
+def _format_gateway_capture(event: ModlogEvent, *, allow_sensitive: bool) -> list[str]:
     lines: list[str] = []
     message = event.raw.get("message")
     if isinstance(message, dict):
@@ -726,7 +731,7 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
         lines.append("### Captured Message")
         lines.append(f"Message ID: `{message.get('id')}`")
         lines.append(f"Channel: <#{message.get('channel_id')}> (`{message.get('channel_id')}`)")
-        lines.append(_format_message_content_preview(message))
+        lines.append(_format_message_content_preview(message, allow_sensitive=allow_sensitive))
         lines.append(_message_summary(message))
 
     member = event.raw.get("member")
@@ -761,6 +766,7 @@ def format_event_details(
     *,
     reverse_actions: Iterable[ModlogReverseAction] = (),
     include_gateway_capture: bool = True,
+    allow_sensitive: bool = False,
 ) -> str:
     lines = [
         f"ID: `{event.id}`",
@@ -779,7 +785,7 @@ def format_event_details(
         lines.append(f"Reason: {discord.utils.escape_markdown(event.reason)}")
 
     if include_gateway_capture:
-        lines.extend(_format_gateway_capture(event))
+        lines.extend(_format_gateway_capture(event, allow_sensitive=allow_sensitive))
 
     if event.changes:
         lines.append("")
@@ -831,7 +837,11 @@ class ModlogUndoEventButton(discord.ui.Button["ModlogUndoResultView"]):
             )
             return
         await interaction.response.send_message(
-            view=ModlogEventView(event, database=view.database),
+            view=ModlogEventView(
+                event,
+                database=view.database,
+                allow_sensitive=_can_view_sensitive(interaction),
+            ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -946,7 +956,12 @@ class ModlogGroupDetailsButton(discord.ui.Button["ModlogView"]):
         for event in events:
             reverse_actions = await reverse_actions_for_event(interaction.guild, event)
             await interaction.followup.send(
-                view=ModlogEventView(event, database=view.database, reverse_actions=reverse_actions),
+                view=ModlogEventView(
+                    event,
+                    database=view.database,
+                    reverse_actions=reverse_actions,
+                    allow_sensitive=_can_view_sensitive(interaction),
+                ),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -958,10 +973,11 @@ def _add_message_snapshot_section(
     title: str,
     message: dict[str, object],
     message_key: str,
+    allow_sensitive: bool,
 ) -> None:
     container.add_item(discord.ui.TextDisplay(f"### {title}"))
     container.add_item(discord.ui.Separator())
-    container.add_item(discord.ui.TextDisplay(_format_message_content_preview(message)))
+    container.add_item(discord.ui.TextDisplay(_format_message_content_preview(message, allow_sensitive=allow_sensitive)))
     container.add_item(discord.ui.Separator())
     container.add_item(discord.ui.ActionRow(
         ModlogMessageContentButton(message_key),
@@ -976,11 +992,13 @@ class ModlogEventView(discord.ui.LayoutView):
         *,
         database: ModlogDatabase,
         reverse_actions: Iterable[ModlogReverseAction] = (),
+        allow_sensitive: bool = False,
     ) -> None:
         super().__init__(timeout=None)
         self.event = event
         self.database = database
         self.reverse_actions = tuple(reverse_actions)
+        self.allow_sensitive = allow_sensitive
         container = discord.ui.Container(
             discord.ui.TextDisplay("## Modlog Event"),
             discord.ui.Separator(),
@@ -992,6 +1010,7 @@ class ModlogEventView(discord.ui.LayoutView):
                 event,
                 reverse_actions=self.reverse_actions,
                 include_gateway_capture=before_message is None or message is None,
+                allow_sensitive=self.allow_sensitive,
             )
         ))
         if before_message is not None and message is not None:
@@ -1001,6 +1020,7 @@ class ModlogEventView(discord.ui.LayoutView):
                 title="From",
                 message=before_message,
                 message_key="before_message",
+                allow_sensitive=self.allow_sensitive,
             )
             container.add_item(discord.ui.Separator())
             _add_message_snapshot_section(
@@ -1008,6 +1028,7 @@ class ModlogEventView(discord.ui.LayoutView):
                 title="To",
                 message=message,
                 message_key="message",
+                allow_sensitive=self.allow_sensitive,
             )
         elif message is not None:
             container.add_item(discord.ui.Separator())
@@ -1055,7 +1076,12 @@ class ModlogEventButton(discord.ui.Button["ModlogView"]):
         await interaction.response.defer(ephemeral=True, thinking=True)
         reverse_actions = await reverse_actions_for_event(interaction.guild, event)
         await interaction.followup.send(
-            view=ModlogEventView(event, database=view.database, reverse_actions=reverse_actions),
+            view=ModlogEventView(
+                event,
+                database=view.database,
+                reverse_actions=reverse_actions,
+                allow_sensitive=_can_view_sensitive(interaction),
+            ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
         )
