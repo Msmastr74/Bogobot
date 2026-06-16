@@ -126,6 +126,13 @@ Account info and account listing are intentionally public through normal `comman
 
 - `milestones.manage`: Manage milestone subscriptions, spoofing, and rate-limit state.
 
+## Monitors
+
+- `monitor.values`: Start, stop, or resend the stream value monitor.
+- `monitor.stats`: Start, stop, or resend the Bogostream stats monitor.
+- `monitor.leaderboard`: Start, stop, or resend the Sortoffs leaderboard monitor.
+- `monitor.live_chat`: Start, stop, or resend the live chat monitor.
+
 ## Raid Protection
 
 - `raid.exempt`: Exempt a member from raid quarantine checks.

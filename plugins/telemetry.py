@@ -11,6 +11,7 @@ import discord
 from pydantic import TypeAdapter, ValidationError, field_validator
 from utils.pagination import PageSection, PaginatedView, SectionRead
 from bogobot_core import BotCore
+from modlog import ModlogAction, modlog_writer
 from utils import groups
 from ai import AIParam, action
 from utils.schemas import Schema
@@ -109,6 +110,7 @@ async def setup(bot: BotCore):
     manage = groups.manage(bot)
     accounts = groups.accounts(bot)
     ai_activity = groups.ai_activity(bot)
+    write_telemetry = modlog_writer(ModlogAction("telemetry", "Telemetry data was viewed."))
     hidden_commands: list[str] = [
         manage.group.name,
         f"{accounts.group.name} capabilities",
@@ -608,6 +610,13 @@ async def setup(bot: BotCore):
             return
 
         requested = set(requested_commands or [])
+        await write_telemetry(
+            interaction,
+            extra={
+                "action": "view",
+                "commands": requested_commands,
+            },
+        )
         initial_state = await fresh_telemetry_state()
         view = TelemetryView(
             initial_state=initial_state,

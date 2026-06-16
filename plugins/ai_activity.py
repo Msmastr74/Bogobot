@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional, Required, TypedDict, cast
 
 import discord
 
+from modlog import ModlogAction, modlog_writer
 from utils.scheduler import ChannelScheduler, Schedule
 from utils.type import T
 
@@ -379,6 +380,7 @@ def interaction_messageable_channel(
 async def setup(bot: "BotCore"):
     ai_activity = groups.ai_activity(bot)
     scheduler = AIScheduler(bot)
+    write_ai = modlog_writer(ModlogAction("ai", "AI configuration or automation was changed."))
 
     @ai_activity.command(
         name="schedule",
@@ -406,9 +408,20 @@ async def setup(bot: "BotCore"):
             )
             return
 
-        await scheduler.add_schedule(channel.id, { "payload": schedule_payload })
+        created_schedule = await scheduler.add_schedule(channel.id, { "payload": schedule_payload })
         
         first_run = calculate_next_time(schedule_payload, discord.utils.utcnow())
+        if created_schedule is not None:
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "activity.schedule",
+                    "channel_id": channel.id,
+                    "schedule_id": created_schedule["id"],
+                    "schedule": schedule_payload,
+                    "purpose_length": len(purpose),
+                },
+            )
         
         if first_run is not None:
             await bot.discord.send(
@@ -494,7 +507,17 @@ async def setup(bot: "BotCore"):
             )
             return
 
+        removed_schedule = next((item for item in channel_schedules if item["id"] == target_id), None)
         await scheduler.remove_schedule(channel.id, target_id)
+        await write_ai(
+            interaction,
+            extra={
+                "action": "activity.remove",
+                "channel_id": channel.id,
+                "schedule_id": target_id,
+                "schedule": removed_schedule["payload"] if removed_schedule is not None else None,
+            },
+        )
 
         await bot.discord.send(
             f"🗑️ **Schedule Removed Successfully**\n"

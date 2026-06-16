@@ -68,6 +68,7 @@ async def setup(bot: BotCore):
         storage_key="monitor_messages",
         display_name="Monitor",
         initial_payload=initial_payload,
+        capability="monitor.values",
     )
     stream_monitor.command(
         manage,

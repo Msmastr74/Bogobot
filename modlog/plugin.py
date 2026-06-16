@@ -1,12 +1,12 @@
 from datetime import timedelta
 import json
-from pathlib import Path
 from typing import Any, Iterable
 
 import discord
 from discord import app_commands
 
 from bogobot_core import BotCore
+from modlog import ModlogAction, database_path_from_bot, modlog_writer
 from modlog.actions import ACTIONS
 from modlog.audit_log import ModlogEvent, known_actions, normalize_entry, retrieve_and_scan
 from modlog.database import ModlogDatabase
@@ -30,8 +30,6 @@ from modlog.undo import ModlogReverseAction, ModlogUndoResult, reverse_actions_f
 from utils.discord import chunk_text, count_characters
 
 
-MODLOG_CONFIG_KEY = "modlog"
-DEFAULT_MODLOG_DATABASE_PATH = "modlog.sqlite3"
 MAX_EVENT_LINES = 10
 MAX_ACTION_CHOICES = 25
 MAX_EVENTS_PER_PAGE = 10
@@ -39,6 +37,10 @@ MODLOG_UNDO_CAPABILITY = "modlog.undo"
 AUDIT_LOG_RESCAN_OVERLAP = timedelta(minutes=10)
 DETAIL_VALUE_LIMIT = 1000
 MESSAGE_CONTENT_PREVIEW_LIMIT = 2800
+write_modlog_undo = modlog_writer(ModlogAction(
+    "modlog.undo",
+    "A modlog event undo was requested.",
+))
 MESSAGE_CONTENT_INLINE_LIMIT = 2000
 MESSAGE_RECREATE_CONTENT_LIMIT = 2000
 RAW_CONTENT_CHUNK_LIMIT = 1900
@@ -64,15 +66,6 @@ GATEWAY_ACTIONS = (
     "on_member_ban",
     "on_member_unban",
 )
-
-
-def database_path(bot: BotCore) -> Path:
-    config = bot.config.get(MODLOG_CONFIG_KEY)
-    if isinstance(config, dict):
-        path = config.get("database_path")
-        if isinstance(path, str) and path:
-            return Path(path)
-    return Path(DEFAULT_MODLOG_DATABASE_PATH)
 
 
 def audit_action_from_name(name: str | None) -> discord.AuditLogAction | None:
@@ -734,6 +727,15 @@ def _format_gateway_capture(event: ModlogEvent) -> list[str]:
     return lines
 
 
+def _nested_get(value: dict[str, Any], *keys: str) -> Any:
+    current: Any = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
 def format_event_details(
     event: ModlogEvent,
     *,
@@ -745,10 +747,14 @@ def format_event_details(
         f"Action: `{event.action}`",
         f"Guild: `{event.guild_id}`",
         f"Created: <t:{int(event.created_at.timestamp())}:F>",
-        f"Imported: <t:{int(event.imported_at.timestamp())}:F>",
+        f"Recorded: <t:{int(event.imported_at.timestamp())}:F>",
         f"Actor: {entity_text(event.actor)}",
         f"Target: {entity_text(event.target)}",
     ]
+    if event.action == "modlog.undo":
+        original_event_id = _nested_get(event.raw, "undo", "undid_event_id")
+        if isinstance(original_event_id, int):
+            lines.append(f"Undid Event: `{original_event_id}`")
     if event.reason:
         lines.append(f"Reason: {discord.utils.escape_markdown(event.reason)}")
 
@@ -785,14 +791,51 @@ def format_event_details(
     return "\n".join(lines)
 
 
+class ModlogUndoEventButton(discord.ui.Button["ModlogUndoResultView"]):
+    def __init__(self) -> None:
+        super().__init__(label="View Undo Event", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if view is None:
+            await interaction.response.send_message(
+                "The undo event is not available right now.",
+                ephemeral=True,
+            )
+            return
+        event = view.database.read_event(view.undo_event_id)
+        if event is None:
+            await interaction.response.send_message(
+                "The undo event could not be found.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            view=ModlogEventView(event, database=view.database),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class ModlogUndoResultView(discord.ui.LayoutView):
-    def __init__(self, result: ModlogUndoResult) -> None:
+    def __init__(
+        self,
+        result: ModlogUndoResult,
+        *,
+        database: ModlogDatabase,
+        undo_event_id: int,
+    ) -> None:
         super().__init__(timeout=None)
-        self.add_item(discord.ui.Container(
+        self.database = database
+        self.undo_event_id = undo_event_id
+        container = discord.ui.Container(
             discord.ui.TextDisplay(f"## {result.title}"),
             discord.ui.Separator(),
             discord.ui.TextDisplay(result.message),
-        ))
+        )
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.ActionRow(ModlogUndoEventButton()))
+        self.add_item(container)
 
 
 class ModlogUndoButton(discord.ui.Button["ModlogEventView"]):
@@ -825,8 +868,28 @@ class ModlogUndoButton(discord.ui.Button["ModlogEventView"]):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         result = await undo_event(interaction.guild, view.event)
+        await write_modlog_undo(
+            interaction,
+            extra={
+                "action": "undo",
+                "undid_event_id": view.event.id,
+                "undo_succeeded": result.success,
+                "result_title": result.title,
+            },
+            raw={
+                "undo": {
+                    "undid_event_id": view.event.id,
+                    "undo_event_id": interaction.id,
+                    "success": result.success,
+                },
+            },
+        )
         await interaction.followup.send(
-            view=ModlogUndoResultView(result),
+            view=ModlogUndoResultView(
+                result,
+                database=view.database,
+                undo_event_id=interaction.id,
+            ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
         )
@@ -1171,7 +1234,7 @@ async def action_autocomplete(
 
 
 async def setup(bot: BotCore) -> None:
-    database = ModlogDatabase(database_path(bot))
+    database = ModlogDatabase(database_path_from_bot(bot))
     logger = bot.logger.getChild("Modlog")
     bot.accounts.capabilities.register(MODLOG_UNDO_CAPABILITY)
 
@@ -1297,7 +1360,7 @@ async def setup(bot: BotCore) -> None:
 
     @bot.setup.command(
         name="modlog",
-        description="Browse imported moderation log events",
+        description="Browse moderation log events",
         capabilities=["modlog.view"],
         eph=True,
         defer=False,

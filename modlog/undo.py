@@ -316,6 +316,26 @@ async def _criteria_delete_invite(guild: discord.Guild, event: ModlogEvent) -> M
         return _action(reason=str(exc))
 
 
+async def _criteria_verification_create(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    raw_verification = event.raw.get("verification")
+    if not isinstance(raw_verification, dict):
+        return _action(reason="verification details were not captured")
+
+    message_id = raw_verification.get("message_id")
+    channel_id = raw_verification.get("channel_id")
+    has_message = isinstance(message_id, int) and isinstance(channel_id, int)
+    has_role_config = isinstance(raw_verification.get("previous_roles"), dict)
+    if not has_message and not has_role_config:
+        return _action(reason="nothing reversible was captured")
+
+    return _action(
+        possible=True,
+        message_id=message_id if isinstance(message_id, int) else None,
+        channel_id=channel_id if isinstance(channel_id, int) else None,
+        previous_roles=raw_verification.get("previous_roles") if has_role_config else None,
+    )
+
+
 async def _fetch_member(guild: discord.Guild, user_id: int) -> discord.Member:
     member = guild.get_member(user_id)
     if member is not None:
@@ -505,6 +525,59 @@ async def _delete_invite(
         raise ModlogUndoError("The created invite no longer exists.")
     await invite.delete(reason=f"Undo modlog event {event.id}")
     return ModlogUndoResult(True, "Undo Complete", f"Deleted invite `{invite_code}`.")
+
+
+async def _undo_verification_create(
+    guild: discord.Guild,
+    event: ModlogEvent,
+    action: ModlogReverseAction,
+) -> ModlogUndoResult:
+    payload = action.payload or {}
+    parts: list[str] = []
+    errors: list[str] = []
+
+    channel_id = payload.get("channel_id")
+    message_id = payload.get("message_id")
+    if isinstance(channel_id, int) and isinstance(message_id, int):
+        client = guild._state._get_client()
+        messageable = client.get_partial_messageable(channel_id)
+        if messageable is not None:
+            try:
+                await messageable.get_partial_message(message_id).delete()
+                parts.append(f"deleted verification message `{message_id}`")
+            except discord.NotFound:
+                parts.append(f"verification message `{message_id}` was already gone")
+            except discord.Forbidden:
+                errors.append(f"cannot delete verification message `{message_id}`")
+            except discord.HTTPException as exc:
+                errors.append(f"failed to delete verification message `{message_id}`: {exc}")
+        else:
+            errors.append(f"verification channel `{channel_id}` is unavailable")
+
+    previous_roles = payload.get("previous_roles")
+    if isinstance(previous_roles, dict):
+        try:
+            client = guild._state._get_client()
+            accounts = getattr(client, "accounts")
+            account = accounts.guild(guild.id)
+            config = dict(account.get("security_roles") or {})
+            for config_key in ("verified_role_id", "quarantine_role_id"):
+                if config_key in previous_roles and previous_roles[config_key] is not None:
+                    config[config_key] = previous_roles[config_key]
+                else:
+                    config.pop(config_key, None)
+            await account.write("security_roles", config)
+            parts.append("restored verification role config")
+        except Exception as exc:
+            errors.append(f"failed to restore verification role config: {exc}")
+
+    if errors and not parts:
+        raise ModlogUndoError("; ".join(errors))
+
+    message = "; ".join(parts)
+    if errors:
+        message += "; " + "; ".join(errors)
+    return ModlogUndoResult(True, "Undo Complete", message or "No verification changes needed undoing.")
 
 
 async def undo_event(

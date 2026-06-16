@@ -172,6 +172,7 @@ async def setup(bot: BotCore):
         storage_key="live_chat_monitor_messages",
         display_name="Live Chat Monitor",
         initial_payload=initial_payload,
+        capability="monitor.live_chat",
     )
     chat_monitor.command(
         manage,

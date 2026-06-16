@@ -17,13 +17,16 @@ from modlog.undo import (
     _criteria_member_restore_fields,
     _criteria_member_roles_revert,
     _criteria_member_unban,
+    _criteria_verification_create,
     _delete_created_target,
     _delete_invite,
     _undo_member_ban,
     _undo_member_restore_fields,
     _undo_member_roles_revert,
     _undo_member_unban,
+    _undo_verification_create,
 )
+from modlog.writer import database_path_from_bot, message_entity, modlog_writer, role_entity
 
 
 def _register_default_actions() -> None:
@@ -167,6 +170,15 @@ def _register_default_actions() -> None:
             description="Delete the created invite.",
         ),
     ))
+    register(ModlogAction(
+        "verification",
+        "Verification panel or roles were changed.",
+        undo=UndoRule(
+            _criteria_verification_create,
+            _undo_verification_create,
+            description="Delete the created verification message and restore previous role config.",
+        ),
+    ))
 
 
 _register_default_actions()
@@ -178,4 +190,8 @@ __all__ = (
     "RelatedRule",
     "UndoRule",
     "register",
+    "database_path_from_bot",
+    "message_entity",
+    "modlog_writer",
+    "role_entity",
 )

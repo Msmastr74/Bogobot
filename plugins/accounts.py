@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 
 from bogobot_core import BotCore
+from modlog import ModlogAction, modlog_writer
 from plugins.bogotree import BOGOTREE_ACCOUNT_KEY, normalize_user_stats as bogotree_user_stats
 from plugins.cbogo import CBOGO_ACCOUNT_KEY, normalize_user_stats as cbogo_user_stats
 from plugins.telemetry import format_user_usage, user_usage
@@ -48,11 +49,12 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
         "games.bogotree.use",
         "games.cbogo.use",
         "milestones.use",
+        "monitor.use",
         "raid.use",
         "telemetry.use",
         "verification.use",
-        "modlog.view",
-        "modlog.view_sensitive"
+        "modlog.view.use",
+        "modlog.view_sensitive.use"
     ),
     "admin": (
         "accounts.ban",
@@ -63,6 +65,7 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
         "games.bogotree",
         "games.cbogo",
         "milestones",
+        "monitor",
         "raid",
         "system.logs",
         "system.loglevel",
@@ -542,6 +545,14 @@ class CapabilitiesView(discord.ui.LayoutView):
 async def setup(bot: BotCore) -> None:
     accounts = groups.accounts(bot)
     AccountPermissions.configure_presets(lambda name: _resolve_preset(bot, name))
+    write_capabilities = modlog_writer(ModlogAction(
+        "capabilities",
+        "Account capabilities or presets were changed.",
+    ))
+    write_accounts_ban = modlog_writer(ModlogAction(
+        "accounts.ban",
+        "An account ban state was changed.",
+    ))
     bot.accounts.capabilities.register(ACCOUNT_BAN_CAPABILITY)
     bot.accounts.capabilities.register(MANAGE_CAPABILITIES_CAPABILITY)
     bot.accounts.capabilities.register(MANAGE_PRESETS_CAPABILITY)
@@ -901,6 +912,18 @@ async def setup(bot: BotCore) -> None:
             message = f"Revoked {capability_text} from {account_target.mention}."
 
         await _write_permissions(bot, account_target, target_permissions)
+        await write_capabilities(
+            interaction,
+            extra={
+                "action": action,
+                "target": account_target.mention,
+                "target_type": account_target.account.account_type,
+                "target_id": account_target.account_id,
+                "capabilities": requested_capabilities,
+                "depth": depth if action == "grant" else None,
+                "scopes": [_scope_label(scope_id) for scope_id in scope_ids],
+            },
+        )
 
         await bot.discord.send(
             contents=message,
@@ -966,6 +989,13 @@ async def setup(bot: BotCore) -> None:
                 return
             del presets[preset_name]
             await _save_custom_presets(bot, presets)
+            await write_capabilities(
+                interaction,
+                extra={
+                    "action": "preset.remove",
+                    "preset": preset_name,
+                },
+            )
             await bot.discord.send(
                 contents=f"Removed custom preset `{preset_name}`.",
                 response=True,
@@ -1030,6 +1060,14 @@ async def setup(bot: BotCore) -> None:
 
         presets[preset_name] = tuple(requested_capabilities)
         await _save_custom_presets(bot, presets)
+        await write_capabilities(
+            interaction,
+            extra={
+                "action": "preset.create",
+                "preset": preset_name,
+                "capabilities": requested_capabilities,
+            },
+        )
         await bot.discord.send(
             contents=(
                 f"Saved custom preset `{preset_name}` with " +
@@ -1103,6 +1141,17 @@ async def setup(bot: BotCore) -> None:
         if action == "ban":
             stored_target_perms.ban(depth=target_max_depth)
             await _write_permissions(bot, account_target, {scope_id: stored_target_perms})
+            await write_accounts_ban(
+                interaction,
+                extra={
+                    "action": "ban",
+                    "scope": scope,
+                    "target": account_target.mention,
+                    "target_type": account_target.account.account_type,
+                    "target_id": account_target.account_id,
+                    "depth": target_max_depth,
+                },
+            )
             await bot.discord.send(
                 contents=f"{account_target.mention} has been banned from bot commands in `{scope}` scope.",
                 response=True,
@@ -1112,6 +1161,16 @@ async def setup(bot: BotCore) -> None:
 
         stored_target_perms.unban()
         await _write_permissions(bot, account_target, {scope_id: stored_target_perms})
+        await write_accounts_ban(
+            interaction,
+            extra={
+                "action": "unban",
+                "scope": scope,
+                "target": account_target.mention,
+                "target_type": account_target.account.account_type,
+                "target_id": account_target.account_id,
+            },
+        )
         await bot.discord.send(
             contents=f"{account_target.mention} has been unbanned from bot commands in `{scope}` scope.",
             response=True,
