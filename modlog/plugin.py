@@ -609,6 +609,16 @@ def _can_view_sensitive(interaction: discord.Interaction) -> bool:
     )
 
 
+def _can_undo(interaction: discord.Interaction) -> bool:
+    bot = interaction.client
+    if not isinstance(bot, BotCore):
+        return False
+    return bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
+        MODLOG_UNDO_CAPABILITY,
+        registry=bot.accounts.capabilities,
+    )
+
+
 class ModlogMessageContentButton(discord.ui.Button):
     def __init__(self, message_key: str = "message", *, event_id: int | None = None) -> None:
         super().__init__(label="View Content", style=discord.ButtonStyle.secondary)
@@ -841,6 +851,7 @@ class ModlogUndoEventButton(discord.ui.Button["ModlogUndoResultView"]):
                 event,
                 database=view.database,
                 allow_sensitive=_can_view_sensitive(interaction),
+                allow_undo=_can_undo(interaction),
             ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -961,6 +972,7 @@ class ModlogGroupDetailsButton(discord.ui.Button["ModlogView"]):
                     database=view.database,
                     reverse_actions=reverse_actions,
                     allow_sensitive=_can_view_sensitive(interaction),
+                    allow_undo=_can_undo(interaction),
                 ),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
@@ -993,12 +1005,14 @@ class ModlogEventView(discord.ui.LayoutView):
         database: ModlogDatabase,
         reverse_actions: Iterable[ModlogReverseAction] = (),
         allow_sensitive: bool = False,
+        allow_undo: bool = False,
     ) -> None:
         super().__init__(timeout=None)
         self.event = event
         self.database = database
         self.reverse_actions = tuple(reverse_actions)
         self.allow_sensitive = allow_sensitive
+        self.allow_undo = allow_undo
         container = discord.ui.Container(
             discord.ui.TextDisplay("## Modlog Event"),
             discord.ui.Separator(),
@@ -1033,7 +1047,7 @@ class ModlogEventView(discord.ui.LayoutView):
         elif message is not None:
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.ActionRow(ModlogMessageContentButton(), ModlogRawContentButton()))
-        if any(reverse.possible for reverse in self.reverse_actions):
+        if self.allow_undo and any(reverse.possible for reverse in self.reverse_actions):
             container.add_item(discord.ui.Separator())
             container.add_item(discord.ui.ActionRow(ModlogUndoButton()))
         self.add_item(container)
@@ -1081,6 +1095,7 @@ class ModlogEventButton(discord.ui.Button["ModlogView"]):
                 database=view.database,
                 reverse_actions=reverse_actions,
                 allow_sensitive=_can_view_sensitive(interaction),
+                allow_undo=_can_undo(interaction),
             ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none()
