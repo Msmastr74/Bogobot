@@ -1,23 +1,13 @@
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from modlog import ModlogAction, register
-from modlog.actions import ACTIONS
+from modlog.actions import ACTIONS, ModlogAction, RelatedRule
 from modlog.audit_log import ModlogEvent
 from modlog.database import discord_time_snowflake_offset
 
 
 DEFAULT_WINDOW_SECONDS = 10
 MESSAGE_BULK_WINDOW_SECONDS = 30
-
-
-@dataclass(frozen=True)
-class RelatedRule:
-    actions: frozenset[str]
-    candidate_actions: frozenset[str]
-    window_seconds: int
-    matches: Callable[[ModlogEvent, ModlogEvent], bool]
-    max_related: Callable[[ModlogEvent], int | None] = lambda _event: None
 
 
 @dataclass(frozen=True)
@@ -110,100 +100,44 @@ def different_action_same_actor(anchor: ModlogEvent, candidate: ModlogEvent) -> 
     return different_actions(anchor, candidate) and same_actor(anchor, candidate)
 
 
-def bulk_delete_limit(event: ModlogEvent) -> int | None:
+def audit_log_related_limit(event: ModlogEvent) -> int:
     if event.source != "discord_audit_log":
         return 1
     count = event_extra_count(event)
     if count is None:
-        return None
+        return 1
     return max(1, count)
 
 
-def one_related(_event: ModlogEvent) -> int:
-    return 1
-
-
-RELATED_RULES = (
-    RelatedRule(
-        actions=frozenset({"message_delete", "on_message_delete"}),
-        candidate_actions=frozenset({"message_delete", "on_message_delete"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_target_and_channel,
-        max_related=one_related,
-    ),
-    RelatedRule(
-        actions=frozenset({"message_bulk_delete", "on_bulk_message_delete"}),
-        candidate_actions=frozenset({"message_bulk_delete", "on_bulk_message_delete"}),
-        window_seconds=MESSAGE_BULK_WINDOW_SECONDS,
-        matches=cross_source_channel_only,
-        max_related=bulk_delete_limit,
-    ),
-    RelatedRule(
-        actions=frozenset({"message_update", "on_message_edit"}),
-        candidate_actions=frozenset({"message_update", "on_message_edit"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_target_and_channel,
-        max_related=one_related,
-    ),
-    RelatedRule(
-        actions=frozenset({"member_role_update", "on_member_role_update"}),
-        candidate_actions=frozenset({"member_role_update", "on_member_role_update"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_same_target,
-        max_related=one_related,
-    ),
-    RelatedRule(
-        actions=frozenset({"member_update", "on_member_update"}),
-        candidate_actions=frozenset({"member_update", "on_member_update"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_same_target,
-        max_related=one_related,
-    ),
-    RelatedRule(
-        actions=frozenset({"kick", "on_member_remove"}),
-        candidate_actions=frozenset({"kick", "on_member_remove"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_same_target,
-        max_related=one_related,
-    ),
-    RelatedRule(
-        actions=frozenset({"ban", "on_member_remove", "on_member_ban"}),
-        candidate_actions=frozenset({"ban", "on_member_remove", "on_member_ban"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_same_target,
-        max_related=one_related,
-    ),
-    RelatedRule(
-        actions=frozenset({"unban", "on_member_unban"}),
-        candidate_actions=frozenset({"unban", "on_member_unban"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=cross_source_same_target,
-        max_related=one_related,
-    ),
-)
-
-
-def registered_related_rules() -> tuple[RelatedRule, ...]:
-    return tuple(
-        related_rule
-        for action in ACTIONS.values()
-        if isinstance((related_rule := action.related_rule), RelatedRule)
-    )
+def related_actions() -> tuple[ModlogAction, ...]:
+    return tuple(action for action in ACTIONS.values() if action.related)
 
 
 class RelatedResolver:
-    def __init__(self, rules: Iterable[RelatedRule] | None = None) -> None:
-        self.rules = tuple(rules) if rules is not None else (*RELATED_RULES, *registered_related_rules())
+    def __init__(self, actions: Iterable[ModlogAction] | None = None) -> None:
+        self.actions = tuple(actions) if actions is not None else related_actions()
 
-    def rule_for(self, event: ModlogEvent) -> RelatedRule | None:
-        return next((rule for rule in self.rules if event.action in rule.actions), None)
+    def action_for(self, event: ModlogEvent) -> ModlogAction | None:
+        return ACTIONS.get(event.action)
+
+    def relevant_window_seconds(self, event: ModlogEvent) -> int:
+        direct = self.action_for(event)
+        windows = [
+            rule.window_seconds
+            for action in self.actions
+            for rule in action.related
+            if action.name == event.action or event.action in rule.candidate_actions
+        ]
+        if direct is not None:
+            windows.extend(rule.window_seconds for rule in direct.related)
+        return max(windows, default=0)
 
     def widened_bounds(self, events: Iterable[ModlogEvent]) -> tuple[int | None, int | None]:
         event_list = list(events)
         if not event_list:
             return None, None
         before_padding = max(
-            rule.window_seconds if (rule := self.rule_for(event)) is not None else 0
+            self.relevant_window_seconds(event)
             for event in event_list
         )
         after_padding = before_padding
@@ -227,26 +161,24 @@ class RelatedResolver:
             if event.id in consumed:
                 continue
 
-            rule = self.rule_for(event)
             group = [event]
-            consumed.add(event.id)
 
-            if rule is not None:
-                candidate_matches = [
-                    candidate
-                    for candidate in candidates_by_id.values()
-                    if candidate.id != event.id
-                    and candidate.id not in consumed
-                    and candidate.action in rule.candidate_actions
-                    and self._within_window(event, candidate, rule.window_seconds)
-                    and rule.matches(event, candidate)
-                ]
-                candidate_matches.sort(key=lambda candidate: (abs(candidate.id - event.id), -candidate.id))
-                limit = rule.max_related(event)
-                if limit is not None:
-                    candidate_matches = candidate_matches[:limit]
-                group.extend(candidate_matches)
-                consumed.update(candidate.id for candidate in candidate_matches)
+            frontier = [event]
+            group_ids = {event.id}
+            while frontier:
+                anchor = frontier.pop()
+                candidate_matches = self._candidate_matches(
+                    anchor,
+                    candidates_by_id.values(),
+                    consumed=consumed,
+                    group_ids=group_ids,
+                )
+                for candidate in candidate_matches:
+                    group.append(candidate)
+                    group_ids.add(candidate.id)
+                    frontier.append(candidate)
+
+            consumed.update(group_ids)
 
             groups.append(RelatedGroup(tuple(sorted(group, key=lambda item: item.id, reverse=True))))
 
@@ -256,16 +188,56 @@ class RelatedResolver:
         delta = abs((anchor.created_at - candidate.created_at).total_seconds())
         return delta <= seconds
 
+    def _match_from(self, source: ModlogEvent, target: ModlogEvent, action: ModlogAction, rule: RelatedRule) -> bool:
+        return (
+            source.action == action.name
+            and target.action in rule.candidate_actions
+            and self._within_window(source, target, rule.window_seconds)
+            and rule.matches(source, target)
+        )
 
-register(ModlogAction(
-    name="integration_create",
-    name_text="Integration created",
-    desc_text="An integration was added to the server.",
-    related_rule=RelatedRule(
-        actions=frozenset({"integration_create", "bot_add"}),
-        candidate_actions=frozenset({"integration_create", "bot_add"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=different_action_same_actor,
-        max_related=one_related,
-    ),
-))
+    def _candidate_matches(
+        self,
+        anchor: ModlogEvent,
+        candidates: Iterable[ModlogEvent],
+        *,
+        consumed: set[int],
+        group_ids: set[int],
+    ) -> list[ModlogEvent]:
+        candidate_list = list(candidates)
+        forward_matches: list[ModlogEvent] = []
+        reverse_matches: list[ModlogEvent] = []
+
+        for candidate in candidate_list:
+            if candidate.id == anchor.id or candidate.id in consumed or candidate.id in group_ids:
+                continue
+
+            for action in self.actions:
+                for rule in action.related:
+                    if self._match_from(anchor, candidate, action, rule):
+                        forward_matches.append(candidate)
+                        break
+                    if self._match_from(candidate, anchor, action, rule):
+                        reverse_matches.append(candidate)
+                        break
+                else:
+                    continue
+                break
+
+        forward_matches.sort(key=lambda candidate: (abs(candidate.id - anchor.id), -candidate.id))
+        reverse_matches.sort(key=lambda candidate: (abs(candidate.id - anchor.id), -candidate.id))
+        if (action := self.action_for(anchor)) is not None and action.related:
+            rule = action.related[0]
+            limit = rule.max_related(anchor)
+            if limit is not None:
+                existing_forward_matches = sum(
+                    1
+                    for candidate in candidate_list
+                    if candidate.id != anchor.id
+                    and candidate.id in group_ids
+                    and self._match_from(anchor, candidate, action, rule)
+                )
+                limit = max(0, limit - existing_forward_matches)
+                forward_matches = forward_matches[:limit]
+
+        return [*forward_matches, *reverse_matches]

@@ -10,6 +10,8 @@ from modlog.audit_log import ModlogEvent
 UndoCriteria = Callable[[discord.Guild, ModlogEvent], Awaitable[Any]]
 UndoExec = Callable[[discord.Guild, ModlogEvent, Any], Awaitable[Any]]
 UndoDescription = str | Callable[[ModlogEvent, Any], str]
+RelatedMatch = Callable[[ModlogEvent, ModlogEvent], bool]
+RelatedLimit = Callable[[ModlogEvent], int | None]
 
 
 @dataclass(frozen=True)
@@ -20,12 +22,19 @@ class UndoRule:
 
 
 @dataclass(frozen=True)
+class RelatedRule:
+    candidate_actions: frozenset[str]
+    window_seconds: int
+    matches: RelatedMatch
+    max_related: RelatedLimit = lambda _event: None
+
+
+@dataclass(frozen=True)
 class ModlogAction:
     name: str
-    name_text: str | None = None
-    desc_text: str | None = None
-    related_rule: object | None = None
-    undo_rule: UndoRule | None = None
+    description: str | None = None
+    undo: UndoRule | None = None
+    related: tuple[RelatedRule, ...] = ()
 
 
 class ModlogActionRegistry:
@@ -37,10 +46,9 @@ class ModlogActionRegistry:
         if existing is not None:
             action = ModlogAction(
                 name=action.name,
-                name_text=action.name_text if action.name_text is not None else existing.name_text,
-                desc_text=action.desc_text if action.desc_text is not None else existing.desc_text,
-                related_rule=action.related_rule if action.related_rule is not None else existing.related_rule,
-                undo_rule=action.undo_rule if action.undo_rule is not None else existing.undo_rule,
+                description=action.description if action.description is not None else existing.description,
+                undo=action.undo if action.undo is not None else existing.undo,
+                related=action.related if action.related else existing.related,
             )
         self._actions[action.name] = action
         return action

@@ -13,10 +13,17 @@ from modlog.database import ModlogDatabase
 from modlog.lifecycle import (
     member_ban_event,
     member_join_event,
-    member_remove_event,
     member_unban_event,
     member_update_events,
-    message_event,
+    raw_bulk_message_delete_events,
+    raw_member_remove_event,
+    raw_message_delete_event,
+    raw_message_edit_event,
+    raw_reaction_action_event,
+    raw_reaction_clear_emoji_event,
+    raw_reaction_clear_event,
+    raw_thread_member_remove_events,
+    thread_member_join_event,
 )
 from modlog.related import RelatedGroup, RelatedResolver
 from modlog.undo import ModlogReverseAction, ModlogUndoResult, reverse_actions_for_event, undo_event
@@ -43,9 +50,15 @@ MODLOG_GROUP_CHAR_LIMIT = 1800
 GATEWAY_ACTIONS = (
     "on_message_delete",
     "on_bulk_message_delete",
-    "on_message_edit",
+    "on_raw_message_edit",
+    "on_raw_reaction_add",
+    "on_raw_reaction_remove",
+    "on_raw_reaction_clear",
+    "on_raw_reaction_clear_emoji",
+    "on_thread_member_join",
+    "on_raw_thread_member_remove",
     "on_member_join",
-    "on_member_remove",
+    "on_raw_member_remove",
     "on_member_update",
     "on_member_role_update",
     "on_member_ban",
@@ -757,7 +770,7 @@ def format_event_details(
         lines.append("")
         lines.append("### Reverse Actions")
         action_definition = ACTIONS.get(event.action)
-        undo_rule = action_definition.undo_rule if action_definition is not None else None
+        undo_rule = action_definition.undo if action_definition is not None else None
         for reverse in reverse_action_list:
             state = "possible" if reverse.possible else "not possible"
             reason = f": {discord.utils.escape_markdown(reverse.reason)}" if reverse.reason else ""
@@ -1165,7 +1178,7 @@ async def setup(bot: BotCore) -> None:
     def record_event(event: ModlogEvent, *, replace: bool = True) -> bool:
         return database.write_event(event, replace=replace)
 
-    @bot.connect_callback
+    @bot.ready_callback
     async def scan_since_last_connect() -> None:
         for guild in bot.guilds:
             if not await can_scan_audit_logs(bot, guild):
@@ -1205,25 +1218,58 @@ async def setup(bot: BotCore) -> None:
     async def record_audit_log_entry(entry: discord.AuditLogEntry) -> None:
         record_event(normalize_entry(entry))
 
-    @bot.message_delete_callback
-    async def record_message_delete(message: discord.Message) -> None:
-        event = message_event(action="on_message_delete", message=message)
+    @bot.listen("raw_message_delete")
+    async def record_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
+        event = raw_message_delete_event(payload)
         if event is not None:
             record_event(event)
 
-    @bot.bulk_message_delete_callback
-    async def record_bulk_message_delete(messages: list[discord.Message]) -> None:
-        for message in messages:
-            event = message_event(action="on_bulk_message_delete", message=message, bulk=True)
-            if event is not None:
-                record_event(event)
+    @bot.listen("raw_bulk_message_delete")
+    async def record_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent) -> None:
+        for event in raw_bulk_message_delete_events(payload):
+            record_event(event)
 
-    @bot.message_edit_callback
-    async def record_message_edit(before: discord.Message, after: discord.Message) -> None:
-        if before.content == after.content and before.attachments == after.attachments and before.embeds == after.embeds:
-            return
-        event = message_event(action="on_message_edit", message=after, before=before)
+    @bot.listen("raw_message_edit")
+    async def record_raw_message_edit(payload: discord.RawMessageUpdateEvent) -> None:
+        event = raw_message_edit_event(payload)
         if event is not None:
+            record_event(event)
+
+    @bot.listen("raw_reaction_add")
+    async def record_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
+        event = raw_reaction_action_event(action="on_raw_reaction_add", payload=payload)
+        if event is not None:
+            record_event(event)
+
+    @bot.listen("raw_reaction_remove")
+    async def record_raw_reaction_remove(payload: discord.RawReactionActionEvent) -> None:
+        event = raw_reaction_action_event(action="on_raw_reaction_remove", payload=payload)
+        if event is not None:
+            record_event(event)
+
+    @bot.listen("raw_reaction_clear")
+    async def record_raw_reaction_clear(payload: discord.RawReactionClearEvent) -> None:
+        event = raw_reaction_clear_event(payload)
+        if event is not None:
+            record_event(event)
+
+    @bot.listen("raw_reaction_clear_emoji")
+    async def record_raw_reaction_clear_emoji(payload: discord.RawReactionClearEmojiEvent) -> None:
+        event = raw_reaction_clear_emoji_event(payload)
+        if event is not None:
+            record_event(event)
+
+    @bot.listen("thread_member_join")
+    async def record_thread_member_join(member: discord.ThreadMember) -> None:
+        event = thread_member_join_event(member)
+        if event is not None:
+            record_event(event)
+
+    @bot.listen("raw_thread_member_remove")
+    async def record_raw_thread_member_remove(payload: discord.RawThreadMembersUpdate) -> None:
+        guild = bot.get_guild(payload.guild_id)
+        thread = guild.get_thread(payload.thread_id) if guild is not None else None
+        for event in raw_thread_member_remove_events(payload, thread):
             record_event(event)
 
     @bot.member_join_callback
@@ -1232,11 +1278,9 @@ async def setup(bot: BotCore) -> None:
         if event is not None:
             record_event(event)
 
-    @bot.member_remove_callback
-    async def record_member_remove(member: discord.Member | discord.User) -> None:
-        event = member_remove_event(member)
-        if event is not None:
-            record_event(event)
+    @bot.listen("raw_member_remove")
+    async def record_raw_member_remove(payload: discord.RawMemberRemoveEvent) -> None:
+        record_event(raw_member_remove_event(payload))
 
     @bot.member_update_callback
     async def record_member_update(before: discord.Member, after: discord.Member) -> None:

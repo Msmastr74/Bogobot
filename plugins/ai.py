@@ -937,7 +937,6 @@ async def setup(bot: 'BotCore'):
         AI_MANAGE_MEMORY_PERSISTENT_CAPABILITY,
     )
 
-    bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
     context_request_executor = ContextRequestExecutor(bot)
 

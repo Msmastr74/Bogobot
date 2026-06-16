@@ -560,7 +560,7 @@ async def setup(bot: BotCore) -> None:
         )
         await owner.write(PERMISSIONS_KEY, owner_perms)
 
-    @bot.connect_callback
+    @bot.ready_callback
     async def load_accounts() -> None:
         guild_count = 0
         member_count = 0

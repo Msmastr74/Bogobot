@@ -4,7 +4,6 @@ from typing import Any
 
 import discord
 
-from modlog import ModlogAction, UndoRule, register
 from modlog.actions import ACTIONS
 from modlog.audit_log import ModlogChange, ModlogEvent
 
@@ -235,8 +234,8 @@ async def _action_with_current_state(
 
 async def reverse_actions_for_event(guild: discord.Guild, event: ModlogEvent) -> list[ModlogReverseAction]:
     action = ACTIONS.get(event.action)
-    if action is not None and action.undo_rule is not None:
-        reverse = await action.undo_rule.criteria_fn(guild, event)
+    if action is not None and action.undo is not None:
+        reverse = await action.undo.criteria_fn(guild, event)
         if reverse is None:
             return []
         if isinstance(reverse, list):
@@ -527,8 +526,8 @@ async def undo_event(
 
     try:
         action_definition = ACTIONS.get(event.action)
-        if action_definition is not None and action_definition.undo_rule is not None:
-            result = await action_definition.undo_rule.exec_fn(guild, event, action)
+        if action_definition is not None and action_definition.undo is not None:
+            result = await action_definition.undo.exec_fn(guild, event, action)
             if isinstance(result, ModlogUndoResult):
                 return result
             return ModlogUndoResult(False, "Undo Failed", "The undo handler returned an invalid result.")
@@ -542,82 +541,3 @@ async def undo_event(
         return ModlogUndoResult(False, "Undo Failed", str(exc))
 
     return ModlogUndoResult(False, "Undo Not Implemented", "This undo is not implemented yet.")
-
-
-def _register_default_undo_actions() -> None:
-    register(ModlogAction(
-        name="ban",
-        name_text="Member banned",
-        desc_text="A member was banned from the server.",
-        undo_rule=UndoRule(
-            _criteria_member_unban,
-            _undo_member_unban,
-            description="Unban the member.",
-        ),
-    ))
-    register(ModlogAction(
-        name="unban",
-        name_text="Member unbanned",
-        desc_text="A member was unbanned from the server.",
-        undo_rule=UndoRule(
-            _criteria_member_ban,
-            _undo_member_ban,
-            description="Ban the member again.",
-        ),
-    ))
-    register(ModlogAction(
-        name="member_role_update",
-        name_text="Member roles changed",
-        desc_text="A member's role set changed.",
-        undo_rule=UndoRule(
-            _criteria_member_roles_revert,
-            _undo_member_roles_revert,
-            description="Revert the captured role delta.",
-        ),
-    ))
-    register(ModlogAction(
-        name="member_update",
-        name_text="Member updated",
-        desc_text="A member's server profile or moderation state changed.",
-        undo_rule=UndoRule(
-            _criteria_member_restore_fields,
-            _undo_member_restore_fields,
-            description="Restore captured member fields.",
-        ),
-    ))
-    for action_name, name_text in (
-        ("automod_rule_create", "Automod rule created"),
-        ("channel_create", "Channel created"),
-        ("emoji_create", "Emoji created"),
-        ("integration_create", "Integration created"),
-        ("role_create", "Role created"),
-        ("scheduled_event_create", "Scheduled event created"),
-        ("soundboard_sound_create", "Soundboard sound created"),
-        ("sticker_create", "Sticker created"),
-        ("thread_create", "Thread created"),
-    ):
-        existing = ACTIONS.get(action_name)
-        register(ModlogAction(
-            name=action_name,
-            name_text=existing.name_text if existing is not None and existing.name_text is not None else name_text,
-            desc_text=existing.desc_text if existing is not None else None,
-            related_rule=existing.related_rule if existing is not None else None,
-            undo_rule=UndoRule(
-                _criteria_delete_created_target,
-                _delete_created_target,
-                description="Delete the created object.",
-            ),
-        ))
-    register(ModlogAction(
-        name="invite_create",
-        name_text="Invite created",
-        desc_text="An invite was created.",
-        undo_rule=UndoRule(
-            _criteria_delete_invite,
-            _delete_invite,
-            description="Delete the created invite.",
-        ),
-    ))
-
-
-_register_default_undo_actions()
