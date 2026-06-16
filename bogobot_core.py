@@ -10,7 +10,7 @@ import importlib
 import contextvars
 import time
 from collections.abc import Sequence
-from typing import Any, Callable, TYPE_CHECKING, Concatenate, cast
+from typing import Any, Callable, TYPE_CHECKING, Concatenate, TypeVar, cast
 from ocr import LibTesseractOCR, OcrCrop, TESSDATA_FAST_URL
 from stream import StreamHandler
 from utils.accounts import AccountManager
@@ -65,6 +65,8 @@ if TYPE_CHECKING:
     from plugins.milestones import MilestoneTracker
     from plugins.telemetry import CommandTelemetryBase, CommandTelemetryEvent
 
+CFT = TypeVar("CFT", bound=Callable[..., Any])
+
 class BotCore(discord.Client):
     def __init__(self, config_path='config.json'):
         self.config_path = config_path
@@ -79,6 +81,7 @@ class BotCore(discord.Client):
         self._config_lock = asyncio.Lock()
         intents = discord.Intents.default()
         intents.members = True
+        intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.tree.on_error = self.on_tree_error
@@ -161,11 +164,37 @@ class BotCore(discord.Client):
         self._connected = False
         
         self.event(self.on_ready)
-        self.event(self.on_message)
-        self.event(self.on_member_join)
-        self.event(self.on_guild_join)
         self.callbacks = CallbackRegistry(logger=self.logger.getChild("Callbacks"))
         self.milestones: 'MilestoneTracker | None' = None
+
+    def _listener_event_name(self, name: str) -> str:
+        return name.removeprefix("on_")
+
+    def dispatch(self, event: str, /, *args: Any, **kwargs: Any) -> None:
+        super().dispatch(event, *args, **kwargs)
+        if event == "ready":
+            return
+
+        if self.callbacks.has_event(event):
+            self._schedule_event(
+                self.callbacks.execute_async,
+                event,
+                event,
+                *args,
+                **kwargs,
+            )
+
+    def add_listener(self, func: Callable[..., Any], /, name: str | None = None) -> None:
+        self.callbacks.register(self._listener_event_name(name or func.__name__), func)
+
+    def remove_listener(self, func: Callable[..., Any], /, name: str | None = None) -> None:
+        self.callbacks.remove(self._listener_event_name(name or func.__name__), func)
+
+    def listen(self, name: str | None = None) -> Callable[[CFT], CFT]:
+        def decorator(func: CFT) -> CFT:
+            self.add_listener(func, name)
+            return func
+        return decorator
 
     def _account_role_ids(self, guild_id: int, user_id: str) -> Sequence[int]:
         guild = self.get_guild(guild_id)
@@ -227,8 +256,8 @@ class BotCore(discord.Client):
         self.callbacks.register('init', callback)
         return callback
 
-    def connect_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
-        self.callbacks.register('connect', callback)
+    def ready_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
+        self.callbacks.register('ready', callback)
         return callback
 
     def close_callback(self, callback: AsyncCallback[[], MaybeAwaitableT]):
@@ -307,8 +336,33 @@ class BotCore(discord.Client):
         self.callbacks.register('member_join', callback)
         return callback
 
-    async def on_member_join(self, member: discord.Member | discord.User):
-        await self.callbacks.execute_async('member_join', member)
+    def member_remove_callback(
+        self,
+        callback: AsyncCallback[[discord.Member | discord.User], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_remove', callback)
+        return callback
+
+    def member_update_callback(
+        self,
+        callback: AsyncCallback[[discord.Member, discord.Member], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_update', callback)
+        return callback
+
+    def member_ban_callback(
+        self,
+        callback: AsyncCallback[[discord.Guild, discord.User | discord.Member], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_ban', callback)
+        return callback
+
+    def member_unban_callback(
+        self,
+        callback: AsyncCallback[[discord.Guild, discord.User], MaybeAwaitableT]
+    ):
+        self.callbacks.register('member_unban', callback)
+        return callback
 
     def guild_join_callback(
         self,
@@ -317,8 +371,12 @@ class BotCore(discord.Client):
         self.callbacks.register('guild_join', callback)
         return callback
 
-    async def on_guild_join(self, guild: discord.Guild):
-        await self.callbacks.execute_async('guild_join', guild)
+    def audit_log_entry_callback(
+        self,
+        callback: AsyncCallback[[discord.AuditLogEntry], MaybeAwaitableT],
+    ):
+        self.callbacks.register('audit_log_entry_create', callback)
+        return callback
 
     def message_callback(
         self,
@@ -327,8 +385,40 @@ class BotCore(discord.Client):
         self.callbacks.register('message', callback)
         return callback
 
-    async def on_message(self, message: discord.Message):
-        await self.callbacks.execute_async('message', message)
+    def message_delete_callback(
+        self,
+        callback: AsyncCallback[[discord.Message], MaybeAwaitableT],
+    ):
+        self.callbacks.register('message_delete', callback)
+        return callback
+
+    def bulk_message_delete_callback(
+        self,
+        callback: AsyncCallback[[list[discord.Message]], MaybeAwaitableT],
+    ):
+        self.callbacks.register('bulk_message_delete', callback)
+        return callback
+
+    def raw_message_delete_callback(
+        self,
+        callback: AsyncCallback[[discord.RawMessageDeleteEvent], MaybeAwaitableT],
+    ):
+        self.callbacks.register('raw_message_delete', callback)
+        return callback
+
+    def raw_bulk_message_delete_callback(
+        self,
+        callback: AsyncCallback[[discord.RawBulkMessageDeleteEvent], MaybeAwaitableT],
+    ):
+        self.callbacks.register('raw_bulk_message_delete', callback)
+        return callback
+
+    def message_edit_callback(
+        self,
+        callback: AsyncCallback[[discord.Message, discord.Message], MaybeAwaitableT],
+    ):
+        self.callbacks.register('message_edit', callback)
+        return callback
 
     class _Discord:
         def __init__(self, outer: 'BotCore'):
@@ -576,7 +666,7 @@ class BotCore(discord.Client):
                 self.logger.exception("Failed initializing notifications")
             await self.callbacks.execute_async('init')
         
-        await self.callbacks.execute_async('connect')
+        await self.callbacks.execute_async('ready')
 
     async def load_plugins(self, folder_name="plugins"):
         logger = self.logger.getChild("Plugins")

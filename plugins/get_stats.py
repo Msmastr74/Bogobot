@@ -448,6 +448,7 @@ async def setup(bot: BotCore) -> None:
         storage_key="stats_monitor_messages",
         display_name="Stats monitor",
         initial_payload=stats_payload,
+        capability="monitor.stats",
     )
     stats_monitor.command(
         manage,

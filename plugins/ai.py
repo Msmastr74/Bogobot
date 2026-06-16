@@ -15,6 +15,7 @@ from discord.ui.view import BaseView
 from pydantic import AliasPath, Field, field_validator
 
 from typing import TYPE_CHECKING, Any, Awaitable, Literal, Optional, Sequence, TypedDict, TypeAlias, Callable, cast
+from modlog import ModlogAction, modlog_writer
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from ai.context import ContextRequest, HistoryMessage, PersistentMemory, close_system_tag, open_system_tag
 from utils.discord import InteractionModal, chunk_text, count_characters, split_text_to_character_limit
@@ -551,8 +552,6 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
     resolved = message.reference.resolved
     if not isinstance(resolved, discord.Message):
         return None
-    if resolved.author.id != bot.user.id:
-        return None
 
     text = read_text_from_message(resolved)
     if not text:
@@ -932,6 +931,7 @@ async def capture_interaction_output(interaction: discord.Interaction):
 async def setup(bot: 'BotCore'):
     ai_core = setup_ai(bot)
     manage = groups.manage(bot)
+    write_ai = modlog_writer(ModlogAction("ai", "AI configuration or memory was changed."))
     bot.accounts.capabilities.register(
         USER_AI_CAPABILITY,
         AI_MANAGE_CONFIG_CAPABILITY,
@@ -939,7 +939,6 @@ async def setup(bot: 'BotCore'):
         AI_MANAGE_MEMORY_PERSISTENT_CAPABILITY,
     )
 
-    bot.event(bot.on_message)
     break_task: asyncio.Task[None] | None = None
     context_request_executor = ContextRequestExecutor(bot)
 
@@ -1047,9 +1046,18 @@ async def setup(bot: 'BotCore'):
             ))
 
         async def set_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
+            previous = ai_config.enabled
             ai_config.enabled = enabled
             ai_core.configure(enabled=enabled, base_url=ai_config.base_url)
             await save_ai_config()
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "config.enabled",
+                    "old": previous,
+                    "new": enabled,
+                },
+            )
             await interaction.response.edit_message(view=AIManagementView())
 
         async def enable_ai(self, interaction: discord.Interaction) -> None:
@@ -1063,9 +1071,18 @@ async def setup(bot: 'BotCore'):
             await interaction.response.send_modal(modal)
 
         async def set_breaks_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
+            previous = ai_config.breaks.enabled
             ai_config.breaks.enabled = enabled
             await save_ai_config()
             await restart_break_task()
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "config.breaks.enabled",
+                    "old": previous,
+                    "new": enabled,
+                },
+            )
             await interaction.response.edit_message(view=AIManagementView())
 
         async def enable_breaks(self, interaction: discord.Interaction) -> None:
@@ -1099,8 +1116,17 @@ async def setup(bot: 'BotCore'):
 
         async def on_submit(self, interaction: discord.Interaction) -> None:
             await bot.discord.defer(ephemeral=True)
+            previous_length = count_characters(ai_config.custom_instruction_text)
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "config.custom_instruction_text",
+                    "old_length": previous_length,
+                    "new_length": count_characters(ai_config.custom_instruction_text),
+                },
+            )
             await self.original_interaction.edit_original_response(view=AIManagementView())
             await bot.discord.send("Updated custom instructions.", response=True, ephemeral=True)
 
@@ -1135,10 +1161,25 @@ async def setup(bot: 'BotCore'):
                 return
             await bot.discord.defer(ephemeral=True)
 
+            previous = {
+                "active_minutes": ai_config.breaks.active_minutes,
+                "break_minutes": ai_config.breaks.break_minutes,
+            }
             ai_config.breaks.active_minutes = active_minutes
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "config.breaks",
+                    "old": previous,
+                    "new": {
+                        "active_minutes": active_minutes,
+                        "break_minutes": break_minutes,
+                    },
+                },
+            )
             await self.original_interaction.edit_original_response(view=AIManagementView())
             await bot.discord.send("Updated AI break settings.", response=True, ephemeral=True)
 
@@ -1216,8 +1257,18 @@ async def setup(bot: 'BotCore'):
             if self.action == "delete" and self.item is not None:
                 if isinstance(self.item, HistoryMessage):
                     ai_core.context.remove_history_message(int(self.item.id or 0))
+                    item_kind = "channel_history"
                 else:
                     ai_core.context.remove_persistent_memory(int(self.item.id or 0))
+                    item_kind = "persistent_memory"
+                await write_ai(
+                    interaction,
+                    extra={
+                        "action": "memory.delete",
+                        "kind": item_kind,
+                        "memory_id": int(self.item.id or 0),
+                    },
+                )
                 view.render()
                 await interaction.response.edit_message(view=view)
                 return
@@ -1481,9 +1532,20 @@ async def setup(bot: 'BotCore'):
                 return
             if isinstance(self.item, HistoryMessage):
                 ai_core.context.edit_history_message(int(self.item.id or 0), value)
+                item_kind = "channel_history"
             else:
                 ai_core.context.edit_persistent_memory(int(self.item.id or 0), value)
+                item_kind = "persistent_memory"
             await bot.discord.defer(ephemeral=True)
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "memory.edit",
+                    "kind": item_kind,
+                    "memory_id": int(self.item.id or 0),
+                    "new_length": count_characters(value),
+                },
+            )
             self.view_ref.render()
             await self.original_interaction.edit_original_response(view=self.view_ref)
             await bot.discord.send(f"Updated memory `{self.item.id}`.", response=True, ephemeral=True)
@@ -1527,9 +1589,21 @@ async def setup(bot: 'BotCore'):
                     await bot.discord.send("Channel history is unavailable here.", response=True, ephemeral=True)
                     return
                 memory = ai_core.context.create_history_message(channel_id, cast(Literal["user", "assistant"], raw_role), value)
+                item_kind = "channel_history"
             else:
                 memory = ai_core.context.create_persistent_memory(value)
+                item_kind = "persistent_memory"
             await bot.discord.defer(ephemeral=True)
+            await write_ai(
+                interaction,
+                extra={
+                    "action": "memory.create",
+                    "kind": item_kind,
+                    "memory_id": int(memory.id or 0) if memory is not None else None,
+                    "role": getattr(memory, "role", None) if memory is not None else None,
+                    "length": count_characters(value),
+                },
+            )
             self.view_ref.render()
             await self.original_interaction.edit_original_response(view=self.view_ref)
             await bot.discord.send(f"Created memory `{memory.id if memory else 'unknown'}`.", response=True, ephemeral=True)

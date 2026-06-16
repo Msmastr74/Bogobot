@@ -8,6 +8,7 @@ import discord
 from pydantic import ValidationError, field_validator, model_validator
 
 from bogobot_core import BotCore
+from modlog import ModlogAction, modlog_writer
 from ai import AIParam, action
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from utils.discord import count_characters
@@ -540,6 +541,7 @@ async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
     sorted_emoji = bot.discord.get_emoji("sorted")
     star_emoji = "⭐"
+    write_bogotree = modlog_writer(ModlogAction("games.bogotree", "Bogotree game state was changed."))
     bot.accounts.capabilities.register(BOGOTREE_RESET_CAPABILITY)
 
     def game_guild_id(interaction: discord.Interaction) -> int:
@@ -648,6 +650,13 @@ async def setup(bot: BotCore):
                 state = default_state()
                 await save_state(guild_id, state)
                 await reset_user_scores(guild_id)
+            await write_bogotree(
+                interaction,
+                extra={
+                    "action": "reset",
+                    "guild_id": guild_id,
+                },
+            )
             await bot.discord.send(
                 view=BogotreeView(title="Bogotree Reset", state=state),
                 response=True,

@@ -3,6 +3,7 @@ from typing import Sequence
 import discord
 from discord import app_commands
 
+from modlog import ModlogAction, modlog_writer
 from utils.transformers import ColourTransformer, IntTransformer
 from bogobot_core import BotCore
 from utils import groups
@@ -214,6 +215,7 @@ class AnnounceView(discord.ui.LayoutView):
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
+    write_discord = modlog_writer(ModlogAction("discord", "A Discord-facing bot message action was performed."))
 
     async def create_announcement_files(
         attachments: list[discord.Attachment],
@@ -450,6 +452,18 @@ async def setup(bot: BotCore):
             )
             if not applied:
                 return
+            await write_discord(
+                interaction,
+                extra={
+                    "action": "announce.edit" if self.message_id is not None else "announce.send",
+                    "message_id": self.message_id,
+                    "attachments": len(self.attachments),
+                    "message_container": self.message_container,
+                    "attachments_container": self.attachments_container,
+                    "has_title": self.message_title is not None,
+                    "message_length": len(self.message.value),
+                },
+            )
             await bot.discord.send(
                 contents=f"The announcement message was successfully {'edited' if self.message_id is not None else 'sent'}.",
                 response=True,
@@ -543,6 +557,18 @@ async def setup(bot: BotCore):
         )
         if not applied:
             return
+        await write_discord(
+            interaction,
+            extra={
+                "action": "announce.edit" if message_id is not None else "announce.send",
+                "message_id": message_id,
+                "attachments": len(attachments),
+                "message_container": message_container,
+                "attachments_container": attachments_container,
+                "has_title": title is not None,
+                "message_length": len(message),
+            },
+        )
         await bot.discord.send(
             contents=f"The announcement message was successfully {'edited' if message_id is not None else 'sent'}.",
             response=True,

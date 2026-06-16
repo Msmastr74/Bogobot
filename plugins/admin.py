@@ -8,6 +8,7 @@ from typing import Literal, TYPE_CHECKING
 
 import discord
 from discord import app_commands
+from modlog import ModlogAction, modlog_writer
 from utils.pagination import Page, PageSection, PaginatedView, SectionRead
 from utils import groups
 from utils.transformers import IntTransformer
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "FATAL"]
+CENSOR_PATH = "log_censor.txt"
 log_level_mapping: dict[LogLevel, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -68,6 +70,7 @@ class MemoryLogHandler(logging.Handler):
         super().__init__()
         self.records: deque[LogEntry] = deque(maxlen=capacity)
         self.next_counter = 1
+        self.censored_values = self._load_censored_values()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -77,6 +80,7 @@ class MemoryLogHandler(logging.Handler):
                 message = f"{message}\n{formatter.formatException(record.exc_info)}"
             if record.stack_info:
                 message = f"{message}\n{record.stack_info}"
+            message = self._censor(message)
             self.records.append(LogEntry(
                 counter=self.next_counter,
                 created_at=int(record.created),
@@ -88,6 +92,24 @@ class MemoryLogHandler(logging.Handler):
             self.next_counter += 1
         except Exception:
             self.handleError(record)
+
+    def _load_censored_values(self) -> tuple[str, ...]:
+        if not os.path.exists(CENSOR_PATH):
+            return ()
+        try:
+            with open(CENSOR_PATH, "r", encoding="utf-8") as file:
+                return tuple(
+                    line
+                    for raw_line in file
+                    if (line := raw_line.rstrip("\n"))
+                )
+        except OSError:
+            return ()
+
+    def _censor(self, message: str) -> str:
+        for value in self.censored_values:
+            message = message.replace(value, "[censored]")
+        return message
 
     def configure_capacity(self, capacity: int) -> None:
         capacity = max(100, capacity)
@@ -360,6 +382,10 @@ async def setup(bot: "BotCore"):
     manage = groups.manage(bot)
     MEMORY_LOG_HANDLER.configure_capacity(int(bot.config.get("log_capacity", 3000)))
     handler = MEMORY_LOG_HANDLER
+    write_system_state = modlog_writer(ModlogAction("system.state", "Bot process state was changed."))
+    write_system_logs = modlog_writer(ModlogAction("system.logs", "A bot log message was written."))
+    write_system_loglevel = modlog_writer(ModlogAction("system.loglevel", "Runtime log level was changed."))
+    write_discord = modlog_writer(ModlogAction("discord", "A Discord-facing bot message action was performed."))
 
     @manage.command(
         name="state",
@@ -371,6 +397,7 @@ async def setup(bot: "BotCore"):
         action: Literal["restart", "stop"],
     ):
         if action == "restart":
+            await write_system_state(interaction, extra={"action": "restart"})
             await bot.discord.send("Restarting...", response=True)
             bot.logger.critical("Restarting process by command request.")
             with contextlib.suppress(Exception):
@@ -379,6 +406,7 @@ async def setup(bot: "BotCore"):
             return
 
         if action == "stop":
+            await write_system_state(interaction, extra={"action": "stop"})
             await bot.discord.send("Stopping main bot...", response=True)
             bot.logger.critical("Shutting down process by command request.")
             with contextlib.suppress(Exception):
@@ -396,6 +424,14 @@ async def setup(bot: "BotCore"):
             logger = bot.logger.getChild("UserLog")
             log_message = f"{interaction.user} ({interaction.user.id}): {message}"
             logger.log(log_level_mapping[level], log_message)
+            await write_system_logs(
+                interaction,
+                extra={
+                    "action": "write",
+                    "level": level,
+                    "message_length": len(message),
+                },
+            )
             records = handler.snapshot()
             end = len(records)
             
@@ -458,6 +494,15 @@ async def setup(bot: "BotCore"):
         bot.logger.warning(
             f"{interaction.user} ({interaction.user.id}) changed runtime log level "
             f"from {previous_level} to {level}."
+        )
+        await write_system_loglevel(
+            interaction,
+            extra={
+                "action": "set",
+                "old": previous_level,
+                "new": level,
+                "root_level": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+            },
         )
         await bot.discord.send(
             f"Runtime log level changed from `{previous_level}` to `{level}`.",
@@ -541,6 +586,17 @@ async def setup(bot: "BotCore"):
                     )
                     return
                 await message.reply(content=content)
+
+            await write_discord(
+                interaction,
+                extra={
+                    "action": f"message.{action}",
+                    "message_id": message_id,
+                    "channel_id": channel_id,
+                    "emoji": emoji,
+                    "content_length": len(content) if content is not None else None,
+                },
+            )
             
             await bot.discord.send(
                 contents=f"Action `{action}` succeeded.",

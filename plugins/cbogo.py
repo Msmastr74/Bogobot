@@ -7,6 +7,7 @@ import discord
 from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
 
 from bogobot_core import BotCore
+from modlog import ModlogAction, modlog_writer
 from ai import AIParam, action
 from utils.accounts import GLOBAL_GUILD_ACCOUNT_ID
 from utils.discord import count_characters
@@ -514,6 +515,7 @@ def run_shuffles(values: list[int]) -> tuple[list[int], int, int]:
 async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
     sorted_emoji = bot.discord.get_emoji("sorted")
+    write_cbogo = modlog_writer(ModlogAction("games.cbogo", "cbogo game state was changed."))
     bot.accounts.capabilities.register(CBOGO_RESET_CAPABILITY)
     bot.accounts.capabilities.register(CBOGO_RESET_LAST_USER_CAPABILITY)
 
@@ -615,6 +617,13 @@ async def setup(bot: BotCore):
                 state = default_state()
                 await save_state(guild_id, state)
                 await reset_user_scores(guild_id)
+            await write_cbogo(
+                interaction,
+                extra={
+                    "action": "reset",
+                    "guild_id": guild_id,
+                },
+            )
             await bot.discord.send(
                 view=CbogoView(title="cbogo reset", state=state),
                 response=True,
@@ -643,6 +652,14 @@ async def setup(bot: BotCore):
                     ephemeral=True
                 )
                 return
+            await write_cbogo(
+                interaction,
+                extra={
+                    "action": "reset_last_user",
+                    "guild_id": guild_id,
+                    "old_last_user": old_last_user,
+                },
+            )
             await bot.discord.send(
                 f"Reset last user from <@{old_last_user}> to None.",
                 response=True,

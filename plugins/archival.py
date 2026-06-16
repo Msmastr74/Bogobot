@@ -12,6 +12,7 @@ import time
 from typing import Literal
 
 import discord
+from modlog import ModlogAction, modlog_writer
 from PIL import Image
 
 from bogobot_core import BotCore
@@ -363,6 +364,7 @@ def resolve_archive_scan_window(
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
+    write_archive = modlog_writer(ModlogAction("archive", "Video archive recording was changed."))
     archive_group = groups.archive(bot)
     archive_config_raw = bot.config.get("archive", {})
     archive_config = archive_config_raw if isinstance(archive_config_raw, dict) else {}
@@ -836,6 +838,14 @@ async def setup(bot: BotCore):
             video_archiver.start()
             await set_video_archive_enabled(True)
             status = video_archiver.status()
+            await write_archive(
+                interaction,
+                extra={
+                    "action": "start",
+                    "current_path": str(status.current_path) if status.current_path is not None else None,
+                    "running": status.running,
+                },
+            )
             await bot.discord.send(
                 f"Video archive recording started. Current file: `{status.current_path or 'pending first frame'}`",
                 response=True,
@@ -846,6 +856,15 @@ async def setup(bot: BotCore):
         if action == "stop":
             video_archiver.stop()
             await set_video_archive_enabled(False)
+            status = video_archiver.status()
+            await write_archive(
+                interaction,
+                extra={
+                    "action": "stop",
+                    "current_path": str(status.current_path) if status.current_path is not None else None,
+                    "running": status.running,
+                },
+            )
             await bot.discord.send(
                 "Video archive recording stopped.",
                 response=True,
@@ -858,6 +877,14 @@ async def setup(bot: BotCore):
             video_archiver.start()
             await set_video_archive_enabled(True)
             status = video_archiver.status()
+            await write_archive(
+                interaction,
+                extra={
+                    "action": "restart",
+                    "current_path": str(status.current_path) if status.current_path is not None else None,
+                    "running": status.running,
+                },
+            )
             await bot.discord.send(
                 f"Video archive recording restarted. Current file: `{status.current_path or 'pending first frame'}`",
                 response=True,

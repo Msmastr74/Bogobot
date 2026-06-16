@@ -193,6 +193,7 @@ async def setup(bot: BotCore):
         storage_key="leaderboard_monitor_messages",
         display_name="Leaderboard monitor",
         initial_payload=monitor_payload,
+        capability="monitor.leaderboard",
     )
     leaderboard_monitor.command(
         manage,

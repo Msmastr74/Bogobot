@@ -5,6 +5,7 @@ from utils.type import ObjectWithCommandDecorator, P, R, T
 
 import discord
 
+from modlog import ModlogAction, modlog_writer
 from utils.tracker import Tracker
 
 from bogobot_core import BotCore
@@ -28,11 +29,17 @@ class PersistentChannelMonitor:
         storage_key: str,
         display_name: str,
         initial_payload: PayloadFactory,
+        capability: str,
     ):
         self.bot = bot
         self.storage_key = storage_key
         self.display_name = display_name
         self.initial_payload = initial_payload
+        self.capability = capability
+        self.write_modlog = modlog_writer(ModlogAction(
+            capability,
+            f"{display_name} state was changed.",
+        ))
         self.tracker = Tracker[int, int](
             load=self._load_messages,
             save=self._save_messages,
@@ -50,6 +57,8 @@ class PersistentChannelMonitor:
         *args: P.args,
         **kwargs: P.kwargs
     ):
+        kwargs.setdefault("capabilities", [self.capability])
+
         @root.command(*args, **kwargs)
         async def monitor_command(
             interaction: discord.Interaction,
@@ -84,6 +93,14 @@ class PersistentChannelMonitor:
 
             await self.tracker.remove(channel_id)
             await self._delete_message(channel_id, int(existing_message_id))
+            await self.write_modlog(
+                interaction,
+                extra={
+                    "action": "stop",
+                    "channel_id": channel_id,
+                    "old_message_id": int(existing_message_id),
+                },
+            )
             await self.bot.discord.send(
                 f"{self.display_name} stopped in this channel.",
                 response=True,
@@ -117,6 +134,15 @@ class PersistentChannelMonitor:
             self.bot.edits.register(message)
             await self.tracker.set(channel_id, message.id)
             await self._delete_message(channel_id, int(existing_message_id))
+            await self.write_modlog(
+                interaction,
+                extra={
+                    "action": "resend",
+                    "channel_id": channel_id,
+                    "old_message_id": int(existing_message_id),
+                    "new_message_id": message.id,
+                },
+            )
             await self.bot.discord.send(
                 f"{self.display_name} resent in this channel.",
                 response=True,
@@ -140,6 +166,14 @@ class PersistentChannelMonitor:
 
         self.bot.edits.register(message)
         await self.tracker.set(channel_id, message.id)
+        await self.write_modlog(
+            interaction,
+            extra={
+                "action": "start",
+                "channel_id": channel_id,
+                "message_id": message.id,
+            },
+        )
         await self.bot.discord.send(
             f"{self.display_name} online in this channel.",
             response=True,

@@ -228,7 +228,7 @@ The plugin keeps a small recent-action buffer for `/manage telemetry` and builds
 ## Accounts
 Account storage and permission logic live in `utils.accounts`, separate from the `/accounts` command plugin.
 
-`AccountManager` owns the account JSON file, normalizes account records, and serializes writes through an async lock. It exposes a capability registry and account handles used for command permission checks. The `/accounts` plugin registers a `connect_callback` to hydrate visible guild member accounts on every Discord ready event and to ensure the configured owner has the owner wildcard.
+`AccountManager` owns the account JSON file, normalizes account records, and serializes writes through an async lock. It exposes a capability registry and account handles used for command permission checks. The `/accounts` plugin registers a `ready_callback` to hydrate visible guild member accounts on every Discord ready event and to ensure the configured owner has the owner wildcard.
 
 `accounts[uid]` returns an `Account` handle. Missing accounts read as a fake account with default capabilities. `account[key]` reads root-level account data, `await account.write(key, value)` creates the account if needed and writes under the manager lock, and `account.lock` exposes that lock for larger grouped operations. Plugin annotations are root-level account fields beside `permissions`.
 
@@ -242,12 +242,12 @@ Plugins are independent Python files located in the `/plugins` directory.
 Plugins can register lifecycle callbacks through decorators on `BotCore`:
 
 - `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
-- `@bot.connect_callback`: Runs on every Discord ready event, before the one-time connected guard. Use it for state that should refresh after reconnects.
+- `@bot.ready_callback`: Runs on every Discord ready event after the one-time initialization logic. Use it for state that should refresh after reconnects.
 - `@bot.close_callback`: Runs during bot shutdown.
 - `@bot.new_frame_callback`: Runs for each received stream frame. In OCR mode, `stats.py` uses this for visual sort detection, OCR, and milestone updates.
 - `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives `new_values: list[tuple[bool, int]]`, `new_value: int`, and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
-- `@bot.message_callback`: Runs for Discord messages after a plugin attaches `bot.on_message` as a Discord event.
+- `@bot.message_callback`: Typed helper for Discord `message` events. `@bot.listen("message")` can be used directly for the same event.
 
 Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. See `AI.md` for the AI action API, passive context requests, and runtime behavior.
 

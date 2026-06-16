@@ -10,7 +10,7 @@ class CallbackRegistry:
         self._callbacks: dict[str, list[Callable]] = {}
         def _log_exc(text: str, exc: Exception):
             if logger:
-                logger.warning(text, exc_info=True)
+                logger.warning(text, exc_info=exc)
             else:
                 print(f"{text}: {exc}")
         self._log_exc = _log_exc
@@ -19,6 +19,18 @@ class CallbackRegistry:
         if event not in self._callbacks:
             self._callbacks[event] = []
         self._callbacks[event].append(callback)
+
+    def has_event(self, event: str) -> bool:
+        return bool(self._callbacks.get(event))
+
+    def remove(self, event: str, callback: Callable) -> None:
+        callbacks = self._callbacks.get(event)
+        if callbacks is None:
+            return
+        try:
+            callbacks.remove(callback)
+        except ValueError:
+            pass
     
     def execute(self, event: str, *args, **kwargs):
         if event not in self._callbacks:

@@ -6,6 +6,7 @@ from typing import cast
 import discord
 
 from bogobot_core import BotCore
+from modlog import ModlogAction, message_entity, modlog_writer
 from utils import groups
 from utils.captcha import LABELS, CaptchaChallenge, OcclusionPathCaptchaGenerator, is_expired, verify_answer
 from utils import security_roles
@@ -252,6 +253,7 @@ async def setup(bot: BotCore) -> None:
         expires_in_seconds=int(VERIFY_CAPTCHA_TIMEOUT_SECONDS),
     )
     manage = groups.manage(bot)
+    write_verification = modlog_writer(ModlogAction("verification", "Verification panel or roles were changed."))
     bot.add_view(VerifyPanelView(bot=bot, cooldowns=cooldowns, generator=generator))
 
     @manage.command(
@@ -304,14 +306,40 @@ async def setup(bot: BotCore) -> None:
                 response=True
             )
             return
+        previous_roles = dict(security_roles.role_config(bot, guild.id))
         await security_roles.set_roles(
             bot,
             verified=verified_role,
             quarantine=quarantine_role,
         )
         channel = cast('discord.abc.MessageableChannel', interaction.channel)
-        await channel.send(
+        message = await channel.send(
             view=VerifyPanelView(bot=bot, cooldowns=cooldowns, generator=generator),
+        )
+        await write_verification(
+            interaction,
+            target=message_entity(message),
+            extra={
+                "action": "create_verification",
+                "verified_role_id": verified_role.id,
+                "quarantine_role_id": quarantine_role.id,
+                "message_id": message.id,
+                "channel_id": message.channel.id,
+            },
+            raw={
+                "verification": {
+                    "previous_roles": {
+                        security_roles.VERIFIED_ROLE_ID_KEY: previous_roles.get(security_roles.VERIFIED_ROLE_ID_KEY),
+                        security_roles.QUARANTINE_ROLE_ID_KEY: previous_roles.get(security_roles.QUARANTINE_ROLE_ID_KEY),
+                    },
+                    "new_roles": {
+                        security_roles.VERIFIED_ROLE_ID_KEY: verified_role.id,
+                        security_roles.QUARANTINE_ROLE_ID_KEY: quarantine_role.id,
+                    },
+                    "message_id": message.id,
+                    "channel_id": message.channel.id,
+                },
+            },
         )
         await bot.discord.send(
             "Successfully sent a persistent verification prompt.",

@@ -82,7 +82,7 @@ Global management capabilities can affect global or server-local targets. Server
 - `/accounts preset action:show name:name`: Shows the expanded capability list for a preset.
 - `/accounts preset action:create name:name capabilities:a,b,c`: Creates or replaces a custom preset. Names use `\w+`, or `server.\w+` to define the server-specific version used by `server.(name)`.
 - `/accounts preset action:remove name:name`: Removes a custom preset.
-- Global presets: `default`, `user`, `ai`, `moderator`, `admin`.
+- Global presets: `default`, `user`, `ai`, `auditor`, `moderator`, `admin`.
 
 Custom presets are stored globally in config under `account_capability_presets`. Preset capability entries can include `server.` or `.use` / `.grant`; these prefixes and suffixes are canonicalized when the preset resolves.
 
@@ -125,6 +125,13 @@ Account info and account listing are intentionally public through normal `comman
 ## Milestones
 
 - `milestones.manage`: Manage milestone subscriptions, spoofing, and rate-limit state.
+
+## Monitors
+
+- `monitor.values`: Start, stop, or resend the stream value monitor.
+- `monitor.stats`: Start, stop, or resend the Bogostream stats monitor.
+- `monitor.leaderboard`: Start, stop, or resend the Sortoffs leaderboard monitor.
+- `monitor.live_chat`: Start, stop, or resend the live chat monitor.
 
 ## Raid Protection
 
