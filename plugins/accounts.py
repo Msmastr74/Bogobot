@@ -42,6 +42,9 @@ BASE_CAPABILITY_PRESETS: dict[str, tuple[str, ...]] = {
     "default": tuple(default_capabilities()),
     "user": ("commands", "user"),
     "ai": ("user.ai",),
+    "auditor": (
+        "modlog.view.use",
+    ),
     "moderator": (
         "accounts.ban.use",
         "ai.activity.use",

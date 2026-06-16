@@ -82,7 +82,7 @@ Global management capabilities can affect global or server-local targets. Server
 - `/accounts preset action:show name:name`: Shows the expanded capability list for a preset.
 - `/accounts preset action:create name:name capabilities:a,b,c`: Creates or replaces a custom preset. Names use `\w+`, or `server.\w+` to define the server-specific version used by `server.(name)`.
 - `/accounts preset action:remove name:name`: Removes a custom preset.
-- Global presets: `default`, `user`, `ai`, `moderator`, `admin`.
+- Global presets: `default`, `user`, `ai`, `auditor`, `moderator`, `admin`.
 
 Custom presets are stored globally in config under `account_capability_presets`. Preset capability entries can include `server.` or `.use` / `.grant`; these prefixes and suffixes are canonicalized when the preset resolves.
 

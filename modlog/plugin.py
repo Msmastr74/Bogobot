@@ -19,7 +19,6 @@ from modlog.lifecycle import (
     raw_member_remove_event,
     raw_message_delete_event,
     raw_message_edit_event,
-    raw_reaction_action_event,
     raw_reaction_clear_emoji_event,
     raw_reaction_clear_event,
     raw_thread_member_remove_events,
@@ -34,6 +33,7 @@ MAX_EVENT_LINES = 10
 MAX_ACTION_CHOICES = 25
 MAX_EVENTS_PER_PAGE = 10
 MODLOG_UNDO_CAPABILITY = "modlog.undo"
+MODLOG_VIEW_SENSITIVE_CAPABILITY = "modlog.view_sensitive"
 AUDIT_LOG_RESCAN_OVERLAP = timedelta(minutes=10)
 DETAIL_VALUE_LIMIT = 1000
 MESSAGE_CONTENT_PREVIEW_LIMIT = 2800
@@ -53,8 +53,6 @@ GATEWAY_ACTIONS = (
     "on_message_delete",
     "on_bulk_message_delete",
     "on_raw_message_edit",
-    "on_raw_reaction_add",
-    "on_raw_reaction_remove",
     "on_raw_reaction_clear",
     "on_raw_reaction_clear_emoji",
     "on_thread_member_join",
@@ -596,6 +594,16 @@ def _view_event(view: discord.ui.View | discord.ui.LayoutView, event_id: int | N
     return None
 
 
+def _can_view_sensitive(interaction: discord.Interaction) -> bool:
+    bot = interaction.client
+    if not isinstance(bot, BotCore):
+        return False
+    return bot.accounts[interaction.user.id].local(interaction.guild_id).permissions.can_use(
+        MODLOG_VIEW_SENSITIVE_CAPABILITY,
+        registry=bot.accounts.capabilities,
+    )
+
+
 class ModlogMessageContentButton(discord.ui.Button):
     def __init__(self, message_key: str = "message", *, event_id: int | None = None) -> None:
         super().__init__(label="View Content", style=discord.ButtonStyle.secondary)
@@ -603,6 +611,12 @@ class ModlogMessageContentButton(discord.ui.Button):
         self.event_id = event_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if not _can_view_sensitive(interaction):
+            await interaction.response.send_message(
+                f"Missing capability `{MODLOG_VIEW_SENSITIVE_CAPABILITY}`.",
+                ephemeral=True,
+            )
+            return
         view = self.view
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
@@ -667,6 +681,12 @@ class ModlogRawContentButton(discord.ui.Button):
         self.event_id = event_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if not _can_view_sensitive(interaction):
+            await interaction.response.send_message(
+                f"Missing capability `{MODLOG_VIEW_SENSITIVE_CAPABILITY}`.",
+                ephemeral=True,
+            )
+            return
         view = self.view
         if view is None:
             await interaction.response.send_message("This message payload is not available right now.", ephemeral=True)
@@ -1295,18 +1315,6 @@ async def setup(bot: BotCore) -> None:
     @bot.listen("raw_message_edit")
     async def record_raw_message_edit(payload: discord.RawMessageUpdateEvent) -> None:
         event = raw_message_edit_event(payload)
-        if event is not None:
-            record_event(event)
-
-    @bot.listen("raw_reaction_add")
-    async def record_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
-        event = raw_reaction_action_event(action="on_raw_reaction_add", payload=payload)
-        if event is not None:
-            record_event(event)
-
-    @bot.listen("raw_reaction_remove")
-    async def record_raw_reaction_remove(payload: discord.RawReactionActionEvent) -> None:
-        event = raw_reaction_action_event(action="on_raw_reaction_remove", payload=payload)
         if event is not None:
             record_event(event)
 
