@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 
 from bogobot_core import BotCore
+from modlog.actions import ACTIONS
 from modlog.audit_log import ModlogEvent, known_actions, normalize_entry, retrieve_and_scan
 from modlog.database import ModlogDatabase
 from modlog.lifecycle import (
@@ -76,7 +77,12 @@ def is_known_action_name(name: str) -> bool:
 
 
 def action_names() -> tuple[str, ...]:
-    return (*GATEWAY_ACTIONS, *(action.name for action in known_actions()))
+    names = (
+        *GATEWAY_ACTIONS,
+        *(action.name for action in known_actions()),
+        *(action.name for action in ACTIONS.values()),
+    )
+    return tuple(dict.fromkeys(names))
 
 
 async def can_scan_audit_logs(bot: BotCore, guild: discord.Guild) -> bool:
@@ -750,10 +756,18 @@ def format_event_details(
     if reverse_action_list:
         lines.append("")
         lines.append("### Reverse Actions")
+        action_definition = ACTIONS.get(event.action)
+        undo_rule = action_definition.undo_rule if action_definition is not None else None
         for reverse in reverse_action_list:
             state = "possible" if reverse.possible else "not possible"
             reason = f": {discord.utils.escape_markdown(reverse.reason)}" if reverse.reason else ""
-            lines.append(f"`{reverse.kind}` - {state}{reason}")
+            description = "Undo this event."
+            if undo_rule is not None:
+                if isinstance(undo_rule.description, str):
+                    description = undo_rule.description
+                else:
+                    description = undo_rule.description(event, reverse)
+            lines.append(f"{discord.utils.escape_markdown(description)} - {state}{reason}")
 
     return "\n".join(lines)
 

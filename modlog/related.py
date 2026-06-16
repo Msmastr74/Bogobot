@@ -1,6 +1,8 @@
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from modlog import ModlogAction, register
+from modlog.actions import ACTIONS
 from modlog.audit_log import ModlogEvent
 from modlog.database import discord_time_snowflake_offset
 
@@ -178,19 +180,20 @@ RELATED_RULES = (
         matches=cross_source_same_target,
         max_related=one_related,
     ),
-    RelatedRule(
-        actions=frozenset({"integration_create", "bot_add"}),
-        candidate_actions=frozenset({"integration_create", "bot_add"}),
-        window_seconds=DEFAULT_WINDOW_SECONDS,
-        matches=different_action_same_actor,
-        max_related=one_related,
-    ),
 )
 
 
+def registered_related_rules() -> tuple[RelatedRule, ...]:
+    return tuple(
+        related_rule
+        for action in ACTIONS.values()
+        if isinstance((related_rule := action.related_rule), RelatedRule)
+    )
+
+
 class RelatedResolver:
-    def __init__(self, rules: Iterable[RelatedRule] = RELATED_RULES) -> None:
-        self.rules = tuple(rules)
+    def __init__(self, rules: Iterable[RelatedRule] | None = None) -> None:
+        self.rules = tuple(rules) if rules is not None else (*RELATED_RULES, *registered_related_rules())
 
     def rule_for(self, event: ModlogEvent) -> RelatedRule | None:
         return next((rule for rule in self.rules if event.action in rule.actions), None)
@@ -252,3 +255,17 @@ class RelatedResolver:
     def _within_window(self, anchor: ModlogEvent, candidate: ModlogEvent, seconds: int) -> bool:
         delta = abs((anchor.created_at - candidate.created_at).total_seconds())
         return delta <= seconds
+
+
+register(ModlogAction(
+    name="integration_create",
+    name_text="Integration created",
+    desc_text="An integration was added to the server.",
+    related_rule=RelatedRule(
+        actions=frozenset({"integration_create", "bot_add"}),
+        candidate_actions=frozenset({"integration_create", "bot_add"}),
+        window_seconds=DEFAULT_WINDOW_SECONDS,
+        matches=different_action_same_actor,
+        max_related=one_related,
+    ),
+))

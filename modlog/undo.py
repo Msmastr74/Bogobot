@@ -4,6 +4,8 @@ from typing import Any
 
 import discord
 
+from modlog import ModlogAction, UndoRule, register
+from modlog.actions import ACTIONS
 from modlog.audit_log import ModlogChange, ModlogEvent
 
 
@@ -16,7 +18,6 @@ class ModlogUndoResult:
 
 @dataclass(frozen=True)
 class ModlogReverseAction:
-    kind: str
     possible: bool
     reason: str | None = None
     payload: dict[str, Any] | None = None
@@ -32,6 +33,21 @@ def _target_id(event: ModlogEvent, action: ModlogReverseAction) -> int:
     if not isinstance(raw_target_id, int):
         raise ModlogUndoError("This event does not have a numeric target id.")
     return raw_target_id
+
+
+def _invite_code(event: ModlogEvent, action: ModlogReverseAction) -> str:
+    payload = action.payload or {}
+    raw_code = payload.get("invite_code")
+    if isinstance(raw_code, str) and raw_code:
+        return raw_code
+    if event.target is not None:
+        if event.target.external_id:
+            return event.target.external_id
+        for key in ("code", "id"):
+            value = event.target.data.get(key)
+            if isinstance(value, str) and value:
+                return value
+    raise ModlogUndoError("This event does not have an invite code.")
 
 
 def _role_ids(value: Any) -> list[int]:
@@ -63,95 +79,15 @@ def _change_map(changes: list[ModlogChange]) -> dict[str, ModlogChange]:
 
 
 def _action(
-    kind: str,
-    *,
     possible: bool = False,
     reason: str | None = None,
     **payload: Any,
 ) -> ModlogReverseAction:
     return ModlogReverseAction(
-        kind=kind,
         possible=possible,
         reason=reason,
         payload={key: value for key, value in payload.items() if value is not None},
     )
-
-
-def _candidate_reverse_actions(event: ModlogEvent) -> list[ModlogReverseAction]:
-    target_id = event.target_id
-    by_key = _change_map(event.changes)
-    supported_create_deletes = {
-        "automod_rule",
-        "channel",
-        "emoji",
-        "integration",
-        "role",
-        "scheduled_event",
-        "soundboard_sound",
-        "sticker",
-        "thread",
-    }
-
-    if event.action == "ban":
-        return [_action("member.unban", target_id=target_id)]
-    if event.action == "unban":
-        return [_action("member.ban", target_id=target_id)]
-    if event.action == "kick":
-        return [_action("member.invite_back", reason="kicks cannot be undone directly", target_id=target_id)]
-    if event.action == "member_role_update":
-        roles = by_key.get("roles")
-        added_roles = roles.new if roles is not None and roles.has_new else None
-        removed_roles = roles.old if roles is not None and roles.has_old else None
-        return [_action(
-            "member.roles.revert",
-            reason="role changes unavailable" if added_roles is None and removed_roles is None else None,
-            target_id=target_id,
-            add_roles=removed_roles,
-            remove_roles=added_roles,
-        )]
-    if event.action == "member_update":
-        old_values = {
-            change.key: change.old
-            for change in event.changes
-            if change.has_old
-        }
-        return [_action("member.restore_fields", target_id=target_id, old_values=old_values or None)]
-    if event.action.endswith("_create"):
-        kind = event.action.removesuffix("_create")
-        return [_action(
-            f"{kind}.delete",
-            reason=(
-                "created object undo is not implemented for this audit log action"
-                if kind not in supported_create_deletes else
-                None
-            ),
-            target_id=target_id,
-        )]
-    if event.action.endswith("_delete"):
-        return [_action(
-            f"{event.action.removesuffix('_delete')}.recreate",
-            reason="recreating deleted objects requires richer snapshots",
-            target_id=target_id,
-        )]
-    if event.action.endswith("_update"):
-        old_values = {
-            change.key: change.old
-            for change in event.changes
-            if change.has_old
-        }
-        return [_action(
-            f"{event.action.removesuffix('_update')}.restore",
-            reason="generic update restore is not implemented for this audit log action",
-            target_id=target_id,
-            old_values=old_values or None,
-        )]
-    if event.action in {"message_delete", "message_bulk_delete"}:
-        return [_action(
-            "message.restore_copy",
-            reason="audit logs do not include deleted message content",
-            target_id=target_id,
-        )]
-    return [_action("none", reason="no reverse action is defined for this audit log action")]
 
 
 def _with_state(
@@ -161,20 +97,23 @@ def _with_state(
     reason: str | None = None,
 ) -> ModlogReverseAction:
     return ModlogReverseAction(
-        kind=action.kind,
         possible=possible,
         reason=reason if reason is not None else action.reason,
         payload=action.payload,
     )
 
 
-async def _target_exists_for_delete(guild: discord.Guild, action: ModlogReverseAction) -> tuple[bool, str | None]:
+async def _target_exists_for_delete(
+    guild: discord.Guild,
+    event: ModlogEvent,
+    action: ModlogReverseAction,
+) -> tuple[bool, str | None]:
     payload = action.payload or {}
     target_id = payload.get("target_id")
     if not isinstance(target_id, int):
         return False, "the target id was not captured"
 
-    kind = action.kind.removesuffix(".delete")
+    kind = event.action.removesuffix("_create")
     try:
         if kind in {"channel", "thread"}:
             return guild.get_channel_or_thread(target_id) is not None, "the created channel/thread no longer exists"
@@ -211,29 +150,50 @@ async def _target_exists_for_delete(guild: discord.Guild, action: ModlogReverseA
     except discord.HTTPException as exc:
         return False, str(exc)
 
-    return False, f"`{action.kind}` is not implemented yet"
+    return False, "this undo is not implemented yet"
 
 
-async def _action_with_current_state(guild: discord.Guild, event: ModlogEvent, action: ModlogReverseAction) -> ModlogReverseAction:
+async def _action_with_current_state(
+    guild: discord.Guild,
+    event: ModlogEvent,
+    action: ModlogReverseAction,
+    *,
+    operation: str,
+) -> ModlogReverseAction:
     if event.guild_id != guild.id:
         return _with_state(action, possible=False, reason="that event belongs to a different server")
-    if action.reason is not None and action.kind not in {"member.roles.revert"}:
-        return _with_state(action, possible=False)
-    if action.kind == "none":
+    if action.reason is not None and operation not in {"member.roles.revert"}:
         return _with_state(action, possible=False)
 
     payload = action.payload or {}
+    if operation == "invite.delete":
+        try:
+            invite_code = _invite_code(event, action)
+            invites = await guild.invites()
+            exists = any(invite.code == invite_code for invite in invites)
+            return _with_state(
+                action,
+                possible=exists,
+                reason=None if exists else "the created invite no longer exists",
+            )
+        except discord.Forbidden:
+            return _with_state(action, possible=False, reason="Bogobot cannot verify the created invite")
+        except discord.HTTPException as exc:
+            return _with_state(action, possible=False, reason=str(exc))
+        except ModlogUndoError as exc:
+            return _with_state(action, possible=False, reason=str(exc))
+
     target_id = payload.get("target_id", event.target_id)
     if not isinstance(target_id, int):
         return _with_state(action, possible=False, reason="the target id was not captured")
 
     try:
-        if action.kind == "member.unban":
+        if operation == "member.unban":
             await guild.fetch_ban(discord.Object(id=target_id, type=discord.User))
             return _with_state(action, possible=True)
-        if action.kind == "member.ban":
+        if operation == "member.ban":
             return _with_state(action, possible=True)
-        if action.kind == "member.roles.revert":
+        if operation == "member.roles.revert":
             add_role_ids = _role_ids(payload.get("add_roles"))
             remove_role_ids = _role_ids(payload.get("remove_roles"))
             if not add_role_ids and not remove_role_ids:
@@ -247,7 +207,7 @@ async def _action_with_current_state(guild: discord.Guild, event: ModlogEvent, a
             if missing:
                 return _with_state(action, possible=False, reason=f"{len(missing)} changed role(s) no longer exist")
             return _with_state(action, possible=True)
-        if action.kind == "member.restore_fields":
+        if operation == "member.restore_fields":
             await _fetch_member(guild, target_id)
             old_values = payload.get("old_values")
             if not isinstance(old_values, dict):
@@ -260,8 +220,8 @@ async def _action_with_current_state(guild: discord.Guild, event: ModlogEvent, a
             if not editable:
                 return _with_state(action, possible=False, reason="no safely restorable member fields were captured")
             return _with_state(action, possible=True)
-        if action.kind.endswith(".delete"):
-            exists, reason = await _target_exists_for_delete(guild, action)
+        if operation == "created_target.delete":
+            exists, reason = await _target_exists_for_delete(guild, event, action)
             return _with_state(action, possible=exists, reason=None if exists else reason)
     except discord.NotFound:
         return _with_state(action, possible=False, reason="the target no longer exists")
@@ -270,14 +230,91 @@ async def _action_with_current_state(guild: discord.Guild, event: ModlogEvent, a
     except discord.HTTPException as exc:
         return _with_state(action, possible=False, reason=str(exc))
 
-    return _with_state(action, possible=False, reason=f"`{action.kind}` is not implemented yet")
+    return _with_state(action, possible=False, reason="this undo is not implemented yet")
 
 
 async def reverse_actions_for_event(guild: discord.Guild, event: ModlogEvent) -> list[ModlogReverseAction]:
-    return [
-        await _action_with_current_state(guild, event, action)
-        for action in _candidate_reverse_actions(event)
-    ]
+    action = ACTIONS.get(event.action)
+    if action is not None and action.undo_rule is not None:
+        reverse = await action.undo_rule.criteria_fn(guild, event)
+        if reverse is None:
+            return []
+        if isinstance(reverse, list):
+            return reverse
+        if isinstance(reverse, ModlogReverseAction):
+            return [reverse]
+        raise TypeError(f"Undo criteria for {event.action} returned {type(reverse).__name__}.")
+
+    return [_action(reason="no reverse action is defined for this modlog action")]
+
+
+async def _criteria_member_unban(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    return await _action_with_current_state(
+        guild,
+        event,
+        _action(target_id=event.target_id),
+        operation="member.unban",
+    )
+
+
+async def _criteria_member_ban(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    return await _action_with_current_state(
+        guild,
+        event,
+        _action(target_id=event.target_id),
+        operation="member.ban",
+    )
+
+
+async def _criteria_member_roles_revert(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    roles = _change_map(event.changes).get("roles")
+    added_roles = roles.new if roles is not None and roles.has_new else None
+    removed_roles = roles.old if roles is not None and roles.has_old else None
+    return await _action_with_current_state(
+        guild,
+        event,
+        _action(
+            target_id=event.target_id,
+            add_roles=removed_roles,
+            remove_roles=added_roles,
+        ),
+        operation="member.roles.revert",
+    )
+
+
+async def _criteria_member_restore_fields(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    old_values = {
+        change.key: change.old
+        for change in event.changes
+        if change.has_old
+    }
+    return await _action_with_current_state(
+        guild,
+        event,
+        _action(target_id=event.target_id, old_values=old_values or None),
+        operation="member.restore_fields",
+    )
+
+
+async def _criteria_delete_created_target(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    return await _action_with_current_state(
+        guild,
+        event,
+        _action(target_id=event.target_id),
+        operation="created_target.delete",
+    )
+
+
+async def _criteria_delete_invite(guild: discord.Guild, event: ModlogEvent) -> ModlogReverseAction:
+    try:
+        return await _action_with_current_state(
+            guild,
+            event,
+            _action(invite_code=_invite_code(event, _action())),
+            operation="invite.delete",
+        )
+    except ModlogUndoError as exc:
+        return _action(reason=str(exc))
 
 
 async def _fetch_member(guild: discord.Guild, user_id: int) -> discord.Member:
@@ -397,7 +434,7 @@ async def _delete_created_target(
     action: ModlogReverseAction,
 ) -> ModlogUndoResult:
     target_id = _target_id(event, action)
-    kind = action.kind.removesuffix(".delete")
+    kind = event.action.removesuffix("_create")
     reason = f"Undo modlog event {event.id}"
 
     if kind in {"channel", "thread"}:
@@ -455,7 +492,20 @@ async def _delete_created_target(
         await integration.delete(reason=reason)
         return ModlogUndoResult(True, "Undo Complete", f"Deleted integration `{target_id}`.")
 
-    raise ModlogUndoError(f"`{action.kind}` is not implemented yet.")
+    raise ModlogUndoError("This undo is not implemented yet.")
+
+
+async def _delete_invite(
+    guild: discord.Guild,
+    event: ModlogEvent,
+    action: ModlogReverseAction,
+) -> ModlogUndoResult:
+    invite_code = _invite_code(event, action)
+    invite = next((invite for invite in await guild.invites() if invite.code == invite_code), None)
+    if invite is None:
+        raise ModlogUndoError("The created invite no longer exists.")
+    await invite.delete(reason=f"Undo modlog event {event.id}")
+    return ModlogUndoResult(True, "Undo Complete", f"Deleted invite `{invite_code}`.")
 
 
 async def undo_event(
@@ -476,16 +526,12 @@ async def undo_event(
         )
 
     try:
-        if action.kind == "member.unban":
-            return await _undo_member_unban(guild, event, action)
-        if action.kind == "member.ban":
-            return await _undo_member_ban(guild, event, action)
-        if action.kind == "member.roles.revert":
-            return await _undo_member_roles_revert(guild, event, action)
-        if action.kind == "member.restore_fields":
-            return await _undo_member_restore_fields(guild, event, action)
-        if action.kind.endswith(".delete"):
-            return await _delete_created_target(guild, event, action)
+        action_definition = ACTIONS.get(event.action)
+        if action_definition is not None and action_definition.undo_rule is not None:
+            result = await action_definition.undo_rule.exec_fn(guild, event, action)
+            if isinstance(result, ModlogUndoResult):
+                return result
+            return ModlogUndoResult(False, "Undo Failed", "The undo handler returned an invalid result.")
     except discord.Forbidden:
         return ModlogUndoResult(False, "Undo Failed", "Bogobot does not have permission to perform this undo.")
     except discord.NotFound:
@@ -495,4 +541,83 @@ async def undo_event(
     except ModlogUndoError as exc:
         return ModlogUndoResult(False, "Undo Failed", str(exc))
 
-    return ModlogUndoResult(False, "Undo Not Implemented", f"`{action.kind}` is not implemented yet.")
+    return ModlogUndoResult(False, "Undo Not Implemented", "This undo is not implemented yet.")
+
+
+def _register_default_undo_actions() -> None:
+    register(ModlogAction(
+        name="ban",
+        name_text="Member banned",
+        desc_text="A member was banned from the server.",
+        undo_rule=UndoRule(
+            _criteria_member_unban,
+            _undo_member_unban,
+            description="Unban the member.",
+        ),
+    ))
+    register(ModlogAction(
+        name="unban",
+        name_text="Member unbanned",
+        desc_text="A member was unbanned from the server.",
+        undo_rule=UndoRule(
+            _criteria_member_ban,
+            _undo_member_ban,
+            description="Ban the member again.",
+        ),
+    ))
+    register(ModlogAction(
+        name="member_role_update",
+        name_text="Member roles changed",
+        desc_text="A member's role set changed.",
+        undo_rule=UndoRule(
+            _criteria_member_roles_revert,
+            _undo_member_roles_revert,
+            description="Revert the captured role delta.",
+        ),
+    ))
+    register(ModlogAction(
+        name="member_update",
+        name_text="Member updated",
+        desc_text="A member's server profile or moderation state changed.",
+        undo_rule=UndoRule(
+            _criteria_member_restore_fields,
+            _undo_member_restore_fields,
+            description="Restore captured member fields.",
+        ),
+    ))
+    for action_name, name_text in (
+        ("automod_rule_create", "Automod rule created"),
+        ("channel_create", "Channel created"),
+        ("emoji_create", "Emoji created"),
+        ("integration_create", "Integration created"),
+        ("role_create", "Role created"),
+        ("scheduled_event_create", "Scheduled event created"),
+        ("soundboard_sound_create", "Soundboard sound created"),
+        ("sticker_create", "Sticker created"),
+        ("thread_create", "Thread created"),
+    ):
+        existing = ACTIONS.get(action_name)
+        register(ModlogAction(
+            name=action_name,
+            name_text=existing.name_text if existing is not None and existing.name_text is not None else name_text,
+            desc_text=existing.desc_text if existing is not None else None,
+            related_rule=existing.related_rule if existing is not None else None,
+            undo_rule=UndoRule(
+                _criteria_delete_created_target,
+                _delete_created_target,
+                description="Delete the created object.",
+            ),
+        ))
+    register(ModlogAction(
+        name="invite_create",
+        name_text="Invite created",
+        desc_text="An invite was created.",
+        undo_rule=UndoRule(
+            _criteria_delete_invite,
+            _delete_invite,
+            description="Delete the created invite.",
+        ),
+    ))
+
+
+_register_default_undo_actions()
