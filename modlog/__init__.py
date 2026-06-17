@@ -33,7 +33,7 @@ def _register_default_actions() -> None:
     for action_name, candidate_actions, window_seconds, matches in (
         (
             "message_delete",
-            frozenset({"on_message_delete"}),
+            frozenset({"on_raw_message_delete"}),
             DEFAULT_WINDOW_SECONDS,
             cross_source_target_and_channel,
         ),

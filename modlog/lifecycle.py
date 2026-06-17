@@ -273,7 +273,7 @@ def raw_message_delete_event(payload: discord.RawMessageDeleteEvent) -> ModlogEv
     if payload.guild_id is None:
         return None
     if payload.cached_message is not None:
-        event = message_event(action="on_message_delete", message=payload.cached_message)
+        event = message_event(action="on_raw_message_delete", message=payload.cached_message)
         if event is None:
             return None
         event.extra = {
@@ -288,7 +288,7 @@ def raw_message_delete_event(payload: discord.RawMessageDeleteEvent) -> ModlogEv
         id=generated_event_id(),
         guild_id=payload.guild_id,
         source="discord_gateway",
-        action="on_message_delete",
+        action="on_raw_message_delete",
         imported_at=datetime.now(timezone.utc),
         extra={
             "channel_id": payload.channel_id,

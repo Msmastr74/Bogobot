@@ -3,13 +3,13 @@ import json
 from typing import Any, Iterable
 
 import discord
-from discord import app_commands
 
 from bogobot_core import BotCore
 from modlog import ModlogAction, database_path_from_bot, modlog_writer
 from modlog.actions import ACTIONS
 from modlog.audit_log import ModlogEvent, known_actions, normalize_entry, retrieve_and_scan
 from modlog.database import ModlogDatabase
+from modlog.filters import ModlogFilterButton, ModlogFilters, default_filters_for_events
 from modlog.lifecycle import (
     member_ban_event,
     member_join_event,
@@ -30,8 +30,6 @@ from utils.discord import chunk_text, count_characters
 
 
 MAX_EVENT_LINES = 10
-MAX_ACTION_CHOICES = 25
-MAX_EVENTS_PER_PAGE = 10
 MODLOG_UNDO_CAPABILITY = "modlog.undo"
 MODLOG_VIEW_SENSITIVE_CAPABILITY = "modlog.view_sensitive"
 AUDIT_LOG_RESCAN_OVERLAP = timedelta(minutes=10)
@@ -50,7 +48,7 @@ MODLOG_PAGE_CHAR_LIMIT = 3600
 MODLOG_PAGE_ELEMENT_LIMIT = 32
 MODLOG_GROUP_CHAR_LIMIT = 1800
 GATEWAY_ACTIONS = (
-    "on_message_delete",
+    "on_raw_message_delete",
     "on_bulk_message_delete",
     "on_raw_message_edit",
     "on_raw_reaction_clear",
@@ -64,20 +62,6 @@ GATEWAY_ACTIONS = (
     "on_member_ban",
     "on_member_unban",
 )
-
-
-def audit_action_from_name(name: str | None) -> discord.AuditLogAction | None:
-    if name is None or not name.strip():
-        return None
-    normalized = name.strip()
-    for action in known_actions():
-        if action.name == normalized:
-            return action
-    return None
-
-
-def is_known_action_name(name: str) -> bool:
-    return name in GATEWAY_ACTIONS or audit_action_from_name(name) is not None
 
 
 def action_names() -> tuple[str, ...]:
@@ -1146,10 +1130,7 @@ class ModlogView(discord.ui.LayoutView):
         *,
         database: ModlogDatabase,
         guild_id: int,
-        action: str | None,
-        actor_id: int | None,
-        target_id: int | None,
-        page_size: int,
+        filters: ModlogFilters | None = None,
         page_first_id: int | None = None,
         previous_first_ids: Iterable[int] = (),
     ) -> None:
@@ -1157,49 +1138,79 @@ class ModlogView(discord.ui.LayoutView):
         self.database = database
         self.resolver = RelatedResolver()
         self.guild_id = guild_id
-        self.action = action
-        self.actor_id = actor_id
-        self.target_id = target_id
-        self.page_size = min(MAX_EVENTS_PER_PAGE, page_size)
+        self.filters = filters if filters is not None else default_filters_for_events(self.event_names())
         self.page_first_id = page_first_id
         self.previous_first_ids = list(previous_first_ids)
         self.current_first_id: int | None = None
         self.next_first_id: int | None = None
         self.has_next = False
+        self.message: discord.Message | None = None
         self.render()
 
     @property
     def page_number(self) -> int:
         return len(self.previous_first_ids) + 1
 
+    def event_names(self) -> tuple[str, ...]:
+        return action_names()
+
+    def reset_pagination(self) -> None:
+        self.page_first_id = None
+        self.previous_first_ids.clear()
+        self.current_first_id = None
+        self.next_first_id = None
+        self.has_next = False
+
+    def anchor_limit(self) -> int:
+        if self.filters.limit is None:
+            return MODLOG_PAGE_FETCH_LIMIT
+        return max(1, self.filters.limit)
+
     def anchor_events(self) -> list[ModlogEvent]:
         before_id = self.page_first_id + 1 if self.page_first_id is not None else None
-        return self.database.query_events(
-            guild_id=self.guild_id,
-            action=self.action,
-            actor_id=self.actor_id,
-            target_id=self.target_id,
-            before_id=before_id,
-            limit=MODLOG_PAGE_FETCH_LIMIT + 1,
-        )
+        collected: list[ModlogEvent] = []
+        chunk_before_id = before_id
+        desired = self.anchor_limit() + 1
+
+        while len(collected) < desired:
+            events = self.database.query_events(
+                guild_id=self.guild_id,
+                actor_id=self.filters.actor_id,
+                target_id=self.filters.target.id if self.filters.target is not None else None,
+                before_id=chunk_before_id,
+                limit=MODLOG_PAGE_FETCH_LIMIT,
+            )
+            if not events:
+                break
+
+            collected.extend(event for event in events if self.filters.include_anchor(event))
+            chunk_before_id = min(event.id for event in events)
+            if len(events) < MODLOG_PAGE_FETCH_LIMIT:
+                break
+
+        return collected[:desired]
 
     def candidate_events(self, events: list[ModlogEvent]) -> list[ModlogEvent]:
         after_id, before_id = self.resolver.widened_bounds(events)
         if after_id is None and before_id is None:
             return []
-        return self.database.query_events(
-            guild_id=self.guild_id,
-            after_id=after_id,
-            before_id=before_id,
-            limit=None,
-        )
+        return [
+            event
+            for event in self.database.query_events(
+                guild_id=self.guild_id,
+                after_id=after_id,
+                before_id=before_id,
+                limit=None,
+            )
+            if self.filters.include_candidate(event)
+        ]
 
     def render(self) -> None:
         self.clear_items()
         events = self.anchor_events()
         if events:
             self.current_first_id = events[0].id
-        visible_events = events[:MODLOG_PAGE_FETCH_LIMIT]
+        visible_events = events[:self.anchor_limit()]
         groups = self.resolver.group(visible_events, self.candidate_events(visible_events))
         rendered_groups: list[RelatedGroup] = []
         rendered_base_ids: set[int] = set()
@@ -1256,7 +1267,12 @@ class ModlogView(discord.ui.LayoutView):
         refresh_button.callback = self.refresh_page
 
         container.add_item(discord.ui.Separator())
-        container.add_item(discord.ui.ActionRow(previous_button, next_button, refresh_button))
+        container.add_item(discord.ui.ActionRow(
+            previous_button,
+            next_button,
+            refresh_button,
+            ModlogFilterButton(self.filters, default_filters_for_events(self.event_names())),
+        ))
         self.add_item(container)
 
     async def previous_page(self, interaction: discord.Interaction) -> None:
@@ -1276,22 +1292,6 @@ class ModlogView(discord.ui.LayoutView):
     async def refresh_page(self, interaction: discord.Interaction) -> None:
         self.render()
         await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
-
-
-async def action_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    current = current.lower()
-    matches = [
-        name
-        for name in action_names()
-        if current in name.lower()
-    ]
-    return [
-        app_commands.Choice(name=name, value=name)
-        for name in matches[:MAX_ACTION_CHOICES]
-    ]
 
 
 async def setup(bot: BotCore) -> None:
@@ -1416,36 +1416,17 @@ async def setup(bot: BotCore) -> None:
     )
     async def modlog(
         interaction: discord.Interaction,
-        action: str | None = None,
-        actor: discord.User | None = None,
-        target: discord.User | None = None,
-        limit: app_commands.Range[int, 1, 10] = MAX_EVENTS_PER_PAGE,
     ) -> None:
         if interaction.guild is None:
             await bot.discord.send("Modlog can only run in a server.", response=True, ephemeral=True)
-            return
-
-        if action is not None and not is_known_action_name(action):
-            await bot.discord.send(f"Unknown audit action `{discord.utils.escape_markdown(action)}`.", response=True, ephemeral=True)
             return
 
         await bot.discord.send(
             view=ModlogView(
                 database=database,
                 guild_id=interaction.guild.id,
-                action=action,
-                actor_id=actor.id if actor is not None else None,
-                target_id=target.id if target is not None else None,
-                page_size=int(limit),
             ),
             response=True,
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
-
-    @modlog.autocomplete("action")
-    async def modlog_action_autocomplete(
-        interaction: discord.Interaction,
-        current: str,
-    ) -> list[app_commands.Choice[str]]:
-        return await action_autocomplete(interaction, current)
