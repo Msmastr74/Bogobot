@@ -1,9 +1,12 @@
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Literal
 
 import discord
 
 from modlog.audit_log import ModlogEvent
+
+if TYPE_CHECKING:
+    from modlog.plugin import ModlogView
 
 
 FilterMode = Literal["on", "grouped", "off"]
@@ -111,30 +114,22 @@ DEFAULT_FILTERS = ModlogFilters(event_modes={
 })
 
 
-class FilterOwner(Protocol):
-    filters: ModlogFilters
-    message: Any
-
-    def event_names(self) -> tuple[str, ...]:
-        ...
-
-    def reset_pagination(self) -> None:
-        ...
-
-    def render(self) -> None:
-        ...
+@dataclass
+class FilterOwner:
+    view: "ModlogView"
+    interaction: discord.Interaction
 
 
 async def refresh_owner_message(owner: FilterOwner) -> None:
-    message = owner.message
-    if message is None:
-        return
-    await message.edit(view=owner, allowed_mentions=discord.AllowedMentions.none())
+    await owner.interaction.edit_original_response(
+        view=owner.view,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 async def update_owner(owner: FilterOwner) -> None:
-    owner.reset_pagination()
-    owner.render()
+    owner.view.reset_pagination()
+    owner.view.render()
     await refresh_owner_message(owner)
 
 
@@ -146,28 +141,28 @@ def default_filters_for_events(event_names: tuple[str, ...]) -> ModlogFilters:
 
 
 def default_filters_for_owner(owner: FilterOwner) -> ModlogFilters:
-    return default_filters_for_events(owner.event_names())
+    return default_filters_for_events(owner.view.event_names())
 
 
 def filter_button_style(filters: ModlogFilters, default: ModlogFilters) -> discord.ButtonStyle:
     return discord.ButtonStyle.secondary if filters.same_as(default) else discord.ButtonStyle.primary
 
 
-class ModlogFilterButton(discord.ui.Button):
-    def __init__(self, filters: ModlogFilters, default: ModlogFilters) -> None:
+class ModlogFilterButton(discord.ui.Button["ModlogView"]):
+    def __init__(self,filters: ModlogFilters, default: ModlogFilters) -> None:
         super().__init__(
             label="Filters",
             style=filter_button_style(filters, default),
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        owner: Any = self.view
-        if owner is None:
+        view = self.view
+        if view is None:
             await interaction.response.send_message("Filters are not available right now.", ephemeral=True)
             return
-        owner.message = interaction.message
+        owner = FilterOwner(view=view, interaction=interaction)
         await interaction.response.send_message(
-            view=ModlogFilterPanel(owner, owner.filters.copy()),
+            view=ModlogFilterPanel(owner, owner.view.filters.copy()),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -210,7 +205,7 @@ class ModlogFilterPanel(discord.ui.LayoutView):
 
 
 def filters_changed(owner: FilterOwner, draft: ModlogFilters) -> bool:
-    return not draft.same_as(owner.filters)
+    return not draft.same_as(owner.view.filters)
 
 
 def reset_apply_buttons(owner: FilterOwner, draft: ModlogFilters) -> tuple[discord.ui.Button, discord.ui.Button]:
@@ -228,9 +223,9 @@ def reset_apply_buttons(owner: FilterOwner, draft: ModlogFilters) -> tuple[disco
 
 
 async def apply_filters(interaction: discord.Interaction, owner: FilterOwner, draft: ModlogFilters) -> None:
-    owner.filters = draft.copy()
+    owner.view.filters = draft.copy()
     await update_owner(owner)
-    await interaction.response.edit_message(view=ModlogFilterPanel(owner, owner.filters.copy()))
+    await interaction.response.edit_message(view=ModlogFilterPanel(owner, owner.view.filters.copy()))
 
 
 class ModlogEventFilterView(discord.ui.LayoutView):
@@ -243,7 +238,7 @@ class ModlogEventFilterView(discord.ui.LayoutView):
 
     def render(self) -> None:
         self.clear_items()
-        names = self.owner.event_names()
+        names = self.owner.view.event_names()
         total_pages = max(1, (len(names) + EVENTS_PER_PAGE - 1) // EVENTS_PER_PAGE)
         self.page = min(self.page, total_pages - 1)
         start = self.page * EVENTS_PER_PAGE
