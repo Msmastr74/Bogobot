@@ -297,7 +297,7 @@ class ModlogEventFilterView(discord.ui.LayoutView):
         back_button.callback = self.back
         invert_button.callback = self.invert_all
         container.add_item(discord.ui.Separator())
-        container.add_item(discord.ui.ActionRow(previous_button, next_button, back_button))
+        container.add_item(discord.ui.ActionRow(previous_button, next_button, back_button, invert_button))
         self.add_item(container)
 
     def _cycle_callback(self, action: str):
