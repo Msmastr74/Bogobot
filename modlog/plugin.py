@@ -127,9 +127,18 @@ def _event_action_summary(event: ModlogEvent) -> str:
     return summary
 
 
+def _event_display_count(event: ModlogEvent) -> int:
+    extra = event.extra
+    if isinstance(extra, dict):
+        count = extra.get("count")
+        if isinstance(count, int) and count > 0:
+            return count
+    return 1
+
+
 def format_event_line(event: ModlogEvent) -> str:
     return (
-        f"`{event.id}` <t:{int(event.created_at.timestamp())}:R> "
+        f"{_inline_code(_event_display_count(event))} `{event.id}` <t:{int(event.created_at.timestamp())}:R> "
         f"{_event_action_summary(event)} {entity_text(event.actor)} -> {entity_text(event.target)}"
     )
 
