@@ -301,9 +301,8 @@ class ModlogEventFilterView(discord.ui.LayoutView):
         )
         for name in visible:
             mode = self.draft.mode_for(name)
-            explicit = name in self.draft.event_modes
             button = discord.ui.Button(
-                label=mode.title() if explicit else f"{mode.title()} (bg)",
+                label=mode.title(),
                 style={
                     "on": discord.ButtonStyle.green,
                     "grouped": discord.ButtonStyle.blurple,
