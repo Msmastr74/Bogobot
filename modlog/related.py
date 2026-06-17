@@ -2,8 +2,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from modlog.actions import ACTIONS, ModlogAction, RelatedRule
-from modlog.audit_log import ModlogEvent
 from modlog.database import discord_time_snowflake_offset
+from modlog.models import ModlogEvent
 
 
 DEFAULT_WINDOW_SECONDS = 10

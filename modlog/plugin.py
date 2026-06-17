@@ -7,7 +7,7 @@ import discord
 from bogobot_core import BotCore
 from modlog import ModlogAction, database_path_from_bot, modlog_writer
 from modlog.actions import ACTIONS
-from modlog.audit_log import ModlogEvent, known_actions, normalize_entry, retrieve_and_scan
+from modlog.audit_log import known_actions, normalize_entry, retrieve_and_scan
 from modlog.database import ModlogDatabase
 from modlog.filters import ModlogFilterButton, ModlogFilters, default_filters_for_events
 from modlog.lifecycle import (
@@ -25,6 +25,7 @@ from modlog.lifecycle import (
     thread_member_join_event,
 )
 from modlog.related import RelatedGroup, RelatedResolver
+from modlog.models import ModlogEvent
 from modlog.undo import ModlogReverseAction, ModlogUndoResult, reverse_actions_for_event, undo_event
 from utils.discord import chunk_text, count_characters
 
@@ -106,10 +107,29 @@ def entity_text(entity) -> str:
     return f"{entity.type} `{entity.id}`"
 
 
+def _inline_code(value: object) -> str:
+    return f"`{str(value).replace('`', "'")}`"
+
+
+def _event_description(event: ModlogEvent) -> str | None:
+    action = ACTIONS.get(event.action)
+    if action is None:
+        return None
+    return action.description
+
+
+def _event_action_summary(event: ModlogEvent) -> str:
+    summary = _inline_code(event.action)
+    description = _event_description(event)
+    if description:
+        summary += f" - {discord.utils.escape_markdown(description)}"
+    return summary
+
+
 def format_event_line(event: ModlogEvent) -> str:
     return (
         f"`{event.id}` <t:{int(event.created_at.timestamp())}:R> "
-        f"`{event.action}` {entity_text(event.actor)} -> {entity_text(event.target)}"
+        f"{_event_action_summary(event)} {entity_text(event.actor)} -> {entity_text(event.target)}"
     )
 
 
@@ -134,6 +154,40 @@ def _truncate_display_text(value: str, *, limit: int) -> str:
         current.append(character)
         current_length += character_length
     return "".join(current) + suffix
+
+
+def _format_extra_value(value: Any) -> str:
+    if isinstance(value, str):
+        return _short_value(value)
+    if value is None or isinstance(value, bool | int | float):
+        return _inline_code(json.dumps(value, ensure_ascii=False))
+
+    try:
+        text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+        language = "json"
+    except TypeError:
+        text = str(value)
+        language = ""
+
+    text = _truncate_display_text(text, limit=DETAIL_VALUE_LIMIT)
+    return f"```{language}\n{text}\n```"
+
+
+def _format_extra_fields(extra: Any) -> list[str]:
+    if extra is None:
+        return []
+    if isinstance(extra, dict):
+        lines: list[str] = []
+        items = list(extra.items())
+        for key, value in items[:MAX_EVENT_LINES]:
+            label = discord.utils.escape_markdown(str(key))
+            formatted = _format_extra_value(value)
+            separator = "\n" if formatted.startswith("```") else " "
+            lines.append(f"{label}:{separator}{formatted}")
+        if len(items) > MAX_EVENT_LINES:
+            lines.append(f"-# {len(items) - MAX_EVENT_LINES} more fields")
+        return lines
+    return [f"value: {_format_extra_value(extra)}"]
 
 
 def _component_text(component: object) -> list[str]:
@@ -771,12 +825,21 @@ def format_event_details(
         f"Actor: {entity_text(event.actor)}",
         f"Target: {entity_text(event.target)}",
     ]
+    description = _event_description(event)
+    if description:
+        lines.append(f"Description: {discord.utils.escape_markdown(description)}")
     if event.action == "modlog.undo":
         original_event_id = _nested_get(event.raw, "undo", "undid_event_id")
         if isinstance(original_event_id, int):
             lines.append(f"Undid Event: `{original_event_id}`")
     if event.reason:
         lines.append(f"Reason: {discord.utils.escape_markdown(event.reason)}")
+
+    extra_fields = _format_extra_fields(event.extra)
+    if extra_fields:
+        lines.append("")
+        lines.append("### Extra")
+        lines.extend(extra_fields)
 
     if include_gateway_capture:
         lines.extend(_format_gateway_capture(event, allow_sensitive=allow_sensitive))

@@ -6,8 +6,8 @@ from typing import Any
 import discord
 
 from modlog.actions import ModlogAction, register
-from modlog.audit_log import ModlogChange, ModlogEntity, ModlogEvent
 from modlog.database import ModlogDatabase
+from modlog.models import ModlogChange, ModlogEntity, ModlogEvent
 
 
 MODLOG_CONFIG_KEY = "modlog"

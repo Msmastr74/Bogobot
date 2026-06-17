@@ -4,12 +4,7 @@ from pathlib import Path
 import sqlite3
 from typing import Iterable, Iterator, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from modlog.audit_log import ModlogEvent
-
-
-Order = Literal["asc", "desc"]
+from modlog.models import ModlogEvent, ModlogEventQuery, Order
 
 
 def discord_time_snowflake_offset(event_id: int, seconds: int, *, high: bool = False) -> int:
@@ -17,20 +12,6 @@ def discord_time_snowflake_offset(event_id: int, seconds: int, *, high: bool = F
 
     timestamp = discord.utils.snowflake_time(event_id) + timedelta(seconds=seconds)
     return discord.utils.time_snowflake(timestamp, high=high)
-
-
-class ModlogEventQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    guild_id: int | None = None
-    action: str | None = None
-    actor_id: int | None = None
-    target_id: int | None = None
-    after_id: int | None = None
-    before_id: int | None = None
-    limit: int | None = Field(default=100, ge=1)
-    offset: int = Field(default=0, ge=0)
-    order: Order = "desc"
 
 
 class ModlogDatabase:

@@ -931,7 +931,13 @@ async def capture_interaction_output(interaction: discord.Interaction):
 async def setup(bot: 'BotCore'):
     ai_core = setup_ai(bot)
     manage = groups.manage(bot)
-    write_ai = modlog_writer(ModlogAction("ai", "AI configuration or memory was changed."))
+    write_ai_enabled = modlog_writer(ModlogAction("ai.config.enabled", "AI enabled state was changed."))
+    write_ai_breaks_enabled = modlog_writer(ModlogAction("ai.config.breaks.enabled", "AI break mode enabled state was changed."))
+    write_ai_custom_instructions = modlog_writer(ModlogAction("ai.config.custom_instructions", "AI custom instructions were changed."))
+    write_ai_breaks = modlog_writer(ModlogAction("ai.config.breaks", "AI break timing was changed."))
+    write_ai_memory_create = modlog_writer(ModlogAction("ai.memory.create", "AI memory was created."))
+    write_ai_memory_edit = modlog_writer(ModlogAction("ai.memory.edit", "AI memory was edited."))
+    write_ai_memory_delete = modlog_writer(ModlogAction("ai.memory.delete", "AI memory was deleted."))
     bot.accounts.capabilities.register(
         USER_AI_CAPABILITY,
         AI_MANAGE_CONFIG_CAPABILITY,
@@ -1050,10 +1056,9 @@ async def setup(bot: 'BotCore'):
             ai_config.enabled = enabled
             ai_core.configure(enabled=enabled, base_url=ai_config.base_url)
             await save_ai_config()
-            await write_ai(
+            await write_ai_enabled(
                 interaction,
                 extra={
-                    "action": "config.enabled",
                     "old": previous,
                     "new": enabled,
                 },
@@ -1075,10 +1080,9 @@ async def setup(bot: 'BotCore'):
             ai_config.breaks.enabled = enabled
             await save_ai_config()
             await restart_break_task()
-            await write_ai(
+            await write_ai_breaks_enabled(
                 interaction,
                 extra={
-                    "action": "config.breaks.enabled",
                     "old": previous,
                     "new": enabled,
                 },
@@ -1119,10 +1123,9 @@ async def setup(bot: 'BotCore'):
             previous_length = count_characters(ai_config.custom_instruction_text)
             ai_config.custom_instruction_text = self.custom_instruction_text.value.strip()
             await save_ai_config()
-            await write_ai(
+            await write_ai_custom_instructions(
                 interaction,
                 extra={
-                    "action": "config.custom_instruction_text",
                     "old_length": previous_length,
                     "new_length": count_characters(ai_config.custom_instruction_text),
                 },
@@ -1169,10 +1172,9 @@ async def setup(bot: 'BotCore'):
             ai_config.breaks.break_minutes = break_minutes
             await save_ai_config()
             await restart_break_task()
-            await write_ai(
+            await write_ai_breaks(
                 interaction,
                 extra={
-                    "action": "config.breaks",
                     "old": previous,
                     "new": {
                         "active_minutes": active_minutes,
@@ -1261,10 +1263,9 @@ async def setup(bot: 'BotCore'):
                 else:
                     ai_core.context.remove_persistent_memory(int(self.item.id or 0))
                     item_kind = "persistent_memory"
-                await write_ai(
+                await write_ai_memory_delete(
                     interaction,
                     extra={
-                        "action": "memory.delete",
                         "kind": item_kind,
                         "memory_id": int(self.item.id or 0),
                     },
@@ -1537,10 +1538,9 @@ async def setup(bot: 'BotCore'):
                 ai_core.context.edit_persistent_memory(int(self.item.id or 0), value)
                 item_kind = "persistent_memory"
             await bot.discord.defer(ephemeral=True)
-            await write_ai(
+            await write_ai_memory_edit(
                 interaction,
                 extra={
-                    "action": "memory.edit",
                     "kind": item_kind,
                     "memory_id": int(self.item.id or 0),
                     "new_length": count_characters(value),
@@ -1594,10 +1594,9 @@ async def setup(bot: 'BotCore'):
                 memory = ai_core.context.create_persistent_memory(value)
                 item_kind = "persistent_memory"
             await bot.discord.defer(ephemeral=True)
-            await write_ai(
+            await write_ai_memory_create(
                 interaction,
                 extra={
-                    "action": "memory.create",
                     "kind": item_kind,
                     "memory_id": int(memory.id or 0) if memory is not None else None,
                     "role": getattr(memory, "role", None) if memory is not None else None,

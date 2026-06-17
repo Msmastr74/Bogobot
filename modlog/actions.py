@@ -4,7 +4,7 @@ from typing import Any
 
 import discord
 
-from modlog.audit_log import ModlogEvent
+from modlog.models import ModlogEvent
 
 
 UndoCriteria = Callable[[discord.Guild, ModlogEvent], Awaitable[Any]]

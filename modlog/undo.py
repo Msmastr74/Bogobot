@@ -5,7 +5,7 @@ from typing import Any
 import discord
 
 from modlog.actions import ACTIONS
-from modlog.audit_log import ModlogChange, ModlogEvent
+from modlog.models import ModlogChange, ModlogEvent
 
 
 @dataclass

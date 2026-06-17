@@ -380,7 +380,8 @@ def interaction_messageable_channel(
 async def setup(bot: "BotCore"):
     ai_activity = groups.ai_activity(bot)
     scheduler = AIScheduler(bot)
-    write_ai = modlog_writer(ModlogAction("ai", "AI configuration or automation was changed."))
+    write_ai_activity_schedule = modlog_writer(ModlogAction("ai.activity.schedule", "AI activity schedule was created."))
+    write_ai_activity_remove = modlog_writer(ModlogAction("ai.activity.remove", "AI activity schedule was removed."))
 
     @ai_activity.command(
         name="schedule",
@@ -412,10 +413,9 @@ async def setup(bot: "BotCore"):
         
         first_run = calculate_next_time(schedule_payload, discord.utils.utcnow())
         if created_schedule is not None:
-            await write_ai(
+            await write_ai_activity_schedule(
                 interaction,
                 extra={
-                    "action": "activity.schedule",
                     "channel_id": channel.id,
                     "schedule_id": created_schedule["id"],
                     "schedule": schedule_payload,
@@ -509,10 +509,9 @@ async def setup(bot: "BotCore"):
 
         removed_schedule = next((item for item in channel_schedules if item["id"] == target_id), None)
         await scheduler.remove_schedule(channel.id, target_id)
-        await write_ai(
+        await write_ai_activity_remove(
             interaction,
             extra={
-                "action": "activity.remove",
                 "channel_id": channel.id,
                 "schedule_id": target_id,
                 "schedule": removed_schedule["payload"] if removed_schedule is not None else None,

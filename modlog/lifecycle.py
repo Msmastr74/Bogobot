@@ -4,7 +4,7 @@ from typing import Any
 
 import discord
 
-from modlog.audit_log import ModlogChange, ModlogEntity, ModlogEvent
+from modlog.models import ModlogChange, ModlogEntity, ModlogEvent
 
 
 _event_counter = itertools.count(1)

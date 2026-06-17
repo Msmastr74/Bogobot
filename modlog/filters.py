@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Literal
 
 import discord
 
-from modlog.audit_log import ModlogEvent
+from modlog.models import ModlogEvent
 
 if TYPE_CHECKING:
     from modlog.plugin import ModlogView
