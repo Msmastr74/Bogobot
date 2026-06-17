@@ -13,7 +13,7 @@ FilterMode = Literal["on", "grouped", "off"]
 TargetKind = Literal["user", "role", "channel", "raw"]
 
 LIMIT_OPTIONS: tuple[int | None, ...] = (10, 20, 50, 80, 150, None)
-EVENTS_PER_PAGE = 11
+EVENTS_PER_PAGE = 10
 
 
 @dataclass
