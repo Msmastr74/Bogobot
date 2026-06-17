@@ -45,8 +45,9 @@ User-edited settings:
 - `telemetry_path`: Path to the command telemetry JSONL file. Defaults to `telemetry.jsonl`.
 - `telemetry_flush_interval`: Seconds to batch telemetry writes before flushing to disk. Defaults to 2.
 - `archive`: Optional archive configuration object. See below for fields.
+- `modlog`: Optional moderation-log configuration object. See below for fields.
 - `fps`: Frames received per second.
-- `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, `/manage ai`, and implementation notes.
+- `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, `/manage ai`, `response_as_tool`, persistent memory, and implementation notes.
 
 Bot-managed storage:
 - `command_tree_hash`: Stored command tree fingerprint used for automatic sync detection.
@@ -81,6 +82,11 @@ Archive storage:
 - `archive/monitor.bga`, or the file named by `archive.path`, stores compact monitor value chunks.
 - `archive.video.dir` stores visual archive files. The active current-day file is `.ts`; old days are remuxed to `archive.video.final_format`. The active `.ts` uses a small `.start` sidecar for the first frame timestamp; finalized files store that timestamp as `bogobot_start_timestamp` container metadata.
 
+Modlog storage:
+- `modlog.sqlite3`, or the file named by `modlog.database_path`, stores moderation-log events in SQLite.
+- Each event is self-contained JSON keyed by event snowflake/id, with indexed `guild_id`, `action`, `actor_id`, and `target_id` columns for browsing, filtering, and related-event scans.
+- Modlog event sources include Discord audit-log entries, selected Discord gateway lifecycle events, and bot-authored management events written with `modlog_writer(...)`.
+
 `main.py` will use `local_config.json` when it exists. Otherwise it uses `config.json`.
 
 Archive configuration:
@@ -106,7 +112,69 @@ Archive configuration:
 
 The compact monitor archive uses `path`, `flush_interval`, and `chunk_event_limit`. The visual archive records to daily appendable MPEG-TS `.ts` working files in `video.dir` when `video.enabled` is true or `/manage video_archive start` is used. `/manage video_archive start` and `restart` persist `video.enabled: true`; `stop` persists `false`, so recording state survives bot restarts. `video.crf` controls HEVC quality/size; higher values are smaller and lower quality. `36` is an aggressive archive default, not a required value. `video.preset` defaults to `fast` for better compression without changing CRF quality, and `video.keyint` defaults to `30` to reduce keyframe overhead while keeping archive frame lookup practical. `video.tune` is passed to FFmpeg's `libx265 -tune` option, with `animation` as the default because the stream is mostly flat-color UI. Set it to `null` or an empty string to omit `-tune`. Current-day `.ts` files stay appendable across stops and restarts. When a recording rolls to a new day or an old `.ts` file is found on startup, the bot remuxes finished `.ts` files to `video.final_format` (`mkv`, `mp4`, or `ts`). The bot still accepts older top-level `archive_*` and `archive_video_*` keys as fallbacks.
 
+Modlog configuration:
+
+```json
+"modlog": {
+  "database_path": "modlog.sqlite3"
+}
+```
+
+The modlog plugin scans Discord audit logs on every ready/reconnect for guilds where the bot has `View Audit Log`. Scans resume from the latest recorded event id with a 10-minute overlap so delayed or stacked audit-log entries can still be replaced into the database. The plugin also listens to raw message delete, raw bulk message delete, raw message edit, reaction clear, thread-member, member join/remove/update, ban, and unban events when Discord dispatches them.
+
+Bot management features can log their own events by importing `ModlogAction` and `modlog_writer` from `modlog`. Writers store an event with `source="bogobot_management"` and the current interaction id as the event id:
+
+```python
+from modlog import ModlogAction, modlog_writer
+
+write_example = modlog_writer(ModlogAction(
+    "example.config",
+    "Example configuration was changed.",
+))
+
+await write_example(
+    interaction,
+    target=None,
+    extra={"enabled": True},
+    changes=[],
+)
+```
+
+Only state-changing actions should write modlog events. Read-only panels and status commands should not.
+
 Visual archive scanning is exposed through `/archive scan`. It accepts an image attachment plus optional absolute `start` and `end` timestamps and a relative `window` duration. `start` and `end` accept `now`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`; they intentionally do not accept local date/time strings. `window` accepts durations such as `30s`, `15min`, `12h`, or `1day`, and scans are capped at 24 hours. When neither `start` nor `end` is provided, the command scans the latest `window` ending at `now`; when only one side is provided, the other side is derived from `window`. The scan can cross archive day files, edits a Components v2 progress view with a progress bar while running, and returns the closest matching archive timestamp as both raw epoch seconds and a Discord timestamp, plus the matched archive frame image. To avoid overlapping expensive video scans, the command rejects while a scan is running and for 30 seconds after the previous scan finishes.
+
+## Modlog
+
+The modlog system lives in the `modlog/` package, with the Discord command surface in `modlog/plugin.py` and `plugins/modlog.py` as the plugin shim. It records self-contained `ModlogEvent` JSON documents into SQLite.
+
+Event sources:
+
+- `audit_log`: Discord audit-log entries scanned on ready/reconnect and received through `audit_log_entry_create`.
+- `gateway`: selected Discord dispatch events, including raw message delete, raw bulk message delete, raw message edit, reaction clears, private-thread membership changes, member join/remove/update, ban, and unban.
+- `bogobot_management`: bot command actions written by `modlog_writer(...)`, such as capability changes, verification setup, raid config/state changes, archive recording changes, monitor start/stop/resend, announcements/messages, game resets, AI config/memory changes, milestone changes, system state/loglevel/log writes, and modlog undo attempts.
+
+Coverage summary:
+
+| Event class | Recording method | Notes |
+| --- | --- | --- |
+| Discord audit-log actions | Audit-log scan plus `audit_log_entry_create` | Covers Discord-supported audit events such as channel/role/member/moderation/invite/webhook/emoji/sticker/thread/automod changes when the bot can view audit logs. |
+| Message deletes and edits | Raw gateway events plus nearby audit-log grouping | Cached message payloads are stored when Discord provides them. Content from messages deleted before the bot saw/cache-captured them cannot be recovered. |
+| Bulk message deletes | Raw bulk gateway events plus nearby audit-log grouping | Individual cached messages are recorded when available; audit-log bulk delete events provide actor/count but not full content. |
+| Member join/remove/update/ban/unban | Gateway events plus audit-log grouping where applicable | Actor is often unknown on gateway events and supplied only by related audit-log entries. |
+| Private thread membership | Gateway events | Public thread joins/removes are intentionally less useful; private-thread membership is the important moderation case. |
+| Bot management actions | `modlog_writer(...)` | Used for state-changing bot commands and config panels. Read-only commands should not log. |
+| Historical actions before the bot existed | Audit-log best effort only | Discord audit logs are finite and do not contain deleted message content. |
+
+Audit-log rescans use the latest recorded event id minus a 10-minute overlap. Events are written with `replace=True`, so repeated scans can update delayed or stacked audit-log entries without duplicating rows.
+
+Related events are not stored. `RelatedResolver` computes related groups at query/render time from registered `ModlogAction(..., related=...)` rules. Current default rules link audit-log deletes/edits/member actions with nearby gateway captures, link bulk-delete audit entries with nearby bulk gateway captures, and link integration creation with nearby bot-add events by the same actor. The list view displays each related group as one section with one details button; details are opened per event.
+
+Undo is also dynamic. `ModlogAction(..., undo=UndoRule(...))` declares the criteria and execution function for an action. The event detail view asks `reverse_actions_for_event(...)` whether undo is possible at display time, disables undo when the user lacks `modlog.undo`, and writes a `modlog.undo` event after an undo attempt. Supported undo handlers include ban/unban reversal, member-role delta reversion, captured member-field restoration, deletion of created channels/roles/threads/stickers/etc. where Discord still permits it, invite deletion, and verification-message/config restoration.
+
+Message lifecycle captures store Discord payload details when available. Inline previews hide content without `modlog.view_sensitive`. The "View Content" flow tries to reconstruct the captured message with safe disabled components and acceptable embeds; "View Raw Content" sends chunked raw payload text.
+
+`/modlog` filtering is draft-based. Clicking Filters opens an ephemeral editor; event type filters cycle between `On`, `Grouped`, and `Off`, and actor/target/limit filters live in a second panel. Changes do not affect the visible modlog until Apply is clicked. Reset returns the draft to default filters. The default filters group `on_raw_message_delete` and `on_raw_message_edit` because those gateway captures are noisy beside their audit-log counterparts.
 
 ## Discord Subclass
 The `discord` subclass provides a simplified interface for interacting with the Discord API, specifically designed for use within plugins.
@@ -117,6 +185,8 @@ The `discord` subclass provides a simplified interface for interacting with the 
 * `message.delete()`: Deletes the message.
 
 New bot-authored UI should use static `discord.ui.LayoutView` payloads with `bot.discord.send(view=...)`. Embeds are still supported through Discord's native `embed=...` and `embeds=...` send/edit keyword arguments, but the old `send_embed(...)` and `message.edit_embed(...)` compatibility helpers have been removed.
+
+When editing interaction messages directly, pass `allowed_mentions=discord.AllowedMentions.none()` unless the edit intentionally pings users or roles.
 
 ## OCR Implementation
 Bogobot uses the Bogostream stats API by default. libtesseract OCR is still available as a fallback by setting `stats_source` to `ocr`; Tesseract only starts when `ocr_enabled` is true, which defaults to true for OCR mode and false for API mode.
@@ -192,6 +262,8 @@ Periodic monitors should own their own `utils.tasks.loop` and call `monitor.tick
 
 The stream monitor updates only after the sort-change test reports a real visual change. Repeated stale stream frames are ignored for monitor history, which keeps the monitor closer to actual state transitions than to the currently displayed stream frame.
 
+Monitor start/stop/resend actions write modlog events through instance-level modlog writers. Monitor permissions are split by monitor type: `monitor.values`, `monitor.stats`, `monitor.leaderboard`, and `monitor.live_chat`.
+
 ## Milestones
 `MilestoneTracker` watches named milestone values and notifies subscribed channels when a value changes. API-provided values are treated as authoritative and publish the latest value immediately. OCR-provided values still use a rolling stability window, so noisy OCR does not immediately publish a milestone.
 
@@ -244,12 +316,13 @@ Plugins can register lifecycle callbacks through decorators on `BotCore`:
 - `@bot.init_callback`: Runs after Discord login/setup, commonly used to initialize persistent monitors.
 - `@bot.ready_callback`: Runs on every Discord ready event after the one-time initialization logic. Use it for state that should refresh after reconnects.
 - `@bot.close_callback`: Runs during bot shutdown.
+- `@bot.listen("event_name")`: Registers a Discord event listener through Bogobot's callback registry. Use event names without `on_`, such as `raw_message_delete`, `raw_message_edit`, or `thread_member_join`. `ready` is intentionally not emitted through this path; use `ready_callback`.
 - `@bot.new_frame_callback`: Runs for each received stream frame. In OCR mode, `stats.py` uses this for visual sort detection, OCR, and milestone updates.
 - `@bot.new_value_callback`: Runs when a plugin publishes a new observed sort value with `bot.new_value(...)`. The callback receives `new_values: list[tuple[bool, int]]`, `new_value: int`, and the observation timestamp as a Python epoch-time `float`.
 - `@bot.command_telemetry_callback`: Runs for command telemetry events.
 - `@bot.message_callback`: Typed helper for Discord `message` events. `@bot.listen("message")` can be used directly for the same event.
 
-Plugins can also register AI actions for @mentions and `/ai` with `@utils.ai.action(...)`. See `AI.md` for the AI action API, passive context requests, and runtime behavior.
+Plugins can also register AI actions for @mentions, `/ai`, AI context-menu prompts, and scheduled AI activity with `@utils.ai.action(...)`. See `AI.md` for the AI action API, passive context requests, and runtime behavior.
 
 Current plugin responsibilities:
 
@@ -267,9 +340,10 @@ Current plugin responsibilities:
 - `leaderboard.py`: `/top`, `/bottom`, `/middle`, and `/manage leaderboard_monitor`.
 - `live_chat.py`: `/manage live_chat` YouTube live-chat monitor.
 - `milestones.py`: milestone tracking, notifications, `/manage milestones`, and `/milestone_info`.
+- `modlog.py`: imports `modlog.plugin.setup`; browse, filter, relate, inspect, and undo moderation-log events.
 - `monitor.py`: `/manage monitor`.
 - `raid.py`: raid burst detection, quarantine enforcement, and `/manage raid`.
-- `ai.py`: @mention and `/ai` dispatch, `/manage ai`, command execution, passive context request handling, and AI response history.
+- `ai.py`: @mention, `/ai`, and AI context-menu dispatch, `/manage ai`, command execution, passive context request handling, and AI response history.
 - `ai_activity.py`: scheduled or manual AI activity triggers.
 - `stats.py`: Bogostream API/OCR stats cache updates, sort-state events, and milestone value feeding.
 - `telemetry.py`: command telemetry collection, `/manage telemetry`, and `/usage`.
@@ -281,6 +355,8 @@ Current plugin responsibilities:
 
 ## Admin Commands
 The admin plugin adds `/manage state`, `/manage logs`, `/manage loglevel`, and `/manage message`.
+
+`/manage logs` reads from an in-memory log handler. If `log_censor.txt` exists, each non-empty line is loaded at startup and replaced with `[censored]` in memory-log output.
 
 ## Management Commands
 Several management commands use an explicit action parameter instead of separate start/stop style commands:
@@ -308,6 +384,8 @@ Several management commands use an explicit action parameter instead of separate
 - `/manage loglevel [level]`: Shows the current runtime log levels when `level` is omitted, or temporarily sets the Bogobot logger to `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, or `FATAL`. The root logger is capped at `INFO` minimum to avoid dependency debug noise.
 - `/manage telemetry [commands]`: Shows recent command activity, optionally filtered by command names.
 - `/manage video_archive start|stop|restart|status`: Starts, stops, restarts, or inspects visual stream archive recording. Video archive files are daily appendable MPEG-TS files in `archive.video.dir`.
+- `/modlog`: Shows an ephemeral Components v2 modlog browser for the current server. Pages are cursor-based by event snowflake, newest first. The filter button opens an ephemeral draft editor; event-type filters cycle between On, Grouped, and Off, message delete/edit gateway events are Grouped by default, and actor/target/limit filters apply only when the shared Apply button is pressed. Reset returns the draft to the default filters.
+- `/modlog` details: Each listed entry opens a per-event detail view. Related audit/gateway events are computed dynamically at query time and grouped into one list item. Message content previews, reconstructed message views, and raw payload views require `modlog.view_sensitive`; undo buttons require `modlog.undo` and are disabled when the viewer lacks that capability or when no undo is possible.
 - `/archive view [value]`: Shows archived monitor values with a public paginated view.
 - `/archive retrieve time`: Extracts a visual archive frame card for the target timestamp, with four archive frames before and after when available. `time` accepts epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`.
 - `/archive scan image [end] [start] [window]`: Searches the visual archive for an attached image crop and returns the matching epoch/Discord timestamp plus the matched frame. `start` and `end` accept only absolute values: `now`, epoch seconds, epoch milliseconds, `<t:...>`, or `<t:...:*>`. `window` is a relative duration such as `30s`, `15min`, `12h`, or `1day`; scans are capped at 24 hours. Only one scan may run at a time, and scans have a 30-second cooldown after finishing.
@@ -324,7 +402,7 @@ Several management commands use an explicit action parameter instead of separate
 - `/usage [commands]`: Shows command usage totals from telemetry.
 - `/avatar [user]`: Shows a user's avatar.
 - `/help [command]`: Shows bot command help. When `command` is provided, shows a slash-style command signature and description for that command.
-- `/capabilities`: Shows the capability reference from `CAPABILITIES.md`.
+- `/capabilities`: Sends `CAPABILITIES.md` as an attachment.
 - `/ping [user]`: Shows bot latency and can add a user latency measurement from that user's next message.
 - `/randint`, `/randfloat`, `/randbool`, `/randlist`, `/sort`: Randomization and text/list utilities. `/sort` supports `numerical` and Unicode-collated `lexicographic` modes.
 - `/bogo roll|bogo|shuffle|choice|name|sort|sort-list|sort-listr|sort-lexicographic`: Dice roll, text bogo, shuffle/choice, name bogo, and small animated bogosort commands. `/bogo sort-lexicographic` normalizes items with Unicode NFC and sorts strings with `pyuca` Unicode collation.
@@ -338,11 +416,13 @@ Account commands live under `/accounts`:
 - `/accounts capabilities grant|revoke user capabilities:(preset) [depth]`: Grants or revokes a dynamic preset reference. Use `server.(preset)` to apply it only in the current server.
 - `/accounts capabilities resolve capabilities`: Shows the concrete capabilities produced by a comma-separated capability list.
 - `/accounts capabilities show [user]`: Shows only the effective capability list for a user, defaulting to the caller.
+- `/accounts capabilities show [role]`: Shows a role account's server-local capabilities.
 - `/accounts capabilities reset user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides.
 - `/accounts preset show|create|remove name [capabilities]`: Shows, creates/replaces, or removes a custom global preset. Custom preset definitions contain unprefixed capabilities; apply them server-locally with `server.(preset)`.
-- `/accounts list_users [capability]`: Lists accounts, optionally filtered to users who can use a capability in the current server context.
+- `/accounts list_users [capabilities]`: Lists accounts, optionally filtered to users who can use every capability in a comma-separated capability list in the current server context.
 - `/accounts ban ban|unban user [scope]`: Bans or unbans an account globally or in the current server by setting or removing the negative `banned` capability.
-- `/accounts info [user] [eph]`: Shows account information for a user, defaulting to the caller.
+- `/accounts info [user_or_role] [eph]`: Shows account information for a user, role, or the caller.
+- `Account Info` context menu: Shows account information for a selected user/member.
 
 Global management capabilities can affect global or server-local targets. Server-local management capabilities can only affect server-local targets. For example, `accounts.ban` can use `/accounts ban scope:global` or `scope:server`, while `server.accounts.ban` only authorizes `scope:server`.
 

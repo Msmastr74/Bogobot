@@ -1,6 +1,6 @@
 # Bogobot AI
 
-Bogobot can use an OpenAI-compatible chat API to respond to mentions, power `/ai`, and choose Discord commands from registered AI actions.
+Bogobot can use an OpenAI-compatible chat API to respond to mentions, power `/ai`, answer from a selected Discord message through the AI context menu, and choose Discord commands from registered AI actions.
 
 The AI system is optional. It is configured with the top-level `ai` object in `config.json` or `local_config.json`.
 Responses currently use a fixed 2048-token generation budget.
@@ -18,6 +18,7 @@ Responses currently use a fixed 2048-token generation budget.
     "request_interval_seconds": 60,
     "normalize_discord": true,
     "multipart_responses": true,
+    "response_as_tool": true,
     "history": {
         "enabled": true,
         "path": "ai_history.sqlite3",
@@ -43,6 +44,7 @@ Fields:
 - `request_interval_seconds`: Minimum seconds between AI provider requests. Defaults to `60`; use `0` for local providers.
 - `normalize_discord`: Annotates Discord mentions and channels with readable names before sending context to the model. Defaults to `true`.
 - `multipart_responses`: Teaches the model that it may return normal text and tool calls in the same response. Defaults to `true`. When enabled, prompt examples use native tool-call JSON for context requests, memory changes, and visible-reply suppression.
+- `response_as_tool`: When `multipart_responses` is enabled, requires visible Discord text to be returned through the native `respond` tool instead of assistant message content. Defaults to `true`. Bogobot sets provider `tool_choice` to `required` in this mode so every turn is represented as native tool calls.
 - `history.enabled`: Enables per-channel short-term AI history. Defaults to `true`.
 - `history.path`: SQLite path for AI history. Defaults to `ai_history.sqlite3`.
 - `history.char_budget`: Per-channel character budget. Oldest stored messages are deleted first. Defaults to `10000`.
@@ -52,6 +54,12 @@ Fields:
 - `breaks.break_minutes`: Minutes AI ignores mentions and `/ai` while on break. Defaults to `10`.
 
 ## Runtime Management
+
+User-facing entry points are:
+
+- Mention/reply AI chat in Discord channels.
+- `/ai prompt:...`.
+- `AI` message context menu, which opens a modal prompt and includes the selected message as reply context.
 
 `/manage ai action:config` opens an ephemeral Components v2 panel for AI controls. It requires `ai.manage.config` and shows the base instructions, the configured custom instructions, the current AI enabled state, and break timing.
 
@@ -98,6 +106,7 @@ Example config:
     "request_interval_seconds": 0,
     "normalize_discord": true,
     "multipart_responses": true,
+    "response_as_tool": true,
     "history": {
         "enabled": true,
         "path": "ai_history.sqlite3",
@@ -127,6 +136,7 @@ Groq can be used through its OpenAI-compatible API. A longer request interval is
     "request_interval_seconds": 60,
     "normalize_discord": true,
     "multipart_responses": true,
+    "response_as_tool": true,
     "history": {
         "enabled": false,
         "path": "ai_history.sqlite3",
@@ -156,6 +166,7 @@ Gemini/Gemma models can be used through Google's OpenAI-compatible endpoint.
     "request_interval_seconds": 30,
     "normalize_discord": true,
     "multipart_responses": true,
+    "response_as_tool": true,
     "history": {
         "enabled": true,
         "path": "ai_history.sqlite3",
@@ -185,7 +196,7 @@ Example attached metadata:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-capabilities: *:100
+capabilities: [all]:100
 </{SYSTEM_TAG}:attached_metadata>
 ```
 
@@ -197,13 +208,13 @@ Reply context is sent as a separate assistant-role message:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-capabilities: *:100
+capabilities: [all]:100
 </{SYSTEM_TAG}:attached_metadata>
 previous bot message
 </{SYSTEM_TAG}:replied_to>
 ```
 
-Tool and command calls are recorded in history as event history:
+Tool and command calls are recorded in history as event history. The JSON payload appears first; output-message metadata follows when a Discord message was produced:
 
 ```xml
 <{SYSTEM_TAG}:event_history type="tool_use">
@@ -212,7 +223,7 @@ Tool and command calls are recorded in history as event history:
 id: 1508656142996340787
 time: 2026-05-26T02:20:53.966000+00:00
 user: 1499874423019409599 Bogobot-Testing "Bogobot-Testing"
-capabilities: *:100
+capabilities: [all]:100
 </{SYSTEM_TAG}:output_message_metadata>
 </{SYSTEM_TAG}:event_history>
 ```
@@ -248,7 +259,7 @@ Hi.
 
 The model can ask Bogobot to make extra context available on a future AI turn. These requests do not run a second model call in the current turn. They are queued in SQLite, resolved before the next matching channel/user AI turn, injected as `{SYSTEM_TAG}:requested_context`, recorded into history, then discarded.
 
-With `ai.multipart_responses` enabled, Bogobot instructs the model to use the native `request_context` tool. The model can call this tool alongside normal assistant text when it wants to answer now and queue future context in the same turn.
+With `ai.multipart_responses` enabled, Bogobot instructs the model to use the native `request_context` tool. The model can call this tool alongside visible response text when it wants to answer now and queue future context in the same turn. With the default `response_as_tool: true`, that visible text is supplied through `respond`.
 
 JSON argument examples:
 
@@ -296,11 +307,25 @@ Supported context request types:
 
 Queued context requests are channel-scoped. If a request also has a `user_id`, it is only consumed by that user's next matching AI turn.
 
+## Visible Replies and Tool Calls
+
+When both `multipart_responses` and `response_as_tool` are true, Bogobot exposes a native `respond` tool:
+
+```json
+{"response":"visible Discord reply text"}
+```
+
+In this mode, the model should not put normal visible text in assistant message content. A normal reply is `respond` only; a reply plus side effects is `respond` plus other native tools; a silent turn is `dont_respond` without `respond`.
+
+Bogobot still records the visible response text into channel history as the assistant reply. This keeps user-visible conversation history normal while avoiding provider/model quirks where fake textual tool calls leak into Discord.
+
+At the end of every AI request, Bogobot appends a final user-role instruction guardrail reminding the model to answer with its reply, use native tool calls only, and not output history, metadata, internal records, wrapper tags, or system tags. This guardrail is not a user message to answer.
+
 ## Persistent Memory
 
 The model can maintain global persistent memory in SQLite. The configured memory budget is injected each turn, along with the remaining character count. Memories are intended for durable preferences, stable project facts, recurring decisions, and useful semi-persistent working context.
 
-With `ai.multipart_responses` enabled, Bogobot instructs the model to use the native `persistent_memory` tool. The model can call this tool alongside normal assistant text when it wants to answer now and update memory in the same turn.
+With `ai.multipart_responses` enabled, Bogobot instructs the model to use the native `persistent_memory` tool. The model can call this tool alongside visible response text when it wants to answer now and update memory in the same turn. With the default `response_as_tool: true`, that visible text is supplied through `respond`.
 
 JSON argument examples:
 
@@ -314,7 +339,9 @@ If a create or edit would exceed `ai.history.persistent_char_budget`, Bogobot re
 
 When `ai.multipart_responses` is disabled, Bogobot falls back to legacy hidden assistant XML tags for memory changes in normal text replies.
 
-With `ai.multipart_responses` enabled, Bogobot exposes a native `dont_respond` tool. The model can call it by itself or alongside normal assistant text and other tool calls. If normal assistant text is included with `dont_respond`, that text is recorded in history but not displayed in Discord. Inline assistant XML controls are disabled in multipart mode and are treated as normal text.
+With `ai.multipart_responses` enabled, Bogobot exposes a native `dont_respond` tool. The model can call it by itself or alongside visible response text and other tool calls. If visible response text is included with `dont_respond`, that text is recorded in history but not displayed in Discord. Inline assistant XML controls are disabled in multipart mode and are treated as normal text.
+
+When `response_as_tool` is also enabled, visible text paired with `dont_respond` must be supplied through `respond`; that response text is recorded but not sent to Discord.
 
 When `ai.multipart_responses` is disabled, the model can include `<{ASSISTANT_TAG}:dont_respond />` to suppress the visible Discord reply while still leaving the turn in history.
 

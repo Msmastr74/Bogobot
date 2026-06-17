@@ -66,8 +66,8 @@ Global management capabilities can affect global or server-local targets. Server
 
 ## Managing Capabilities
 
-- `/accounts capabilities action:grant target:@user capabilities:a,b,c`: Grants a comma-separated capability list.
-- `/accounts capabilities action:grant target:@role capabilities:server.a,server.b`: Grants a comma-separated explicit server-local capability list to a role account.
+- `/accounts capabilities action:grant target:@user capabilities:a,b,c [depth]`: Grants a comma-separated capability list.
+- `/accounts capabilities action:grant target:@role capabilities:server.a,server.b [depth]`: Grants a comma-separated explicit server-local capability list to a role account.
 - `/accounts capabilities action:revoke target:@user capabilities:a,b,c`: Revokes a comma-separated capability list.
 - `/accounts capabilities action:revoke target:@role capabilities:server.a,server.b`: Revokes a comma-separated explicit server-local capability list from a role account.
 - `/accounts capabilities action:reset target:@user`: Atomically resets a user's global capabilities to defaults and clears local permission overrides. It fails without changing anything if the caller cannot revoke every current capability and grant every default capability.
@@ -83,6 +83,15 @@ Global management capabilities can affect global or server-local targets. Server
 - `/accounts preset action:create name:name capabilities:a,b,c`: Creates or replaces a custom preset. Names use `\w+`, or `server.\w+` to define the server-specific version used by `server.(name)`.
 - `/accounts preset action:remove name:name`: Removes a custom preset.
 - Global presets: `default`, `user`, `ai`, `auditor`, `moderator`, `admin`.
+
+Built-in preset intent:
+
+- `default`: normal user defaults from `utils.accounts.default_capabilities()`.
+- `user`: normal user command and user-feature prefixes.
+- `ai`: user-facing AI access.
+- `auditor`: modlog browsing without sensitive message content or undo.
+- `moderator`: moderation-oriented use permissions, including raid, verification, monitor, telemetry, games, milestone, and modlog viewing.
+- `admin`: broad management capabilities, excluding dangerous bot process state.
 
 Custom presets are stored globally in config under `account_capability_presets`. Preset capability entries can include `server.` or `.use` / `.grant`; these prefixes and suffixes are canonicalized when the preset resolves.
 
@@ -132,6 +141,16 @@ Account info and account listing are intentionally public through normal `comman
 - `monitor.stats`: Start, stop, or resend the Bogostream stats monitor.
 - `monitor.leaderboard`: Start, stop, or resend the Sortoffs leaderboard monitor.
 - `monitor.live_chat`: Start, stop, or resend the live chat monitor.
+
+## Modlog
+
+- `modlog.view`: Browse the server modlog with `/modlog`.
+- `modlog.view_sensitive`: View captured message content, reconstructed deleted/edited messages, and raw message payloads.
+- `modlog.undo`: Use undo controls for supported modlog events.
+
+`/modlog` itself requires `modlog.view`. Event details are visible with the same base capability, but sensitive content buttons check `modlog.view_sensitive`, and undo buttons check `modlog.undo`.
+
+The `auditor` preset intentionally grants only `modlog.view.use`. The `moderator` preset grants modlog viewing plus sensitive content viewing, while the `admin` preset grants the broader `modlog` prefix.
 
 ## Raid Protection
 

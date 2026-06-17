@@ -47,7 +47,9 @@ Go into `config.json` and provide the main credentials:
  * `milestone_update_format`: Optional message template for milestone changes.
  * `telemetry_path`: Optional JSONL ("JSON Lines", one JSON record on each line) path for command telemetry. Defaults to `telemetry.jsonl`.
  * `archive`: Optional archive configuration object. It contains compact monitor archive settings and optional visual archive settings, including appendable daily `.ts` recording and old-day remuxing to `mkv`, `mp4`, or `ts`.
+ * `modlog`: Optional moderation-log configuration object. `modlog.database_path` overrides the SQLite event database path, which defaults to `modlog.sqlite3`.
  * `ai`: Optional AI configuration object. See `AI.md` for setup, provider examples, local Ollama guidance, `/manage ai`, and prompt/context notes.
+ * `log_censor.txt`: Optional gitignored local file, one string per line. Values are censored from the in-memory log buffer shown by `/manage logs`.
 
 `DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup, runtime management, and provider examples.
 
@@ -77,16 +79,23 @@ May 26 00:51:54.038 INFO     Bogobot.Plugins Loaded Plugin: accounts.py
 May 26 00:51:54.041 INFO     Bogobot.Plugins Loaded Plugin: milestones.py
 May 26 00:51:54.049 INFO     Bogobot.Plugins Loaded Plugin: utility.py
 May 26 00:51:54.049 INFO     Bogobot.Plugins Loaded Plugin: ai.py
+May 26 00:51:54.049 INFO     Bogobot.Plugins Loaded Plugin: ai_activity.py
 May 26 00:51:54.094 INFO     Bogobot.Plugins Loaded Plugin: bogo.py
 May 26 00:51:54.103 INFO     Bogobot.Plugins Loaded Plugin: telemetry.py
 May 26 00:51:54.105 INFO     Bogobot.Plugins Loaded Plugin: get_stats.py
 May 26 00:51:54.106 INFO     Bogobot.Plugins Loaded Plugin: admin.py
 May 26 00:51:54.109 INFO     Bogobot.Plugins Loaded Plugin: cbogo.py
+May 26 00:51:54.112 INFO     Bogobot.Plugins Loaded Plugin: code_sandbox.py
 May 26 00:51:54.116 INFO     Bogobot.Plugins Loaded Plugin: stats.py
 May 26 00:51:54.121 INFO     Bogobot.Plugins Loaded Plugin: archival.py
 May 26 00:51:54.127 INFO     Bogobot.Plugins Loaded Plugin: bogoscramble.py
 May 26 00:51:54.131 INFO     Bogobot.Plugins Loaded Plugin: bogotree.py
-May 26 00:51:54.131 INFO     Bogobot.Plugins Finished loading plugins.
+May 26 00:51:54.132 INFO     Bogobot.Plugins Loaded Plugin: info.py
+May 26 00:51:54.133 INFO     Bogobot.Plugins Loaded Plugin: live_chat.py
+May 26 00:51:54.134 INFO     Bogobot.Plugins Loaded Plugin: modlog.py
+May 26 00:51:54.135 INFO     Bogobot.Plugins Loaded Plugin: raid.py
+May 26 00:51:54.136 INFO     Bogobot.Plugins Loaded Plugin: verify.py
+May 26 00:51:54.137 INFO     Bogobot.Plugins Finished loading plugins.
 May 26 00:51:54.131 INFO     discord.client  logging in using static token
 May 26 00:51:54.469 INFO     Bogobot         Syncing Discord command tree (command tree changed)
 May 26 00:51:55.089 INFO     discord.gateway Shard ID None has connected to Gateway (Session ID: cda0c70dfebc1d29c40011f49a3a6149).
@@ -102,7 +111,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /get_stats: Retrieves current shuffles, comparisons, and calculated uptime.
  * /get_sort: Retrieves the sort state from the latest cached video frame, intentionally matching the delayed YouTube view rather than the fresher API state.
  * /streamboard: Shows Bogostream contributor rankings, or a contributor profile by nickname.
- * @mention AI and /ai: Bogobot can chat, call registered command actions, and queue passive context requests. See `AI.md`.
+ * @mention AI, /ai, and the AI message context menu: Bogobot can chat about a prompt or selected Discord message, call registered command actions, and queue passive context requests. See `AI.md`.
  * /archive view: Shows archived monitor values.
  * /archive retrieve: Shows a visual archive frame card by epoch or Discord timestamp.
  * /archive scan: Searches a bounded visual archive window for an attached image crop and returns the matching timestamp.
@@ -115,6 +124,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage ai: Opens AI config or memory controls. Config can toggle AI, edit custom instructions, and tune scheduled breaks; memory controls can inspect and clean channel history or persistent memories without exposing provider secrets.
  * /manage create_verification: Creates a persistent captcha verification prompt and configures server-specific verified/quarantine roles.
  * /manage raid: Configures raid protection, toggles automatic detection, or manually activates/deactivates raid mode.
+ * /modlog: Browses server moderation events, bot management changes, and captured message lifecycle events. It includes dynamic related-event grouping, filtering, sensitive-content gating, and undo buttons for supported events.
  * /manage milestones: Subscribes/unsubscribes milestone notifications, or spoofs/deletes milestone values.
  * /milestone_info: Shows recent milestone history; OCR/manual entries may include frame images, while API-mode milestones usually do not.
  * /manage announce: Sends a simple bot-authored announcement.
@@ -123,7 +133,7 @@ Bogobot implements several slash commands for stream management and data retriev
  * /manage logs and /manage telemetry: Shows recent in-memory logs or command activity.
  * /usage: Shows command usage totals.
  * /help: Shows bot command help, or a command signature when given a command name.
- * /capabilities: Shows the bot capability reference.
+ * /capabilities: Sends the bot capability reference as a Markdown attachment.
  * /avatar and /ping: Small Discord utility commands.
  * /python and /javascript: Execute code in WASI-backed sandboxes, with modal input for longer programs or uploaded source files.
  * /ai_activity: Schedule, trigger, list, or remove AI activity triggers for a channel.
@@ -136,6 +146,8 @@ Bogobot implements several slash commands for stream management and data retriev
 Bogobot also writes an append-only monitor archive when observed sort values are available.
 Each chunk starts with a JSON header line, then compact `dt,value;` records where `dt`
 is centiseconds since the previous archived value.
+
+Bogobot can also write a server-local moderation log to SQLite. Audit-log entries are rescanned after reconnects, gateway message/member events are captured when Discord provides them, and bot management actions use the same event database. Sensitive message content is hidden unless the viewer has `modlog.view_sensitive`.
 
 ## Documentation
 For technical details regarding the internal API, OCR configuration, channel proxies, and plugin development, refer to `DOCS.md`.
