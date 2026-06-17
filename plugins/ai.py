@@ -1858,7 +1858,7 @@ async def setup(bot: 'BotCore'):
         def __init__(
             self,
             target_message: discord.Message,
-            command_continuation,
+            command_continuation: 'BotCore._Setup.CommandContinuation',
         ) -> None:
             super().__init__()
             self.target_message = target_message

@@ -852,7 +852,7 @@ async def setup(bot: BotCore):
             content: str,
             embeds: list[discord.Embed],
             attachments: list[discord.Attachment],
-            command_continuation,
+            command_continuation: BotCore._Setup.CommandContinuation,
         ):
             super().__init__()
             self.content = content

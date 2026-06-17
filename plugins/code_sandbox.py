@@ -101,7 +101,7 @@ class ProgramInputModal(discord.ui.Modal, title="Program"):
         *,
         callback: Callable[[str], Awaitable[Any]],
         label_text: str,
-        command_continuation,
+        command_continuation: BotCore._Setup.CommandContinuation,
     ) -> None:
         super().__init__()
         self.bot = bot

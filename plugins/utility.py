@@ -406,7 +406,7 @@ async def setup(bot: BotCore):
             accent_colour: discord.Colour | None,
             attachments: list[discord.Attachment],
             message_id: int | None,
-            command_continuation,
+            command_continuation: BotCore._Setup.CommandContinuation,
         ):
             super().__init__()
             self.message_title = title
