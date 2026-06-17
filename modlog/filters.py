@@ -69,6 +69,17 @@ class ModlogFilters:
         self.set_mode(action, next_mode)
         return next_mode
 
+    def invert_mode(self, action: str) -> FilterMode:
+        current = self.mode_for(action)
+        next_modes: dict[FilterMode, FilterMode] = {
+            "on": "off",
+            "grouped": "grouped",
+            "off": "on",
+        }
+        next_mode = next_modes[current]
+        self.set_mode(action, next_mode)
+        return next_mode
+
     def include_anchor(self, event: ModlogEvent) -> bool:
         return self.mode_for(event.action) == "on" and self.matches_entity_filters(event)
 
@@ -280,9 +291,11 @@ class ModlogEventFilterView(discord.ui.LayoutView):
         previous_button = discord.ui.Button(label="Previous", style=discord.ButtonStyle.secondary, disabled=self.page <= 0)
         next_button = discord.ui.Button(label="Next", style=discord.ButtonStyle.secondary, disabled=self.page >= total_pages - 1)
         back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        invert_button = discord.ui.Button(label="Invert", style=discord.ButtonStyle.secondary)
         previous_button.callback = self.previous_page
         next_button.callback = self.next_page
         back_button.callback = self.back
+        invert_button.callback = self.invert_all
         container.add_item(discord.ui.Separator())
         container.add_item(discord.ui.ActionRow(previous_button, next_button, back_button))
         self.add_item(container)
@@ -296,6 +309,15 @@ class ModlogEventFilterView(discord.ui.LayoutView):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         return callback
+
+    async def invert_all(self, interaction: discord.Interaction):
+        for action in self.owner.view.event_names():
+            self.draft.invert_mode(action)
+        self.render()
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def previous_page(self, interaction: discord.Interaction) -> None:
         self.page -= 1
