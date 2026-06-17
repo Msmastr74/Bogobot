@@ -21,7 +21,7 @@ Android/Termux is a supported environment.
    # OR
    bash dependencies_macos.sh  # For macOS with Homebrew
    # OR
-   bash dependencies_windows.sh  # For Windows
+   ./dependencies_windows.ps1  # For Windows
    # OR
    bash dependencies_linux.sh  # For Linux
    ```
