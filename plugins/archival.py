@@ -1170,6 +1170,7 @@ async def setup(bot: BotCore):
         name="view",
         description="View archived monitor values",
         eph=False,
+        defer=False
     )
     @action(
         "archive_view",
@@ -1189,6 +1190,7 @@ async def setup(bot: BotCore):
                 ephemeral=True,
             )
             return
+        await bot.discord.defer()
 
         snapshot_end = await archive_snapshot_end()
         view = ArchiveView(
@@ -1210,6 +1212,7 @@ async def setup(bot: BotCore):
         name="retrieve",
         description="View a visual archive frame by timestamp",
         eph=False,
+        defer=False
     )
     @action(
         "archive_retrieve",
@@ -1230,6 +1233,7 @@ async def setup(bot: BotCore):
                 ephemeral=True,
             )
             return
+        await bot.discord.defer()
 
         timestamp_seconds = int(timestamp)
         with tempfile.TemporaryDirectory(prefix="bogobot_archive_frame_") as temp_dir:
@@ -1241,6 +1245,7 @@ async def setup(bot: BotCore):
                 after=4,
             )
             if not archive_frames:
+                await bot.discord.cleanup_defer_status(interaction)
                 await bot.discord.send(
                     f"No archived frame found for <t:{timestamp_seconds}:S>.",
                     response=True,
