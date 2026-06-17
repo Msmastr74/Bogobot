@@ -1130,6 +1130,7 @@ class ModlogView(discord.ui.LayoutView):
         *,
         database: ModlogDatabase,
         guild_id: int,
+        interaction: discord.Interaction,
         filters: ModlogFilters | None = None,
         page_first_id: int | None = None,
         previous_first_ids: Iterable[int] = (),
@@ -1138,6 +1139,7 @@ class ModlogView(discord.ui.LayoutView):
         self.database = database
         self.resolver = RelatedResolver()
         self.guild_id = guild_id
+        self.interaction = interaction
         self.filters = filters if filters is not None else default_filters_for_events(self.event_names())
         self.page_first_id = page_first_id
         self.previous_first_ids = list(previous_first_ids)
@@ -1425,6 +1427,7 @@ async def setup(bot: BotCore) -> None:
             view=ModlogView(
                 database=database,
                 guild_id=interaction.guild.id,
+                interaction=interaction,
             ),
             response=True,
             ephemeral=True,

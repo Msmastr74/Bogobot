@@ -149,7 +149,7 @@ def filter_button_style(filters: ModlogFilters, default: ModlogFilters) -> disco
 
 
 class ModlogFilterButton(discord.ui.Button["ModlogView"]):
-    def __init__(self,filters: ModlogFilters, default: ModlogFilters) -> None:
+    def __init__(self, filters: ModlogFilters, default: ModlogFilters) -> None:
         super().__init__(
             label="Filters",
             style=filter_button_style(filters, default),
@@ -160,7 +160,7 @@ class ModlogFilterButton(discord.ui.Button["ModlogView"]):
         if view is None:
             await interaction.response.send_message("Filters are not available right now.", ephemeral=True)
             return
-        owner = FilterOwner(view=view, interaction=interaction)
+        owner = FilterOwner(view=view, interaction=view.interaction)
         await interaction.response.send_message(
             view=ModlogFilterPanel(owner, owner.view.filters.copy()),
             ephemeral=True,
@@ -191,14 +191,23 @@ class ModlogFilterPanel(discord.ui.LayoutView):
         ))
 
     async def open_events(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(view=ModlogEventFilterView(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogEventFilterView(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def open_entities(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(view=ModlogEntityFilterView(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogEntityFilterView(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def reset_filters(self, interaction: discord.Interaction) -> None:
         self.draft = default_filters_for_owner(self.owner)
-        await interaction.response.edit_message(view=ModlogFilterPanel(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogFilterPanel(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def apply(self, interaction: discord.Interaction) -> None:
         await apply_filters(interaction, self.owner, self.draft)
@@ -225,7 +234,10 @@ def reset_apply_buttons(owner: FilterOwner, draft: ModlogFilters) -> tuple[disco
 async def apply_filters(interaction: discord.Interaction, owner: FilterOwner, draft: ModlogFilters) -> None:
     owner.view.filters = draft.copy()
     await update_owner(owner)
-    await interaction.response.edit_message(view=ModlogFilterPanel(owner, owner.view.filters.copy()))
+    await interaction.response.edit_message(
+        view=ModlogFilterPanel(owner, owner.view.filters.copy()),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 class ModlogEventFilterView(discord.ui.LayoutView):
@@ -278,21 +290,33 @@ class ModlogEventFilterView(discord.ui.LayoutView):
         async def callback(interaction: discord.Interaction) -> None:
             self.draft.cycle_mode(action)
             self.render()
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         return callback
 
     async def previous_page(self, interaction: discord.Interaction) -> None:
         self.page -= 1
         self.render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def next_page(self, interaction: discord.Interaction) -> None:
         self.page += 1
         self.render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def back(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(view=ModlogFilterPanel(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogFilterPanel(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 class ModlogIdModal(discord.ui.Modal):
     def __init__(
@@ -330,7 +354,10 @@ class ModlogIdModal(discord.ui.Modal):
             elif self.target_kind == "channel":
                 kind = "channel"
             self.draft.target = ModlogTargetFilter(kind, value)
-        await interaction.response.edit_message(view=ModlogEntityFilterView(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogEntityFilterView(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class ModlogLimitModal(discord.ui.Modal):
@@ -359,7 +386,10 @@ class ModlogLimitModal(discord.ui.Modal):
                 await interaction.response.send_message("Limit must be greater than 0.", ephemeral=True)
                 return
             self.draft.limit = limit
-        await interaction.response.edit_message(view=ModlogEntityFilterView(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogEntityFilterView(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class ModlogEntityFilterView(discord.ui.LayoutView):
@@ -435,7 +465,10 @@ class ModlogEntityFilterView(discord.ui.LayoutView):
 
     async def _edit_self(self, interaction: discord.Interaction) -> None:
         self.render()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def set_actor(self, interaction: discord.Interaction) -> None:
         self.draft.actor_id = self.actor_select.values[0].id
@@ -476,4 +509,7 @@ class ModlogEntityFilterView(discord.ui.LayoutView):
         await self._edit_self(interaction)
 
     async def back(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(view=ModlogFilterPanel(self.owner, self.draft))
+        await interaction.response.edit_message(
+            view=ModlogFilterPanel(self.owner, self.draft),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
