@@ -111,6 +111,7 @@ class ModlogFilters:
 DEFAULT_FILTERS = ModlogFilters(event_modes={
     "on_raw_message_delete": "grouped",
     "on_raw_message_edit": "grouped",
+    "on_member_update": "grouped"
 })
 
 
