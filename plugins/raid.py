@@ -7,6 +7,7 @@ import discord
 
 from bogobot_core import BotCore
 from modlog import ModlogAction, modlog_writer
+from modlog.writer import ModlogWriteCallback
 from utils import groups
 from utils import security_roles
 from utils.discord import InteractionModal
@@ -34,7 +35,23 @@ UNQUARANTINE_CUSTOM_ID_PREFIX = "bogobot:raid:unquarantine"
 RAID_MANAGE_CAPABILITY = "raid.manage"
 RAID_UNQUARANTINE_CAPABILITY = "raid.unquarantine"
 RAID_EXEMPT_CAPABILITY = "raid.exempt"
-WRITE_RAID_MODLOG = modlog_writer(ModlogAction("raid", "Raid protection configuration or state was changed."))
+
+
+@dataclass(frozen=True)
+class RaidModlogWriters:
+    verified_role: ModlogWriteCallback = modlog_writer(ModlogAction("raid.config.verified_role", "Raid protection verified role was changed."))
+    quarantine_role: ModlogWriteCallback = modlog_writer(ModlogAction("raid.config.quarantine_role", "Raid protection quarantine role was changed."))
+    mode: ModlogWriteCallback = modlog_writer(ModlogAction("raid.config.mode", "Raid protection mode was changed."))
+    alert_channel: ModlogWriteCallback = modlog_writer(ModlogAction("raid.config.alert_channel", "Raid protection alert channel was changed."))
+    numbers: ModlogWriteCallback = modlog_writer(ModlogAction("raid.config.numbers", "Raid protection numeric settings were changed."))
+    unquarantine: ModlogWriteCallback = modlog_writer(ModlogAction("raid.unquarantine", "A quarantined member was released."))
+    automation_on: ModlogWriteCallback = modlog_writer(ModlogAction("raid.automation.on", "Raid protection automation was enabled."))
+    automation_off: ModlogWriteCallback = modlog_writer(ModlogAction("raid.automation.off", "Raid protection automation was disabled."))
+    activate: ModlogWriteCallback = modlog_writer(ModlogAction("raid.mode.activate", "Raid mode was manually activated."))
+    deactivate: ModlogWriteCallback = modlog_writer(ModlogAction("raid.mode.deactivate", "Raid mode was manually deactivated."))
+
+
+RAID_MODLOG = RaidModlogWriters()
 
 
 @dataclass
@@ -140,12 +157,12 @@ class RaidConfigView(discord.ui.LayoutView):
         *,
         protector: "RaidProtector",
         guild: discord.Guild,
-        write_raid,
+        writers: RaidModlogWriters,
     ) -> None:
         super().__init__(timeout=300)
         self.protector = protector
         self.guild = guild
-        self.write_raid = write_raid
+        self.writers = writers
         config = protector.config_for(guild.id)
 
         self.verified_role_select = discord.ui.RoleSelect(
@@ -256,17 +273,16 @@ class RaidConfigView(discord.ui.LayoutView):
             await interaction.response.send_message(role_error, ephemeral=True)
             return
         await security_roles.set_verified_role(self.protector.bot, selected)
-        await self.write_raid(
+        await self.writers.verified_role(
             interaction,
             extra={
-                "action": "config.verified_role",
                 "role_id": selected.id,
             },
         )
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
-            write_raid=self.write_raid,
+            writers=self.writers,
         ))
 
     async def set_quarantine_role(self, interaction: discord.Interaction) -> None:
@@ -286,17 +302,16 @@ class RaidConfigView(discord.ui.LayoutView):
             await interaction.response.send_message(role_error, ephemeral=True)
             return
         await security_roles.set_quarantine_role(self.protector.bot, selected)
-        await self.write_raid(
+        await self.writers.quarantine_role(
             interaction,
             extra={
-                "action": "config.quarantine_role",
                 "role_id": selected.id,
             },
         )
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
-            write_raid=self.write_raid,
+            writers=self.writers,
         ))
 
     def _set_mode_callback(self, mode: RaidMode):
@@ -310,10 +325,9 @@ class RaidConfigView(discord.ui.LayoutView):
         previous = config.mode
         config.mode = mode
         await self.protector.save_config(self.guild.id)
-        await self.write_raid(
+        await self.writers.mode(
             interaction,
             extra={
-                "action": "config.mode",
                 "old": previous,
                 "new": mode,
             },
@@ -321,7 +335,7 @@ class RaidConfigView(discord.ui.LayoutView):
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
-            write_raid=self.write_raid,
+            writers=self.writers,
         ))
 
     async def set_alert_channel(self, interaction: discord.Interaction) -> None:
@@ -347,10 +361,9 @@ class RaidConfigView(discord.ui.LayoutView):
         previous = config.alert_channel_id
         config.alert_channel_id = selected.id
         await self.protector.save_config(self.guild.id)
-        await self.write_raid(
+        await self.writers.alert_channel(
             interaction,
             extra={
-                "action": "config.alert_channel",
                 "old": previous,
                 "new": selected.id,
             },
@@ -358,7 +371,7 @@ class RaidConfigView(discord.ui.LayoutView):
         await interaction.response.edit_message(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
-            write_raid=self.write_raid,
+            writers=self.writers,
         ))
 
     async def edit_numbers(self, interaction: discord.Interaction) -> None:
@@ -366,7 +379,7 @@ class RaidConfigView(discord.ui.LayoutView):
             interaction,
             protector=self.protector,
             guild=self.guild,
-            write_raid=self.write_raid,
+            writers=self.writers,
         )
         await interaction.response.send_modal(modal)
 
@@ -381,12 +394,12 @@ class RaidNumbersModal(
         *,
         protector: "RaidProtector",
         guild: discord.Guild,
-        write_raid,
+        writers: RaidModlogWriters,
     ) -> None:
         super().__init__(interaction)
         self.protector = protector
         self.guild = guild
-        self.write_raid = write_raid
+        self.writers = writers
         config = protector.config_for(guild.id)
 
         self.windows = discord.ui.TextInput(
@@ -479,10 +492,9 @@ class RaidNumbersModal(
         await self.protector.bot.discord.defer(ephemeral=True)
 
         await self.protector.save_config(self.guild.id)
-        await self.write_raid(
+        await self.writers.numbers(
             interaction,
             extra={
-                "action": "config.numbers",
                 "old": previous,
                 "new": {
                     "window_seconds": config.window_seconds,
@@ -497,7 +509,7 @@ class RaidNumbersModal(
         await self.original_interaction.edit_original_response(view=RaidConfigView(
             protector=self.protector,
             guild=self.guild,
-            write_raid=self.write_raid,
+            writers=self.writers,
         ))
         
         await self.protector.bot.discord.send("Updated raid settings.", response=True, ephemeral=True)
@@ -1281,10 +1293,9 @@ class RaidUnquarantineButton(
             return
 
         await self._clear_record(bot)
-        await WRITE_RAID_MODLOG(
+        await RAID_MODLOG.unquarantine(
             interaction,
             extra={
-                "action": "unquarantine",
                 "user_id": member.id,
                 "restored_role_ids": [role.id for role in restorable_roles],
                 "skipped_role_ids": skipped_roles,
@@ -1323,7 +1334,7 @@ class RaidUnquarantineButton(
 async def setup(bot: BotCore) -> None:
     protector = RaidProtector(bot)
     manage = groups.manage(bot)
-    write_raid = WRITE_RAID_MODLOG
+    writers = RAID_MODLOG
     bot.accounts.capabilities.register(RAID_UNQUARANTINE_CAPABILITY)
     bot.accounts.capabilities.register(RAID_EXEMPT_CAPABILITY)
     bot.add_dynamic_items(RaidUnquarantineButton)
@@ -1367,10 +1378,9 @@ async def setup(bot: BotCore) -> None:
             previous_alert_channel_id = protector.config_for(guild.id).alert_channel_id
             await protector.configure(guild_id=guild.id, alert_channel=alert_channel)
             if alert_channel is not None:
-                await write_raid(
+                await writers.alert_channel(
                     interaction,
                     extra={
-                        "action": "config.alert_channel",
                         "old": previous_alert_channel_id,
                         "new": alert_channel.id,
                     },
@@ -1379,7 +1389,7 @@ async def setup(bot: BotCore) -> None:
                 view=RaidConfigView(
                     protector=protector,
                     guild=guild,
-                    write_raid=write_raid,
+                    writers=writers,
                 ),
                 ephemeral=True,
             )
@@ -1427,10 +1437,9 @@ async def setup(bot: BotCore) -> None:
                     return
                 config.alert_channel_id = alert_channel.id
             await protector.save_config(guild.id)
-            await write_raid(
+            await writers.automation_on(
                 interaction,
                 extra={
-                    "action": "automation.on",
                     "alert_channel_old": previous_alert_channel_id,
                     "alert_channel_new": config.alert_channel_id,
                 },
@@ -1446,10 +1455,9 @@ async def setup(bot: BotCore) -> None:
             previous = protector.config_for(guild.id).enabled
             protector.config_for(guild.id).enabled = False
             await protector.save_config(guild.id)
-            await write_raid(
+            await writers.automation_off(
                 interaction,
                 extra={
-                    "action": "automation.off",
                     "old": previous,
                     "new": False,
                 },
@@ -1478,12 +1486,7 @@ async def setup(bot: BotCore) -> None:
                 )
                 return
             await protector.manual_activate(guild.id)
-            await write_raid(
-                interaction,
-                extra={
-                    "action": "mode.activate",
-                },
-            )
+            await writers.activate(interaction)
             await bot.discord.send(
                 "Raid mode activated.",
                 response=True,
@@ -1493,12 +1496,7 @@ async def setup(bot: BotCore) -> None:
 
         if action == "deactivate":
             await protector.manual_deactivate(guild.id)
-            await write_raid(
-                interaction,
-                extra={
-                    "action": "mode.deactivate",
-                },
-            )
+            await writers.deactivate(interaction)
             await bot.discord.send(
                 "Raid mode deactivated.",
                 response=True,

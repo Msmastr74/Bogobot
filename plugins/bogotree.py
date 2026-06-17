@@ -541,7 +541,7 @@ async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
     sorted_emoji = bot.discord.get_emoji("sorted")
     star_emoji = "⭐"
-    write_bogotree = modlog_writer(ModlogAction("games.bogotree", "Bogotree game state was changed."))
+    write_bogotree_reset = modlog_writer(ModlogAction("games.bogotree.reset", "Bogotree game state was reset."))
     bot.accounts.capabilities.register(BOGOTREE_RESET_CAPABILITY)
 
     def game_guild_id(interaction: discord.Interaction) -> int:
@@ -650,10 +650,9 @@ async def setup(bot: BotCore):
                 state = default_state()
                 await save_state(guild_id, state)
                 await reset_user_scores(guild_id)
-            await write_bogotree(
+            await write_bogotree_reset(
                 interaction,
                 extra={
-                    "action": "reset",
                     "guild_id": guild_id,
                 },
             )

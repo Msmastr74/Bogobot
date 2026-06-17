@@ -34,6 +34,7 @@ class ModlogTargetFilter:
 @dataclass
 class ModlogFilters:
     event_modes: dict[str, FilterMode] = field(default_factory=dict)
+    background_mode: FilterMode = "on"
     actor_id: int | None = None
     target: ModlogTargetFilter | None = None
     limit: int | None = 10
@@ -41,6 +42,7 @@ class ModlogFilters:
     def copy(self) -> "ModlogFilters":
         return ModlogFilters(
             event_modes=dict(self.event_modes),
+            background_mode=self.background_mode,
             actor_id=self.actor_id,
             target=(
                 None if self.target is None else
@@ -53,10 +55,19 @@ class ModlogFilters:
         mode = self.event_modes.get(action)
         if mode is not None:
             return mode
-        return "off"
+        return self.background_mode
 
     def set_mode(self, action: str, mode: FilterMode) -> None:
+        if mode == self.background_mode:
+            self.event_modes.pop(action, None)
+            return
         self.event_modes[action] = mode
+
+    def set_background_mode(self, mode: FilterMode) -> None:
+        self.background_mode = mode
+        for action, action_mode in list(self.event_modes.items()):
+            if action_mode == self.background_mode:
+                del self.event_modes[action]
 
     def cycle_mode(self, action: str) -> FilterMode:
         current = self.mode_for(action)
@@ -69,16 +80,24 @@ class ModlogFilters:
         self.set_mode(action, next_mode)
         return next_mode
 
-    def invert_mode(self, action: str) -> FilterMode:
-        current = self.mode_for(action)
+    @staticmethod
+    def inverted_mode(mode: FilterMode) -> FilterMode:
         next_modes: dict[FilterMode, FilterMode] = {
             "on": "off",
             "grouped": "grouped",
             "off": "on",
         }
-        next_mode = next_modes[current]
-        self.set_mode(action, next_mode)
-        return next_mode
+        return next_modes[mode]
+
+    def invert_modes(self) -> None:
+        inverted: dict[str, FilterMode] = {
+            action: self.inverted_mode(mode)
+            for action, mode in self.event_modes.items()
+        }
+        self.background_mode = self.inverted_mode(self.background_mode)
+        self.event_modes.clear()
+        for action, mode in inverted.items():
+            self.set_mode(action, mode)
 
     def include_anchor(self, event: ModlogEvent) -> bool:
         return self.mode_for(event.action) == "on" and self.matches_entity_filters(event)
@@ -96,6 +115,8 @@ class ModlogFilters:
     def same_as(self, other: "ModlogFilters") -> bool:
         event_names = set(self.event_modes) | set(other.event_modes)
         return (
+            self.background_mode == other.background_mode
+            and
             all(self.mode_for(name) == other.mode_for(name) for name in event_names)
             and self.actor_id == other.actor_id
             and self.target == other.target
@@ -105,21 +126,26 @@ class ModlogFilters:
     def summary(self, default: "ModlogFilters | None" = None) -> str:
         lines: list[str] = []
         if default is None:
-            lines.append(f"Event types: `{len(self.event_modes)}`")
+            lines.append(f"Background event mode: `{self.background_mode}`")
+            lines.append(f"Event type overrides: `{len(self.event_modes)}`")
         else:
             changed_modes = {
                 action: mode
                 for action, mode in sorted(self.event_modes.items())
                 if mode != default.mode_for(action)
             }
+            background_changed = self.background_mode != default.background_mode
+            lines.append(f"Background event mode: `{self.background_mode}`")
             lines.append(f"Event type overrides: `{len(changed_modes)}`")
+            if background_changed:
+                lines.append(f"Default background event mode: `{default.background_mode}`")
         lines.append(f"Actor: {f'<@{self.actor_id}> (`{self.actor_id}`)' if self.actor_id is not None else '`any`'}")
         lines.append(f"Target: {self.target.label() if self.target is not None else '`any`'}")
         lines.append(f"Limit: `{self.limit if self.limit is not None else 'unlimited'}`")
         return "\n".join(lines)
 
 
-DEFAULT_FILTERS = ModlogFilters(event_modes={
+DEFAULT_FILTERS = ModlogFilters(background_mode="on", event_modes={
     "on_raw_message_delete": "grouped",
     "on_raw_message_edit": "grouped",
     "on_member_update": "grouped"
@@ -146,10 +172,7 @@ async def update_owner(owner: FilterOwner) -> None:
 
 
 def default_filters_for_events(event_names: tuple[str, ...]) -> ModlogFilters:
-    filters = DEFAULT_FILTERS.copy()
-    for event_name in event_names:
-        filters.event_modes.setdefault(event_name, "on")
-    return filters
+    return DEFAULT_FILTERS.copy()
 
 
 def default_filters_for_owner(owner: FilterOwner) -> ModlogFilters:
@@ -157,7 +180,11 @@ def default_filters_for_owner(owner: FilterOwner) -> ModlogFilters:
 
 
 def filter_button_style(filters: ModlogFilters, default: ModlogFilters) -> discord.ButtonStyle:
-    return discord.ButtonStyle.secondary if filters.same_as(default) else discord.ButtonStyle.primary
+    return discord.ButtonStyle.blurple if filters.same_as(default) else discord.ButtonStyle.green
+
+
+def changed_navigation_style(owner: FilterOwner, draft: ModlogFilters) -> discord.ButtonStyle:
+    return discord.ButtonStyle.blurple if filters_changed(owner, draft) else discord.ButtonStyle.grey
 
 
 class ModlogFilterButton(discord.ui.Button["ModlogView"]):
@@ -274,12 +301,13 @@ class ModlogEventFilterView(discord.ui.LayoutView):
         )
         for name in visible:
             mode = self.draft.mode_for(name)
+            explicit = name in self.draft.event_modes
             button = discord.ui.Button(
-                label=mode.title(),
+                label=mode.title() if explicit else f"{mode.title()} (bg)",
                 style={
-                    "on": discord.ButtonStyle.success,
-                    "grouped": discord.ButtonStyle.primary,
-                    "off": discord.ButtonStyle.secondary,
+                    "on": discord.ButtonStyle.green,
+                    "grouped": discord.ButtonStyle.blurple,
+                    "off": discord.ButtonStyle.grey,
                 }[mode],
             )
             button.callback = self._cycle_callback(name)
@@ -290,7 +318,7 @@ class ModlogEventFilterView(discord.ui.LayoutView):
 
         previous_button = discord.ui.Button(label="Previous", style=discord.ButtonStyle.secondary, disabled=self.page <= 0)
         next_button = discord.ui.Button(label="Next", style=discord.ButtonStyle.secondary, disabled=self.page >= total_pages - 1)
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label="Back", style=changed_navigation_style(self.owner, self.draft))
         invert_button = discord.ui.Button(label="Invert", style=discord.ButtonStyle.secondary)
         previous_button.callback = self.previous_page
         next_button.callback = self.next_page
@@ -311,8 +339,7 @@ class ModlogEventFilterView(discord.ui.LayoutView):
         return callback
 
     async def invert_all(self, interaction: discord.Interaction):
-        for action in self.owner.view.event_names():
-            self.draft.invert_mode(action)
+        self.draft.invert_modes()
         self.render()
         await interaction.response.edit_message(
             view=self,
@@ -456,7 +483,7 @@ class ModlogEntityFilterView(discord.ui.LayoutView):
         clear_actor_button = discord.ui.Button(label="Clear Actor", style=discord.ButtonStyle.secondary, disabled=actor_id is None)
         clear_target_button = discord.ui.Button(label="Clear Target", style=discord.ButtonStyle.secondary, disabled=target is None)
         manual_limit_button = discord.ui.Button(label="Manual Limit", style=discord.ButtonStyle.secondary)
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label="Back", style=changed_navigation_style(self.owner, self.draft))
         actor_id_button.callback = self.open_actor_id
         target_id_button.callback = self.open_target_id
         clear_actor_button.callback = self.clear_actor

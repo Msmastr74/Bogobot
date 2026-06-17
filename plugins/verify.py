@@ -253,7 +253,7 @@ async def setup(bot: BotCore) -> None:
         expires_in_seconds=int(VERIFY_CAPTCHA_TIMEOUT_SECONDS),
     )
     manage = groups.manage(bot)
-    write_verification = modlog_writer(ModlogAction("verification", "Verification panel or roles were changed."))
+    write_verification_create = modlog_writer(ModlogAction("verification.create", "A verification panel was created."))
     bot.add_view(VerifyPanelView(bot=bot, cooldowns=cooldowns, generator=generator))
 
     @manage.command(
@@ -316,11 +316,10 @@ async def setup(bot: BotCore) -> None:
         message = await channel.send(
             view=VerifyPanelView(bot=bot, cooldowns=cooldowns, generator=generator),
         )
-        await write_verification(
+        await write_verification_create(
             interaction,
             target=message_entity(message),
             extra={
-                "action": "create_verification",
                 "verified_role_id": verified_role.id,
                 "quarantine_role_id": quarantine_role.id,
                 "message_id": message.id,

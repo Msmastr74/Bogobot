@@ -382,10 +382,19 @@ async def setup(bot: "BotCore"):
     manage = groups.manage(bot)
     MEMORY_LOG_HANDLER.configure_capacity(int(bot.config.get("log_capacity", 3000)))
     handler = MEMORY_LOG_HANDLER
-    write_system_state = modlog_writer(ModlogAction("system.state", "Bot process state was changed."))
-    write_system_logs = modlog_writer(ModlogAction("system.logs", "A bot log message was written."))
+    write_system_restart = modlog_writer(ModlogAction("system.state.restart", "Bot process restart was requested."))
+    write_system_stop = modlog_writer(ModlogAction("system.state.stop", "Bot process stop was requested."))
+    write_system_logs = modlog_writer(ModlogAction("system.logs.write", "A bot log message was written."))
     write_system_loglevel = modlog_writer(ModlogAction("system.loglevel", "Runtime log level was changed."))
-    write_discord = modlog_writer(ModlogAction("discord", "A Discord-facing bot message action was performed."))
+    discord_message_writers = {
+        "delete": modlog_writer(ModlogAction("discord.message.delete", "A bot message was deleted.")),
+        "edit": modlog_writer(ModlogAction("discord.message.edit", "A bot message was edited.")),
+        "reply": modlog_writer(ModlogAction("discord.message.reply", "A bot message reply was sent.")),
+        "react": modlog_writer(ModlogAction("discord.message.react", "The bot reacted to a message.")),
+        "unreact": modlog_writer(ModlogAction("discord.message.unreact", "The bot removed its reaction from a message.")),
+        "pin": modlog_writer(ModlogAction("discord.message.pin", "A message was pinned.")),
+        "unpin": modlog_writer(ModlogAction("discord.message.unpin", "A message was unpinned.")),
+    }
 
     @manage.command(
         name="state",
@@ -397,7 +406,7 @@ async def setup(bot: "BotCore"):
         action: Literal["restart", "stop"],
     ):
         if action == "restart":
-            await write_system_state(interaction, extra={"action": "restart"})
+            await write_system_restart(interaction)
             await bot.discord.send("Restarting...", response=True)
             bot.logger.critical("Restarting process by command request.")
             with contextlib.suppress(Exception):
@@ -406,7 +415,7 @@ async def setup(bot: "BotCore"):
             return
 
         if action == "stop":
-            await write_system_state(interaction, extra={"action": "stop"})
+            await write_system_stop(interaction)
             await bot.discord.send("Stopping main bot...", response=True)
             bot.logger.critical("Shutting down process by command request.")
             with contextlib.suppress(Exception):
@@ -427,7 +436,6 @@ async def setup(bot: "BotCore"):
             await write_system_logs(
                 interaction,
                 extra={
-                    "action": "write",
                     "level": level,
                     "message_length": len(message),
                 },
@@ -498,7 +506,6 @@ async def setup(bot: "BotCore"):
         await write_system_loglevel(
             interaction,
             extra={
-                "action": "set",
                 "old": previous_level,
                 "new": level,
                 "root_level": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
@@ -587,10 +594,9 @@ async def setup(bot: "BotCore"):
                     return
                 await message.reply(content=content)
 
-            await write_discord(
+            await discord_message_writers[action](
                 interaction,
                 extra={
-                    "action": f"message.{action}",
                     "message_id": message_id,
                     "channel_id": channel_id,
                     "emoji": emoji,

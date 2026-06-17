@@ -548,14 +548,13 @@ class CapabilitiesView(discord.ui.LayoutView):
 async def setup(bot: BotCore) -> None:
     accounts = groups.accounts(bot)
     AccountPermissions.configure_presets(lambda name: _resolve_preset(bot, name))
-    write_capabilities = modlog_writer(ModlogAction(
-        "capabilities",
-        "Account capabilities or presets were changed.",
-    ))
-    write_accounts_ban = modlog_writer(ModlogAction(
-        "accounts.ban",
-        "An account ban state was changed.",
-    ))
+    write_capabilities_grant = modlog_writer(ModlogAction("capabilities.grant", "Account capabilities were granted."))
+    write_capabilities_revoke = modlog_writer(ModlogAction("capabilities.revoke", "Account capabilities were revoked."))
+    write_capabilities_reset = modlog_writer(ModlogAction("capabilities.reset", "Account capabilities were reset."))
+    write_capabilities_preset_create = modlog_writer(ModlogAction("capabilities.preset.create", "A custom capability preset was created."))
+    write_capabilities_preset_remove = modlog_writer(ModlogAction("capabilities.preset.remove", "A custom capability preset was removed."))
+    write_accounts_ban = modlog_writer(ModlogAction("accounts.ban", "An account was banned from bot commands."))
+    write_accounts_unban = modlog_writer(ModlogAction("accounts.unban", "An account was unbanned from bot commands."))
     bot.accounts.capabilities.register(ACCOUNT_BAN_CAPABILITY)
     bot.accounts.capabilities.register(MANAGE_CAPABILITIES_CAPABILITY)
     bot.accounts.capabilities.register(MANAGE_PRESETS_CAPABILITY)
@@ -915,10 +914,14 @@ async def setup(bot: BotCore) -> None:
             message = f"Revoked {capability_text} from {account_target.mention}."
 
         await _write_permissions(bot, account_target, target_permissions)
-        await write_capabilities(
+        capability_writer = {
+            "grant": write_capabilities_grant,
+            "revoke": write_capabilities_revoke,
+            "reset": write_capabilities_reset,
+        }[action]
+        await capability_writer(
             interaction,
             extra={
-                "action": action,
                 "target": account_target.mention,
                 "target_type": account_target.account.account_type,
                 "target_id": account_target.account_id,
@@ -992,10 +995,9 @@ async def setup(bot: BotCore) -> None:
                 return
             del presets[preset_name]
             await _save_custom_presets(bot, presets)
-            await write_capabilities(
+            await write_capabilities_preset_remove(
                 interaction,
                 extra={
-                    "action": "preset.remove",
                     "preset": preset_name,
                 },
             )
@@ -1063,10 +1065,9 @@ async def setup(bot: BotCore) -> None:
 
         presets[preset_name] = tuple(requested_capabilities)
         await _save_custom_presets(bot, presets)
-        await write_capabilities(
+        await write_capabilities_preset_create(
             interaction,
             extra={
-                "action": "preset.create",
                 "preset": preset_name,
                 "capabilities": requested_capabilities,
             },
@@ -1147,7 +1148,6 @@ async def setup(bot: BotCore) -> None:
             await write_accounts_ban(
                 interaction,
                 extra={
-                    "action": "ban",
                     "scope": scope,
                     "target": account_target.mention,
                     "target_type": account_target.account.account_type,
@@ -1164,10 +1164,9 @@ async def setup(bot: BotCore) -> None:
 
         stored_target_perms.unban()
         await _write_permissions(bot, account_target, {scope_id: stored_target_perms})
-        await write_accounts_ban(
+        await write_accounts_unban(
             interaction,
             extra={
-                "action": "unban",
                 "scope": scope,
                 "target": account_target.mention,
                 "target_type": account_target.account.account_type,

@@ -356,9 +356,15 @@ def raw_bulk_message_delete_events(payload: discord.RawBulkMessageDeleteEvent) -
     return events
 
 
-def raw_message_edit_event(payload: discord.RawMessageUpdateEvent) -> ModlogEvent | None:
+def raw_message_edit_event(payload: discord.RawMessageUpdateEvent, bot_user_id: int | None) -> ModlogEvent | None:
     if payload.guild_id is None:
         return None
+
+    if payload.cached_message and payload.cached_message.flags.loading:
+        return None
+    if payload.message.author.id == bot_user_id:
+        return None
+
     event = message_event(
         action="on_raw_message_edit",
         message=payload.message,

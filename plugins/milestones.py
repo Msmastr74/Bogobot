@@ -402,7 +402,11 @@ class MilestoneTracker:
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
-    write_milestones = modlog_writer(ModlogAction("milestones", "Milestone configuration or state was changed."))
+    write_milestones_ratelimit_reset = modlog_writer(ModlogAction("milestones.ratelimit_reset", "Milestone notification rate limit was reset."))
+    write_milestones_subscribe = modlog_writer(ModlogAction("milestones.subscribe", "A channel subscribed to milestone notifications."))
+    write_milestones_unsubscribe = modlog_writer(ModlogAction("milestones.unsubscribe", "A channel unsubscribed from milestone notifications."))
+    write_milestones_delete = modlog_writer(ModlogAction("milestones.delete", "Milestone state was deleted."))
+    write_milestones_spoof = modlog_writer(ModlogAction("milestones.spoof", "Milestone state was spoofed."))
     milestone_tracker = MilestoneTracker(bot)
     bot.milestones = milestone_tracker
 
@@ -430,7 +434,7 @@ async def setup(bot: BotCore):
                 return
 
             milestone_tracker.reset_ratelimit()
-            await write_milestones(interaction, extra={"action": "ratelimit_reset"})
+            await write_milestones_ratelimit_reset(interaction)
             await bot.discord.send(
                 "Milestone notification rate limit reset.",
                 response=True,
@@ -457,10 +461,9 @@ async def setup(bot: BotCore):
             if action == "unsubscribe":
                 unsubscribed = await milestone_tracker.unsubscribe(channel_id)
                 if unsubscribed:
-                    await write_milestones(
+                    await write_milestones_unsubscribe(
                         interaction,
                         extra={
-                            "action": "unsubscribe",
                             "channel_id": channel_id,
                         },
                     )
@@ -481,10 +484,9 @@ async def setup(bot: BotCore):
                 )
                 return
 
-            await write_milestones(
+            await write_milestones_subscribe(
                 interaction,
                 extra={
-                    "action": "subscribe",
                     "channel_id": channel_id,
                 },
             )
@@ -520,13 +522,12 @@ async def setup(bot: BotCore):
 
             deleted = await milestone_tracker.delete(name)
             if deleted:
-                await write_milestones(
-                    interaction,
-                    extra={
-                        "action": "delete",
-                        "name": name,
-                    },
-                )
+                    await write_milestones_delete(
+                        interaction,
+                        extra={
+                            "name": name,
+                        },
+                    )
             await bot.discord.send(
                 f"Deleted `{name}`." if deleted else f"`{name}` does not exist.",
                 response=True,
@@ -565,10 +566,9 @@ async def setup(bot: BotCore):
             )
             return
 
-        await write_milestones(
+        await write_milestones_spoof(
             interaction,
             extra={
-                "action": "spoof",
                 "name": name,
                 "value": changed_value,
                 "requested_value": data,

@@ -40,7 +40,7 @@ write_modlog_undo = modlog_writer(ModlogAction(
     "modlog.undo",
     "A modlog event undo was requested.",
 ))
-MESSAGE_CONTENT_INLINE_LIMIT = 2000
+MESSAGE_CONTENT_INLINE_LIMIT = 1500
 MESSAGE_RECREATE_CONTENT_LIMIT = 2000
 RAW_CONTENT_CHUNK_LIMIT = 1900
 RELATED_EVENT_DETAIL_LIMIT = 1800
@@ -108,7 +108,8 @@ def entity_text(entity) -> str:
 
 
 def _inline_code(value: object) -> str:
-    return f"`{str(value).replace('`', "'")}`"
+    sq = "'"
+    return f"`{str(value).replace('`', sq)}`"
 
 
 def _event_description(event: ModlogEvent) -> str | None:
@@ -959,7 +960,6 @@ class ModlogUndoButton(discord.ui.Button["ModlogEventView"]):
         await write_modlog_undo(
             interaction,
             extra={
-                "action": "undo",
                 "undid_event_id": view.event.id,
                 "undo_succeeded": result.success,
                 "result_title": result.title,
@@ -1420,7 +1420,7 @@ async def setup(bot: BotCore) -> None:
 
     @bot.listen("raw_message_edit")
     async def record_raw_message_edit(payload: discord.RawMessageUpdateEvent) -> None:
-        event = raw_message_edit_event(payload)
+        event = raw_message_edit_event(payload, bot.user.id if bot.user else None)
         if event is not None:
             record_event(event)
 

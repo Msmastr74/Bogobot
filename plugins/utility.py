@@ -215,7 +215,8 @@ class AnnounceView(discord.ui.LayoutView):
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
-    write_discord = modlog_writer(ModlogAction("discord", "A Discord-facing bot message action was performed."))
+    write_announce_send = modlog_writer(ModlogAction("discord.announce.send", "An announcement message was sent."))
+    write_announce_edit = modlog_writer(ModlogAction("discord.announce.edit", "An announcement message was edited."))
 
     async def create_announcement_files(
         attachments: list[discord.Attachment],
@@ -452,10 +453,10 @@ async def setup(bot: BotCore):
             )
             if not applied:
                 return
-            await write_discord(
+            announcement_writer = write_announce_edit if self.message_id is not None else write_announce_send
+            await announcement_writer(
                 interaction,
                 extra={
-                    "action": "announce.edit" if self.message_id is not None else "announce.send",
                     "message_id": self.message_id,
                     "attachments": len(self.attachments),
                     "message_container": self.message_container,
@@ -557,10 +558,10 @@ async def setup(bot: BotCore):
         )
         if not applied:
             return
-        await write_discord(
+        announcement_writer = write_announce_edit if message_id is not None else write_announce_send
+        await announcement_writer(
             interaction,
             extra={
-                "action": "announce.edit" if message_id is not None else "announce.send",
                 "message_id": message_id,
                 "attachments": len(attachments),
                 "message_container": message_container,

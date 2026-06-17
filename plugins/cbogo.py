@@ -515,7 +515,8 @@ def run_shuffles(values: list[int]) -> tuple[list[int], int, int]:
 async def setup(bot: BotCore):
     state_lock = asyncio.Lock()
     sorted_emoji = bot.discord.get_emoji("sorted")
-    write_cbogo = modlog_writer(ModlogAction("games.cbogo", "cbogo game state was changed."))
+    write_cbogo_reset = modlog_writer(ModlogAction("games.cbogo.reset", "cbogo game state was reset."))
+    write_cbogo_reset_last_user = modlog_writer(ModlogAction("games.cbogo.reset_last_user", "cbogo last user state was reset."))
     bot.accounts.capabilities.register(CBOGO_RESET_CAPABILITY)
     bot.accounts.capabilities.register(CBOGO_RESET_LAST_USER_CAPABILITY)
 
@@ -617,10 +618,9 @@ async def setup(bot: BotCore):
                 state = default_state()
                 await save_state(guild_id, state)
                 await reset_user_scores(guild_id)
-            await write_cbogo(
+            await write_cbogo_reset(
                 interaction,
                 extra={
-                    "action": "reset",
                     "guild_id": guild_id,
                 },
             )
@@ -652,10 +652,9 @@ async def setup(bot: BotCore):
                     ephemeral=True
                 )
                 return
-            await write_cbogo(
+            await write_cbogo_reset_last_user(
                 interaction,
                 extra={
-                    "action": "reset_last_user",
                     "guild_id": guild_id,
                     "old_last_user": old_last_user,
                 },
