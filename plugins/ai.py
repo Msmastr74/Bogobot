@@ -555,6 +555,8 @@ def replied_assistant_message(bot: 'BotCore', message: discord.Message) -> tuple
 
     text = read_text_from_message(resolved)
     if not text:
+        if resolved.content or resolved.embeds or resolved.components or resolved.attachments:
+            return resolved, ""
         return None
     return resolved, truncate_text_to_character_limit(text, MAX_ASSISTANT_CONTEXT_CHARS)
 
