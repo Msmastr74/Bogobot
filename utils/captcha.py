@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 SECRET_KEY = secrets.token_bytes(32)
-LABELS = list("ABCD")
+LABELS = list("ABCDEF")
 NUM_DISTRACTORS = len(LABELS) - 1
 MIN_START_DISTANCE = 60
 
