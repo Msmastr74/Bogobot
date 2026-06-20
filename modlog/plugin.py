@@ -1288,7 +1288,7 @@ class ModlogView(discord.ui.LayoutView):
         groups = self.resolver.group(visible_events, self.candidate_events(visible_events))
         rendered_groups: list[RelatedGroup] = []
         rendered_base_ids: set[int] = set()
-        base_ids = {event.id for event in events}
+        visible_base_ids = {event.id for event in visible_events}
         budget = RenderBudget(chars=MODLOG_PAGE_CHAR_LIMIT, elems=MODLOG_PAGE_ELEMENT_LIMIT)
         container = discord.ui.Container(
             discord.ui.TextDisplay(f"## Modlog · Page {self.page_number}"),
@@ -1310,7 +1310,7 @@ class ModlogView(discord.ui.LayoutView):
                     accessory=ModlogGroupDetailsButton(event.id for event in group.events),
                 ))
                 rendered_groups.append(group)
-                rendered_base_ids.update(event.id for event in group.events if event.id in base_ids)
+                rendered_base_ids.update(event.id for event in group.events if event.id in visible_base_ids)
         else:
             container.add_item(discord.ui.TextDisplay("No matching events."))
 
