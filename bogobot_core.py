@@ -163,7 +163,6 @@ class BotCore(discord.Client):
         )
         self._connected = False
         
-        self.event(self.on_ready)
         self.callbacks = CallbackRegistry(logger=self.logger.getChild("Callbacks"))
         self.milestones: 'MilestoneTracker | None' = None
 
