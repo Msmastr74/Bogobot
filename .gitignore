@@ -3,6 +3,7 @@ __pycache__/
 live_720p.png
 ocr_*.png
 local_config.json
+.env
 log_censor.txt
 Modelfile
 .DS_Store

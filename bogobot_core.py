@@ -706,7 +706,12 @@ class BotCore(discord.Client):
     async def run_bot(self):
         self.stream_handler.async_loop = self.loop
         self.stream_handler.start()
-        await self.start(self.config['bot_token'])
+        token = self.config.get("bot_token")
+        if not token or token == "BOT_TOKEN_HERE":
+            token = os.environ.get("BOT_TOKEN")
+        if not token:
+            raise RuntimeError("Discord bot token is missing. Set config bot_token or BOT_TOKEN.")
+        await self.start(token)
 
     async def close(self):
         self.logger.info("Shutting down bot...")

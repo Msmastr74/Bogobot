@@ -10,6 +10,7 @@ Configuration is managed via `config.json`.
 
 User-edited settings:
 - `bot_token`: The Discord bot token.
+  - If `.env` exists, `main.py` loads it with python-dotenv. `BOT_TOKEN` is used as a fallback when `bot_token` is missing or still set to the template value.
 - `owner_uid`: Discord user ID for the bot owner. On startup, this account receives the owner wildcard capability.
 - `accounts_path`: Optional path to the account database. Defaults to `accounts.json`.
 - `account_capability_presets`: Optional custom account capability presets. Usually managed through `/accounts preset`.

@@ -2,6 +2,10 @@ from bogobot_core import BotCore
 import asyncio
 import os
 import sys
+from dotenv import load_dotenv
+
+if os.path.exists(".env"):
+    load_dotenv()
 
 if os.path.exists('local_config.json'):
     bot = BotCore('local_config.json')

@@ -22,7 +22,7 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 # Install Python libraries
 Write-Host "Installing Python libraries..." -ForegroundColor Cyan
 py -3 -m pip install --upgrade pip
-py -3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pydantic
+py -3 -m pip install discord.py openai numpy Pillow aiohttp streamlink opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pydantic python-dotenv
 pymanager install --refresh
 
 # Verify libtesseract can be loaded by Python's ctypes path

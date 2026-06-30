@@ -53,6 +53,8 @@ Go into `config.json` and provide the main credentials:
 
 `DOCS.md` lists core settings and bot-managed storage fields. `AI.md` covers AI setup, runtime management, and provider examples.
 
+If `.env` exists, `main.py` loads it before starting. `BOT_TOKEN` is used as a fallback when `bot_token` is missing or still set to the template value.
+
 If `local_config.json` exists, `main.py` uses that instead of `config.json`.
 This is useful for local testing without changing the main config file.
 

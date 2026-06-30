@@ -22,7 +22,7 @@ brew install python tesseract ffmpeg streamlink wasmtime
 # aiohttp: YouTube API communication (also a dependency of discord.py, just explicitly included here)
 # opencv-python: image preprocessing
 python3 -m pip install --upgrade pip
-python3 -m pip install discord.py openai numpy Pillow aiohttp opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pydantic
+python3 -m pip install discord.py openai numpy Pillow aiohttp opencv-python pyuca pytchat google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pydantic python-dotenv
 
 # Verify libtesseract can be loaded by Python's ctypes path.
 python3 - <<'PY'
