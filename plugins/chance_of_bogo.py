@@ -39,6 +39,8 @@ def exact_matches_probability(matches: int, total: int = SORT_SIZE) -> Fraction:
 
 
 def at_least_matches_probability(matches: int, total: int = SORT_SIZE) -> Fraction:
+    if not 0 <= matches <= total:
+        raise ValueError(f"n must be between 0 and {total}")
     return sum(
         (exact_matches_probability(value, total) for value in range(matches, total + 1)),
         start=Fraction(),
