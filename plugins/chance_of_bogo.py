@@ -91,7 +91,7 @@ class ChanceOfBogoView(discord.ui.LayoutView):
 
         probability = at_least_matches_probability(n)
         happened_chance = repeated_chance(probability, shuffles)
-        score_text = f"`{n}`" if n == SORT_SIZE else f"`{n}` or more"
+        score_text = f"`{n}`" if n >= SORT_SIZE-1 else f"`{n}` or more"
         expected_shuffles = (
             probability.denominator + probability.numerator - 1
         ) // probability.numerator
