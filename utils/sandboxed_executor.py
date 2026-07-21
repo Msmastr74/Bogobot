@@ -101,15 +101,20 @@ def chmod_tree_readonly(path: Path) -> None:
         chmod_tree_readonly_posix(path)
 
 
+def chmod_posix(path: Path, mode: int) -> None:
+    try:
+        if stat.S_IMODE(path.stat().st_mode) != mode:
+            path.chmod(mode)
+    except FileNotFoundError:
+        pass
+
+
 def chmod_tree_readonly_posix(root: Path) -> None:
     if root.is_symlink():
         return
 
     if root.is_file():
-        try:
-            root.chmod(0o444)
-        except FileNotFoundError:
-            pass
+        chmod_posix(root, 0o444)
         return
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -117,57 +122,36 @@ def chmod_tree_readonly_posix(root: Path) -> None:
 
         for name in filenames:
             path = base / name
-            try:
-                if not path.is_symlink():
-                    path.chmod(0o444)
-            except FileNotFoundError:
-                pass
+            if not path.is_symlink():
+                chmod_posix(path, 0o444)
 
         for name in dirnames:
             path = base / name
-            try:
-                if not path.is_symlink():
-                    path.chmod(0o555)
-            except FileNotFoundError:
-                pass
+            if not path.is_symlink():
+                chmod_posix(path, 0o555)
 
-        try:
-            base.chmod(0o555)
-        except FileNotFoundError:
-            pass
+        chmod_posix(base, 0o555)
 
 
 def chmod_tree_writable_posix(root: Path) -> None:
     if root.is_symlink() or root.is_file():
-        try:
-            root.chmod(0o700)
-        except FileNotFoundError:
-            pass
+        chmod_posix(root, 0o700)
         return
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         base = Path(dirpath)
 
-        try:
-            base.chmod(0o700)
-        except FileNotFoundError:
-            pass
+        chmod_posix(base, 0o700)
 
         for name in dirnames:
             path = base / name
-            try:
-                if not path.is_symlink():
-                    path.chmod(0o700)
-            except FileNotFoundError:
-                pass
+            if not path.is_symlink():
+                chmod_posix(path, 0o700)
 
         for name in filenames:
             path = base / name
-            try:
-                if not path.is_symlink():
-                    path.chmod(0o700)
-            except FileNotFoundError:
-                pass
+            if not path.is_symlink():
+                chmod_posix(path, 0o700)
 
 def chmod_tree_readonly_windows(root: Path) -> None:
     if root.is_symlink():
