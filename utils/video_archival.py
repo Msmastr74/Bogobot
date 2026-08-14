@@ -1939,7 +1939,7 @@ class VideoArchiver:
             "-i", "pipe:0",
             "-an",
             "-vf", f"setpts=PTS-STARTPTS+{timestamp_offset:.6f}/TB",
-            "-vsync", "vfr",
+            "-fps_mode", "vfr",
             "-pix_fmt", "yuv420p",
             "-c:v", "libx265",
             "-preset", self.preset,
