@@ -766,7 +766,7 @@ class AICore(Generic[ContextT, ActionT]):
     def _param_schema(self, param: AIParam) -> dict[str, Any]:
         choices = self._literal_choices(param.type)
         if choices is not None:
-            schema: dict[str, Any] = {"type": "string", "enum": choices}
+            schema: dict[str, Any] = param.adapter.json_schema()
         elif self._is_discord_user_type(param.type):
             schema = {
                 "type": "string",
@@ -1267,13 +1267,13 @@ class AICore(Generic[ContextT, ActionT]):
             self._is_discord_user_type(non_none)
         )
 
-    def _literal_choices(self, annotation: object) -> list[str] | None:
+    def _literal_choices(self, annotation: object) -> list[str | int | float | bool] | None:
         target_type = self._non_none_type(annotation)
         if get_origin(target_type) is not Literal:
             return None
-        choices: list[str] = []
+        choices: list[str | int | float | bool] = []
         for choice in get_args(target_type):
-            if not isinstance(choice, str):
+            if not isinstance(choice, (str, int, float, bool)):
                 return None
             choices.append(choice)
         return choices
