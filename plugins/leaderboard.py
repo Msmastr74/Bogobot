@@ -15,6 +15,7 @@ from bogobot_core import BotCore
 LEADERBOARD_URL = "https://swapjs.dev/api/group/leaderboard"
 LEADERBOARD_LIMIT = 25
 LEADERBOARD_MONITOR_INTERVAL_SECONDS = 120
+LEADERBOARD_NOT_FOUND_RETRY_SECONDS = 3600
 
 class LeaderboardView(discord.ui.LayoutView):
     def __init__(
@@ -22,7 +23,7 @@ class LeaderboardView(discord.ui.LayoutView):
         *,
         title: str,
         subtitle: str,
-        rows: list[SortoffsPlayer],
+        rows: list[SortoffsPlayer] | None,
         updated_at: int | None = None,
         limit: int = LEADERBOARD_LIMIT,
         bot: BotCore
@@ -39,12 +40,14 @@ class LeaderboardView(discord.ui.LayoutView):
         )
 
         footer = "Data from swapjs.dev"
-        if updated_at is not None:
+        if updated_at is not None and rows is not None:
             footer = f"{footer} - Updated <t:{updated_at}:R>"
         c.add_item(discord.ui.TextDisplay(f"-# {footer}"))
         self.add_item(c)
 
-    def _body(self, rows: list[SortoffsPlayer], *, limit: int) -> str:
+    def _body(self, rows: list[SortoffsPlayer] | None, *, limit: int) -> str:
+        if rows is None:
+            return "Sortoffs leaderboard is unavailable right now."
         if not rows:
             return "No leaderboard data available."
 
@@ -75,25 +78,36 @@ class LeaderboardPayload(TypedDict):
 
 async def setup(bot: BotCore):
     manage = groups.manage(bot)
+    retry_after = 0.0
 
-    async def fetch_leaderboard() -> list[SortoffsPlayer]:
+    async def fetch_leaderboard() -> list[SortoffsPlayer] | None:
+        nonlocal retry_after
+        if time.monotonic() < retry_after:
+            return None
         try:
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(LEADERBOARD_URL) as resp:
                     if resp.status == 200:
+                        retry_after = 0.0
                         try:
                             return SortoffsLeaderboard.model_validate(await resp.json()).rows
                         except ValidationError:
                             bot.logger.warning("Leaderboard API returned an unexpected payload shape")
-                            return []
+                            return None
+                    if resp.status == 404:
+                        retry_after = time.monotonic() + LEADERBOARD_NOT_FOUND_RETRY_SECONDS
+                        bot.logger.warning(
+                            "Sortoffs leaderboard endpoint returned HTTP 404; retrying in one hour"
+                        )
+                        return None
                     bot.logger.warning(f"Leaderboard fetch failed with HTTP {resp.status}")
         except Exception as e:
             bot.logger.warning(f"Error fetching leaderboard: {e}")
-        return []
+        return None
     
     def leaderboard_payload(
-        rows: list[SortoffsPlayer],
+        rows: list[SortoffsPlayer] | None,
         *,
         title: str = "Leaderboard",
         subtitle: str = "Top players ranked by ELO",
@@ -143,7 +157,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(
             response=True,
             **leaderboard_payload(
-                rows[min(a, b) - 1:max(a, b)],
+                rows[min(a, b) - 1:max(a, b)] if rows is not None else None,
                 subtitle=f"{min(a, b)} to {max(a, b)} players ranked by ELO",
                 updated_at=int(time.time()),
                 limit=40
@@ -182,7 +196,7 @@ async def setup(bot: BotCore):
         await bot.discord.send(
             response=True,
             **leaderboard_payload(
-                rows[-LEADERBOARD_LIMIT:],
+                rows[-LEADERBOARD_LIMIT:] if rows is not None else None,
                 subtitle="Bottom players ranked by ELO",
                 updated_at=int(time.time()),
             ),
