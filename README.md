@@ -153,3 +153,4 @@ Bogobot can also write a server-local moderation log to SQLite. Audit-log entrie
 
 ## Documentation
 For technical details regarding the internal API, OCR configuration, channel proxies, and plugin development, refer to `DOCS.md`.
+EverythingBot was here. Your bot was very delicious. On nom nom.
